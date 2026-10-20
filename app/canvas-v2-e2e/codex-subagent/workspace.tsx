@@ -1,14 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { History, Download } from 'lucide-react';
 import { FilmRecorder } from './film-recorder';
 import type { FilmCameraController } from '@/lib/canvas-v2/film-camera';
-import { CanvasV2Workspace } from '@/components/canvas-v2/canvas-v2-workspace';
+import { CanvasV2Workspace, CanvasV2RenderProfiler, canvasV2RenderProfilingEnabled } from '@/components/canvas-v2/canvas-v2-workspace';
 import { SnapshotSaveSchedule } from '@/lib/canvas-v2/sessions/snapshot-save-schedule';
 import type { NorthstarSnapshot } from '@/lib/canvas-v2/sessions/types';
 import { exportSubagentSnapshot, importSubagentSnapshotBlob, listSavedSubagentSnapshots, loadSavedSubagentSnapshot, readSubagentSnapshotDurable, writeSubagentSnapshotDurableDetailed, type SavedSubagentSnapshotSummary } from './snapshot';
 
 export function CodexSubagentWorkspace({ accountEndpoint = '/canvas-v2-e2e/codex/account', presentation = false, recording = false }: { accountEndpoint?: string; presentation?: boolean; recording?: boolean }) {
+  const [renderProfiling] = useState(canvasV2RenderProfilingEnabled);
   const filmCamera = useRef<FilmCameraController | null>(null);
   const registerFilmCamera = useCallback((controller: FilmCameraController | null) => { filmCamera.current = controller; }, []);
   const [owner] = useState(() => crypto.randomUUID().replaceAll('-', ''));
@@ -114,10 +116,10 @@ export function CodexSubagentWorkspace({ accountEndpoint = '/canvas-v2-e2e/codex
   return <>
     {!presentation && <>
     <div data-testid="codex-subagent-save-status" role="status" aria-live="polite" className="pointer-events-none fixed left-1/2 top-11 z-[1000] max-w-[min(90vw,720px)] -translate-x-1/2 rounded bg-[#222] px-2 py-1 text-[11px] text-white/80">Snapshot {saveStatus.state}{saveStatus.detail ? ` · ${saveStatus.detail}` : ''}</div>
-    <button type="button" data-testid="codex-subagent-restore" aria-label="Restore saved canvas" onClick={() => { setRestoreOpen(open => !open); void refreshSavedCanvases(); }} className="fixed right-3 top-3 z-[1001] rounded bg-[#222] px-3 py-1.5 text-[11px] text-white shadow-lg hover:bg-[#333]">Restore saved canvas</button>
-    <button type="button" aria-label="Download test snapshot" disabled={exporting} onClick={() => void downloadSnapshot()} className="fixed right-3 top-12 z-[1001] rounded bg-[#222] px-3 py-1.5 text-[11px] text-white shadow-lg hover:bg-[#333] disabled:opacity-50">{exporting ? 'Preparing snapshot…' : 'Download test snapshot'}</button>
-    {snapshotDownload && <a href={snapshotDownload.url} download={snapshotDownload.name} className="fixed right-3 top-20 z-[1001] rounded bg-[#222] px-3 py-1.5 text-[11px] text-white shadow-lg hover:bg-[#333]">Save prepared snapshot · {(snapshotDownload.bytes / 1024 / 1024).toFixed(1)} MB</a>}
-    {restoreOpen && <div role="dialog" aria-label="Saved canvases" className="fixed right-3 top-12 z-[1001] w-[min(92vw,440px)] rounded-xl border border-white/15 bg-[#17171f] p-3 text-white shadow-2xl">
+    <button type="button" data-testid="codex-subagent-restore" aria-label="Restore saved canvas" title="Restore saved canvas" onClick={() => { setRestoreOpen(open => !open); void refreshSavedCanvases(); }} className="fixed bottom-3 left-3 z-[1001] grid h-7 w-7 place-items-center rounded-lg border border-white/10 bg-[#222] text-white/60 shadow-lg hover:bg-[#333]"><History size={13}/></button>
+    <button type="button" aria-label="Download test snapshot" title="Download test snapshot" disabled={exporting} onClick={() => void downloadSnapshot()} className="fixed bottom-3 left-12 z-[1001] grid h-7 w-7 place-items-center rounded-lg border border-white/10 bg-[#222] text-white/60 shadow-lg hover:bg-[#333] disabled:opacity-50"><Download size={13}/></button>
+    {snapshotDownload && <a href={snapshotDownload.url} download={snapshotDownload.name} className="fixed bottom-12 left-3 z-[1001] rounded bg-[#222] px-3 py-1.5 text-[11px] text-white shadow-lg hover:bg-[#333]">Save prepared snapshot · {(snapshotDownload.bytes / 1024 / 1024).toFixed(1)} MB</a>}
+    {restoreOpen && <div role="dialog" aria-label="Saved canvases" className="fixed bottom-12 left-3 z-[1001] w-[min(92vw,440px)] rounded-xl border border-white/15 bg-[#17171f] p-3 text-white shadow-2xl">
       <div className="mb-2 flex items-center justify-between gap-3"><strong className="text-sm">Saved canvases</strong><button type="button" aria-label="Close saved canvases" onClick={() => setRestoreOpen(false)} className="rounded px-2 py-1 text-xs text-white/70 hover:bg-white/10">Close</button></div>
       {restoreStatus && <p role="status" className="mb-2 text-xs text-amber-200">{restoreStatus}</p>}
       <label className="mb-2 block rounded border border-white/15 p-2 text-xs">Import saved canvas<input aria-label="Import saved canvas" type="file" accept="application/json,.json" className="mt-1 block w-full" onChange={async event => {
@@ -139,9 +141,9 @@ export function CodexSubagentWorkspace({ accountEndpoint = '/canvas-v2-e2e/codex
     </div>}
     </>}
     {presentation && saveStatus.state === 'error' && <div role="alert" className="fixed bottom-5 right-5 z-[1001] max-w-md rounded-lg bg-[#602929] p-3 text-sm text-white">Canvas changes are not saved. {saveStatus.detail}<button type="button" className="ml-3 underline" onClick={() => void flushSnapshots(true)}>Retry save</button></div>}
-    <CanvasV2Workspace registerFilmCamera={recording ? registerFilmCamera : undefined} key={workspaceKey} initialSnapshot={state.snapshot} onSnapshot={onSnapshot}
+    <CanvasV2RenderProfiler id="Workspace" enabled={renderProfiling}><CanvasV2Workspace registerFilmCamera={recording ? registerFilmCamera : undefined} key={workspaceKey} initialSnapshot={state.snapshot} onSnapshot={onSnapshot}
       accountEndpoint={accountEndpoint} agentEndpoint={`/canvas-v2-e2e/codex-subagent/agent?owner=${owner}`}
-      designEndpoint="/canvas-v2-e2e/design" routerEndpoint="/canvas-v2-e2e/route" researchEndpoint={accountEndpoint === '/api/canvas-v2/account' ? '/api/canvas-v2/research' : '/canvas-v2-e2e/research'} />
+      designEndpoint="/canvas-v2-e2e/design" routerEndpoint="/canvas-v2-e2e/route" researchEndpoint={accountEndpoint === '/api/canvas-v2/account' ? '/api/canvas-v2/research' : '/canvas-v2-e2e/research'} /></CanvasV2RenderProfiler>
     {recording && <FilmRecorder camera={filmCamera} />}
   </>;
 }

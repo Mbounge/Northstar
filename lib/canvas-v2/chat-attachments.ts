@@ -1,3 +1,4 @@
+import {parseVisualFeedbackCollection,visualFeedbackText,type VisualFeedbackCollection} from './visual-feedback';
 import type { CanvasV2ModelInputPart } from "@/lib/canvas-v2/structured-provider";
 import {
   CANVAS_V2_EVIDENCE_PACKET_SCHEMA,
@@ -30,6 +31,7 @@ export interface CanvasV2ChatImageAttachment {
 }
 
 export interface CanvasV2ChatTextAttachment {
+  visualFeedback?: VisualFeedbackCollection;
   kind: "text";
   id: string;
   name: string;
@@ -62,7 +64,7 @@ export function parseCanvasV2ChatAttachments(value: unknown): CanvasV2ChatAttach
   let totalImageBytes = 0;
   let totalTextCharacters = 0;
   const ids = new Set<string>();
-  return value.map((entry, index) => {
+  const parsed=value.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`Attachment ${index + 1} is invalid.`);
     const source = entry as Record<string, unknown>;
     const id = typeof source.id === "string" ? safeId(source.id) : "";
@@ -77,6 +79,8 @@ export function parseCanvasV2ChatAttachments(value: unknown): CanvasV2ChatAttach
       if (text.length > CANVAS_V2_MAX_CHAT_TEXT_CHARACTERS) throw new Error(`Text attachment ${index + 1} is too long.`);
       totalTextCharacters += text.length;
       if (totalTextCharacters > CANVAS_V2_MAX_CHAT_TEXT_TOTAL_CHARACTERS) throw new Error("The attached text is too long as a group.");
+      const visualFeedback=source.visualFeedback?parseVisualFeedbackCollection(source.visualFeedback):undefined;
+      if(visualFeedback&&text!==visualFeedbackText(visualFeedback))throw new Error('The canvas comments differ from their visual feedback details.');
       return {
         kind: "text",
         id,
@@ -84,6 +88,7 @@ export function parseCanvasV2ChatAttachments(value: unknown): CanvasV2ChatAttach
         mimeType: "text/plain",
         text,
         charCount: text.length,
+        ...(visualFeedback?{visualFeedback}:{}),
         createdAt: createdAt(source.createdAt),
       } satisfies CanvasV2ChatTextAttachment;
     }
@@ -112,6 +117,8 @@ export function parseCanvasV2ChatAttachments(value: unknown): CanvasV2ChatAttach
       createdAt: createdAt(source.createdAt),
     } satisfies CanvasV2ChatImageAttachment;
   });
+  for(const attachment of parsed)if(attachment.kind==='text'&&attachment.visualFeedback&&!parsed.some(image=>image.kind==='image'&&image.id===attachment.visualFeedback!.imageId))throw new Error('Canvas feedback needs its numbered region image.');
+  return parsed;
 }
 
 /** Backwards-compatible image parser retained for focused callers and fixtures. */

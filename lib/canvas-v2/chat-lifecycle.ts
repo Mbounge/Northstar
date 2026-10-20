@@ -46,3 +46,9 @@ export function canvasV2ElapsedLabel(milliseconds: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`;
 }
+
+/** A restored conversation is history, never a resumed model process. */
+export function restoreCanvasV2ChatTurns<T extends CanvasV2TurnTiming & {error?:string}>(turns: readonly T[]): T[] {
+  return turns.map(turn => turn.status === 'running' || turn.status === 'routing'
+    ? {...turn,status:'stopped',activeSince:undefined,error:'The page closed during this run. Send a follow-up to continue from saved work.'} : turn);
+}

@@ -1,6 +1,6 @@
 import type { LiveSessionState, NorthstarSnapshot, SessionCommand } from './types';
 
-type Message = {kind:'hello'; known:boolean} | {kind:'state'; full:boolean; state:{snapshot:Partial<NorthstarSnapshot>;busy:boolean;title:string}}
+type Message = {kind:'multiplayer'} | {kind:'hello'; known:boolean} | {kind:'state'; full:boolean; state:{snapshot:Partial<NorthstarSnapshot>;busy:boolean;title:string}}
   | {kind:'command'; id:string; command:SessionCommand} | {kind:'ack'; id:string; error?:string};
 type Port = Pick<BroadcastChannel,'postMessage'|'close'> & {onmessage:((event:MessageEvent<Message>)=>void)|null};
 
@@ -15,8 +15,10 @@ export class LiveSessionChannel {
   constructor(private port:Port, private handlers:{
     owns:()=>boolean; read:()=>LiveSessionState|undefined;
     receive:(state:LiveSessionState)=>void;
+    multiplayer?:()=>void;
     execute:(command:SessionCommand)=>Promise<void>;
   }) { port.onmessage=event=>{void this.receive(event.data);}; }
+  upgrade() { this.port.postMessage({kind:'multiplayer'}); }
   request() {
     if(!this.handlers.owns() && (!this.received || Date.now()-this.lastHelloAt>5000)) {
       this.lastHelloAt=Date.now();
@@ -54,6 +56,7 @@ export class LiveSessionChannel {
     });
   }
   private async receive(message:Message) {
+    if(message.kind==='multiplayer'){this.handlers.multiplayer?.();return;}
     if(message.kind==='state' && !this.handlers.owns()) {
       if(!message.full && !this.received){this.port.postMessage({kind:'hello',known:false});return;}
       this.received={...message.state,snapshot:{...this.received?.snapshot,...message.state.snapshot} as NorthstarSnapshot};

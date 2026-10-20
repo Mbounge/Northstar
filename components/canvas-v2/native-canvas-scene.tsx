@@ -3,7 +3,7 @@
 import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 import { observeCanvasV2ImageVisibility, type CanvasV2ImageVisibilityObserver } from "./native-image-visibility";
-import { outsideVisibleCanvas, sameNativeViewportPresence } from "@/lib/canvas-v2/native-viewport-reuse";
+import { createCanvasV2WarmViewport, outsideVisibleCanvas, sameNativeViewportPresence } from "@/lib/canvas-v2/native-viewport-reuse";
 import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
 
 import { canvasV2ElementPaintBounds } from "@/lib/canvas-v2/text-paint-bounds";
@@ -72,6 +72,7 @@ export interface CanvasV2NativeCanvasSceneProps {
   inspectionEnabled: boolean;
   selectedNodeId?: string;
   selectedNodeIds?: readonly string[];
+  retainedNodeIds?: readonly string[];
   onElementHover?: (element?: CanvasV2InspectableElement) => void;
   onElementSelect?: (element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => void;
   onSelectionRefresh?: (elements: CanvasV2InspectableElement[]) => void;
@@ -79,7 +80,8 @@ export interface CanvasV2NativeCanvasSceneProps {
   onNativeScene?: (scene: CanvasV2NativeSceneDocument) => void;
   sceneOverride?: CanvasV2NativeSceneDocument;
   visibleBounds?: CanvasV2ElementBounds;
-  onBeforeUserEdit?: () => void;
+  viewportScale?: number;
+  onBeforeUserEdit?: (element?: CanvasV2InspectableElement) => boolean | void;
   onAfterUserEdit?: () => void;
   onTableAction?: (cellId: string, action: "next" | "previous" | "paste", text?: string) => void;
   editTextRequest?: { nodeId: string; nonce: number; selectAll?: boolean };
@@ -622,7 +624,11 @@ const NativeNode = memo(function NativeNode({
   if (canvasV2NativeSceneNodeSupportsTextEditing(node, byId)) return createElement(node.tagName, { ...props, dangerouslySetInnerHTML: { __html: canvasV2NativeTextMarkup(node, byId) } });
   return createElement(node.tagName, props, ...content);
 }, (previous, next) => sameNativeViewportPresence(previous.node, next.node, previous.byId, next.byId, previous.visibleBounds, next.visibleBounds, previous.protectedNodeIds.has(previous.node.id), next.protectedNodeIds.has(next.node.id))
-  && (previous.protectedNodeIds === next.protectedNodeIds || (previous.node.parentId !== undefined
+  // A new warm set must reach roots containing native children. A root leaf
+  // has no descendant mounting decisions to propagate; rebuilding its live
+  // app on every camera commit defeats the otherwise unchanged subtree.
+  && (previous.protectedNodeIds === next.protectedNodeIds || ((previous.node.parentId !== undefined
+    || previous.node.childIds.length === 0 && !previous.node.content.some(item => item.kind === "node"))
     && previous.protectedNodeIds.has(previous.node.id) === next.protectedNodeIds.has(next.node.id)))
   && sameCanvasV2NativeRenderedSubtree(previous.node, next.node, previous.byId, next.byId));
 
@@ -635,6 +641,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   inspectionEnabled,
   selectedNodeId,
   selectedNodeIds,
+  retainedNodeIds,
   onElementHover,
   onElementSelect,
   onSelectionRefresh,
@@ -642,6 +649,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   onNativeScene,
   sceneOverride,
   visibleBounds,
+  viewportScale=1,
   onBeforeUserEdit,
   onAfterUserEdit,
   onTableAction,
@@ -683,18 +691,26 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   if (renderedScene) placementReferenceSceneRef.current = renderedScene;
   const byId = useMemo(() => renderedScene ? canvasV2NativeSceneNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
   const bySourceId = useMemo(() => renderedScene ? canvasV2NativeSceneSourceNodeMap(renderedScene) : new Map<string, CanvasV2NativeSceneNode>(), [renderedScene]);
-  const protectedNodeKey = JSON.stringify([selectedNodeId, selectedNodeIds]);
-  const protectedNodeIds = useMemo(() => {
+  const protectedNodeKey = JSON.stringify([selectedNodeId, selectedNodeIds,retainedNodeIds]);
+  const selectionProtectedNodeIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const sourceId of [selectedNodeId, ...(selectedNodeIds ?? [])]) {
+    const [primary,selection,retained]=JSON.parse(protectedNodeKey) as [string|undefined,string[]|undefined,string[]|undefined];
+    for (const sourceId of [primary, ...(selection ?? [])]) {
       let node = sourceId ? bySourceId.get(sourceId) : undefined;
       while (node && !ids.has(node.id)) {
         ids.add(node.id);
         node = node.parentId ? byId.get(node.parentId) : undefined;
       }
     }
+    // Feedback snapshots may span distant objects. Retain only those marked
+    // subtrees, independently of selection, until their batch is staged.
+    const retain=(node:CanvasV2NativeSceneNode)=>{ids.add(node.id);for(const content of node.content)if(content.kind!=='text'){const child=byId.get(content.id);if(child)retain(child)}};
+    for(const sourceId of retained??[]){const node=bySourceId.get(sourceId);if(!node)continue;retain(node);let parent=node.parentId?byId.get(node.parentId):undefined;while(parent&&!ids.has(parent.id)){ids.add(parent.id);parent=parent.parentId?byId.get(parent.parentId):undefined}}
     return ids;
   }, [byId, bySourceId, protectedNodeKey]);
+  const warmViewport=useRef<ReturnType<typeof createCanvasV2WarmViewport>|undefined>(undefined);
+  if(!warmViewport.current)warmViewport.current=createCanvasV2WarmViewport();
+  const protectedNodeIds=useMemo(()=>new Set([...selectionProtectedNodeIds,...warmViewport.current!.update(byId,visibleBounds,viewportScale)]),[selectionProtectedNodeIds,byId,visibleBounds,viewportScale]);
   const cullBounds = byId.size > 300 ? visibleBounds : undefined;
   const connectorsByEndpoint = useMemo(() => {
     const index = new Map<string, CanvasV2NativeSceneNode[]>();
@@ -1174,7 +1190,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     clientY: number,
   ) => {
     if (!inspected.textEditable || inspected.locked || targetResult.element.dataset.canvasV2DirectEditing === "true") return;
-    onBeforeUserEdit?.();
+    if (onBeforeUserEdit?.(inspected) === false) return;
     onElementSelect?.(inspected, { additive: false, range: false, directEdit: true });
     onElementDoubleClick?.(inspected);
     const editable = targetResult.element;
@@ -1515,7 +1531,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           onElementHover?.(undefined);
         }}
         onClickCapture={(event) => {
-          if ((event.target as Element).closest("[data-canvas-v2-media-control], [data-canvas-v2-screen-control]")) return;
+          if ((event.target as Element).closest('[data-canvas-v2-media-control], [data-canvas-v2-screen-control], [data-canvas-v2-direct-editing="true"]')) return;
           const link = (event.target as Element).closest("a[href]");
           if (link) {
             // A canvas click selects; a double-click edits. Neither may unload

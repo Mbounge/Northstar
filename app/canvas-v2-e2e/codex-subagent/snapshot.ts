@@ -1,4 +1,4 @@
-import { decodeSnapshot, encodeSnapshot } from '@/lib/canvas-v2/sessions/snapshot';
+import { createSnapshotPersistenceDecoder, decodeSnapshot, encodeSnapshot } from '@/lib/canvas-v2/sessions/snapshot';
 import { snapshotBlobUrls } from '@/lib/canvas-v2/sessions/snapshot-blob-urls';
 import { assertSnapshotSize } from '@/lib/canvas-v2/sessions/snapshot-size';
 import { encodeSnapshotText, unpackSnapshotText } from '@/lib/canvas-v2/sessions/snapshot-codec';
@@ -75,6 +75,7 @@ export type SubagentSnapshotWriteResult =
   | { ok: false; stage: 'encode' | 'size' | 'storage'; message: string; bytes?: number };
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+const decodeSnapshotForPersistence = createSnapshotPersistenceDecoder();
 
 async function encodeSnapshotOnMainThread(snapshot: NorthstarSnapshot): Promise<Blob> {
   let text = JSON.stringify(snapshot);
@@ -95,7 +96,7 @@ async function encodeSnapshotOnMainThread(snapshot: NorthstarSnapshot): Promise<
 }
 
 async function encodedSnapshotBlob(snapshot: NorthstarSnapshot): Promise<Blob> {
-  const normalized = normalizeSubagentSnapshot(decodeSnapshot(snapshot));
+  const normalized = normalizeSubagentSnapshot(decodeSnapshotForPersistence(snapshot));
   let blob: Blob;
   try {
     blob = await encodeSnapshot(normalized, { maxBytes: SUBAGENT_SNAPSHOT_MAX_BYTES });

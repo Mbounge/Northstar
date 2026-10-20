@@ -85,7 +85,9 @@ export async function proxy(request: NextRequest) {
     if (isApiPath) {
       return NextResponse.json({ error: 'Sign in to access Northstar account data.' }, { status: 401 })
     }
-    if (!isLoginPath && !isAuthCallback) {
+    // The invitation fragment is client-only. Let this exact public landing
+    // retain it before login; joining and all canvas data remain authenticated.
+    if (!isLoginPath && !isAuthCallback && url.pathname !== '/canvas/join') {
       url.pathname = '/login'
       return NextResponse.redirect(url)
     }

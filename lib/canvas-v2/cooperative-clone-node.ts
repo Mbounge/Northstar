@@ -186,6 +186,12 @@ function cloneCSSStyle<T extends HTMLElement>(
       )
     })
   }
+  if((options as Options&{uncullImages?:boolean}).uncullImages&&nativeNode.hasAttribute('data-canvas-v2-image-offscreen')){
+    const visibility=nativeNode.getAttribute('data-canvas-v2-image-authored-visibility');
+    if(visibility)targetStyle.setProperty('visibility',visibility,'important');
+    clonedNode.removeAttribute('data-canvas-v2-image-offscreen');clonedNode.removeAttribute('data-canvas-v2-image-authored-visibility');
+  }
+
 }
 
 function cloneInputValue<T extends HTMLElement>(nativeNode: T, clonedNode: T) {
@@ -279,6 +285,8 @@ export async function cloneNode<T extends HTMLElement>(
   isRoot?: boolean,
   budget: CloneBudget = { lastYield: performance.now(), yields: 0 },
 ): Promise<T | null> {
+  // Continuity covers are ephemeral UI, never authored pixels or evidence.
+  if (node.nodeType === 1 && (node as Element).hasAttribute('data-canvas-v2-presentation-preview')) return null
   if (!isRoot && options.filter && !options.filter(node)) {
     return null
   }
@@ -292,7 +300,13 @@ export async function cloneNode<T extends HTMLElement>(
     budget.onProgress?.(budget.visited)
   }
   if (isInstanceOfElement(node, HTMLElement) && (node.hasAttribute('data-canvas-v2-screen') || node.hasAttribute('data-canvas-v2-interactive-screen'))) {
-    const pixels = await budget.captures.run(() => canvasV2ScreenCaptureForClone(node, budget.overview ?? false))
+    let pixels:string|undefined
+    try { pixels = await budget.captures.run(() => canvasV2ScreenCaptureForClone(node, budget.overview ?? false)) }
+    catch(error) {
+      const owner=(node.getAttribute('data-canvas-v2-interactive-screen')??node.getAttribute('data-canvas-v2-node-id')??'unknown').slice(0,160)
+      const detail=error instanceof Error?error.message:'The embedded screen image could not be loaded.'
+      throw new Error(`Screen ${owner} capture failed: ${detail}`)
+    }
     if (pixels) {
       const image = await createImage(pixels)
       cloneCSSStyle<HTMLElement>(node, image, options)

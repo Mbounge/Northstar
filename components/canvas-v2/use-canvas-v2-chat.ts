@@ -1,9 +1,11 @@
 "use client";
+import {parseCanvasV2ChatAttachments} from '@/lib/canvas-v2/chat-attachments';
 
 import { canvasV2IsStatusQuestion, canvasV2SteeredInstruction, type CanvasV2LiveInput } from "@/lib/canvas-v2/live-input";
 import { mergeCanvasV2Activity, type CanvasV2Activity } from "@/lib/canvas-v2/tool-activity";
 import { compactCanvasV2History } from "@/lib/canvas-v2/managed-agent/chat-history";
 
+import { flushScreenDirectEdits } from '@/lib/canvas-v2/screen-direct-edit';
 import { useTimedChatTurns } from "./use-timed-chat-turns";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -108,8 +110,9 @@ export function useCanvasV2Chat(input: {
 }) {
   const [draft, setDraft] = useState(input.initial?.draft ?? "");
   const [attachments, setAttachments] = useState<CanvasV2ChatAttachment[]>(input.initial?.attachments ?? []);
+  const attachmentsRef=useRef(attachments);attachmentsRef.current=attachments;
   const [attachmentError, setAttachmentError] = useState<string>();
-  const [turns, setTurns] = useTimedChatTurns();
+  const [turns, setTurns] = useTimedChatTurns(input.initial?.turns ?? []);
   const [reasoningEffort, setReasoningEffort] = useState<import('@/lib/canvas-v2/model-catalog').NorthstarEffort>(input.initial?.effort ?? 'high');
   const [modelSelection, setModelSelection] = useState<CanvasV2ModelSelection>(input.initial?.model ?? CANVAS_V2_DEFAULT_MODEL);
   const activeRoutingTurnId = useRef<string | undefined>(undefined);
@@ -137,10 +140,16 @@ export function useCanvasV2Chat(input: {
     ?? input.engine.committed.discoveryState, [turns, input.engine.committed.discoveryState]);
   const history = useMemo(() => compactCanvasV2History(turns), [turns]);
 
+  const preparingSubmit=useRef(false);
   const submit = async (messageOverride?: string) => {
     const requestedMessage = typeof messageOverride === "string" ? messageOverride : draft;
     const message = requestedMessage.trim() || (attachments.length ? "Review the attached supplied evidence." : "");
-    if (!message || input.engine.applyingManualEdit) return;
+    if (!message || preparingSubmit.current) return;
+    preparingSubmit.current=true;
+    try { await flushScreenDirectEdits(); }
+    catch(error) { setAttachmentError(error instanceof Error?error.message:'Save your changes before sending.');return; }
+    finally { preparingSubmit.current=false; }
+    if(input.engine.applyingManualEdit)return;
     const feedbackId = id();
     const feedback: CanvasV2LiveInput = { id: feedbackId, message, attachments, workingContext: input.getWorkingContext?.("none") };
     const parent = activeRoutingTurnId.current ?? activeDesignTurnId.current;
@@ -279,9 +288,10 @@ export function useCanvasV2Chat(input: {
     gatewaySubmit.current(handoff.prompt);
   }, [busy, input.engine.interactionReady, input.gatewayHandoff]);
 
+  const addAttachmentsAtomic=(next:readonly CanvasV2ChatAttachment[])=>{const accepted=parseCanvasV2ChatAttachments([...attachmentsRef.current,...next]);attachmentsRef.current=accepted;setAttachments(accepted);setAttachmentError(undefined);};
   const addAttachments = (next: readonly CanvasV2ChatAttachment[]) => {
     if (!next.length) return;
-    const accepted = [...attachments];
+    const accepted = [...attachmentsRef.current];
     let imageBytes = accepted.reduce((sum, attachment) => sum + (attachment.kind === "image" ? attachment.byteSize : 0), 0);
     let textCharacters = accepted.reduce((sum, attachment) => sum + (attachment.kind === "text" ? attachment.charCount : 0), 0);
     let rejectedFor: "count" | "images" | "text" | undefined;
@@ -302,7 +312,7 @@ export function useCanvasV2Chat(input: {
       if (attachment.kind === "image") imageBytes += attachment.byteSize;
       else textCharacters += attachment.charCount;
     }
-    setAttachments(accepted);
+    attachmentsRef.current=accepted;setAttachments(accepted);
     setAttachmentError(rejectedFor === "count"
       ? `A message may include up to ${CANVAS_V2_MAX_CHAT_ATTACHMENTS} attachments.`
       : rejectedFor === "images"
@@ -313,7 +323,7 @@ export function useCanvasV2Chat(input: {
   };
 
   const removeAttachment = (attachmentId: string) => {
-    setAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+    const current=attachmentsRef.current,removed=current.find(attachment=>attachment.id===attachmentId),pair=removed?.kind==='text'?removed.visualFeedback?.imageId:undefined;const next=current.filter(attachment=>attachment.id!==attachmentId&&attachment.id!==pair&&!(attachment.kind==='text'&&attachment.visualFeedback?.imageId===attachmentId));attachmentsRef.current=next;setAttachments(next);
     setAttachmentError(undefined);
   };
 
@@ -379,5 +389,5 @@ export function useCanvasV2Chat(input: {
 
   return {
     setRunConfiguration: (model:CanvasV2ModelSelection, effort:import('@/lib/canvas-v2/model-catalog').NorthstarEffort)=>{setModelSelection(model);setReasoningEffort(effort);},
-    screenVersions: [] as import('@/lib/canvas-v2/screen-versions').CanvasV2ScreenVersion[], screenFeedbackTargets: [] as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[], objectFeedbackTargets: [] as import('@/lib/canvas-v2/screen-feedback').CanvasV2ObjectFeedbackTarget[], removeFeedbackTarget: (_nodeId: string, _selector?: string): void => { void _nodeId; void _selector; }, screenFeedback: undefined as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget | undefined, clearScreenFeedback: (): void => {}, reasoningEffort, setReasoningEffort, runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
+    screenVersions: [] as import('@/lib/canvas-v2/screen-versions').CanvasV2ScreenVersion[], screenFeedbackTargets: [] as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[], objectFeedbackTargets: [] as import('@/lib/canvas-v2/screen-feedback').CanvasV2ObjectFeedbackTarget[], removeFeedbackTarget: (_nodeId: string, _selector?: string): void => { void _nodeId; void _selector; }, screenFeedback: undefined as import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget | undefined, clearScreenFeedback: (): void => {}, reasoningEffort, setReasoningEffort, runtime: undefined as "agents" | "codex" | undefined, draft, setDraft, attachments, addAttachments, addAttachmentsAtomic, removeAttachment, attachmentError, setAttachmentError, turns, busy, routing, submit, stop, continueTurn, modelSelection, setModelSelection, latestDiscoveryState };
 }

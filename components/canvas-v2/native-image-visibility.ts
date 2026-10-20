@@ -12,14 +12,19 @@ export function observeCanvasV2ImageVisibility(scene: HTMLElement): CanvasV2Imag
   const selector = 'img[data-canvas-v2-native-scene-id]:not([data-canvas-v2-evidence-role="canonical"])';
   const observed = new Set<HTMLImageElement>();
   let disposed = false;
+  const rememberVisibility=(images:HTMLImageElement[])=>{
+    // Read styles as one batch, before writing any culling markers. Source
+    // revisions can change authored visibility while an image remains offscreen.
+    const culled=images.filter(image=>image.hasAttribute('data-canvas-v2-image-offscreen'));
+    for(const image of culled)image.removeAttribute('data-canvas-v2-image-offscreen');
+    try{const values=images.map(image=>typeof getComputedStyle==='function'?getComputedStyle(image).visibility:'visible');images.forEach((image,i)=>image.setAttribute('data-canvas-v2-image-authored-visibility',values[i]))}
+    finally{for(const image of culled)image.setAttribute('data-canvas-v2-image-offscreen','')}
+  };
   const observer = new IntersectionObserver((entries) => {
     if (disposed) return;
-    for (const entry of entries) {
-      // Intersection uses geometry, not CSS visibility. Hidden images therefore
-      // re-enter normally after a pan, zoom, resize, or object move. Keep a wide
-      // screen-space buffer so they start painting before reaching the viewport.
-      if (observed.has(entry.target as HTMLImageElement)) entry.target.toggleAttribute("data-canvas-v2-image-offscreen", !entry.isIntersecting);
-    }
+    const current=entries.filter(entry=>observed.has(entry.target as HTMLImageElement));
+    rememberVisibility(current.filter(entry=>!entry.isIntersecting&&!entry.target.hasAttribute('data-canvas-v2-image-authored-visibility')).map(entry=>entry.target as HTMLImageElement));
+    for(const entry of current){entry.target.toggleAttribute('data-canvas-v2-image-offscreen',!entry.isIntersecting);if(entry.isIntersecting)entry.target.removeAttribute('data-canvas-v2-image-authored-visibility')}
   }, {
     root: scene.closest<HTMLElement>("[data-canvas-v2-native-wheel-capture]"),
     rootMargin: "1024px",
@@ -33,7 +38,9 @@ export function observeCanvasV2ImageVisibility(scene: HTMLElement): CanvasV2Imag
       observer.unobserve(image);
       observed.delete(image);
       image.removeAttribute("data-canvas-v2-image-offscreen");
+      image.removeAttribute("data-canvas-v2-image-authored-visibility");
     }
+    rememberVisibility([...current].filter(image=>image.hasAttribute('data-canvas-v2-image-offscreen')));
     // Retain the observer and the offscreen state of unchanged images across
     // scene revisions. Resetting both after every edit briefly paints every
     // distant screenshot and makes dense boards stall on pointer release.

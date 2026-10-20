@@ -58,6 +58,7 @@ export interface CanvasV2CanvasSceneProps {
   inspectionEnabled?: boolean;
   selectedNodeId?: string;
   selectedNodeIds?: readonly string[];
+  retainedNodeIds?: readonly string[];
   onElementHover?: (element?: CanvasV2InspectableElement) => void;
   onElementSelect?: (element?: CanvasV2InspectableElement, intent?: CanvasV2SelectionIntent) => void;
   onSelectionRefresh?: (elements: CanvasV2InspectableElement[]) => void;
@@ -65,11 +66,12 @@ export interface CanvasV2CanvasSceneProps {
   onNativeScene?: (scene: CanvasV2NativeSceneDocument) => void;
   nativeSceneOverride?: CanvasV2NativeSceneDocument;
   visibleBounds?: CanvasV2ElementBounds;
+  viewportScale?: number;
   placementReferenceScene?: CanvasV2NativeSceneDocument;
   /** Existing AI-owned roots that an explicit whole-board recompose may move. */
   relocatablePlacementNodeIds?: readonly string[];
   preferredPlacement?: { x: number; y: number };
-  onBeforeUserEdit?: () => void;
+  onBeforeUserEdit?: (element?: CanvasV2InspectableElement) => boolean | void;
   onAfterUserEdit?: () => void;
   onTableAction?: (cellId: string, action: "next" | "previous" | "paste", text?: string) => void;
   editTextRequest?: { nodeId: string; nonce: number; selectAll?: boolean };
@@ -994,6 +996,7 @@ export const CanvasV2CanvasScene = forwardRef<CanvasV2CanvasSceneHandle, CanvasV
         inspectionEnabled={props.inspectionEnabled ?? false}
         selectedNodeId={props.selectedNodeId}
         selectedNodeIds={props.selectedNodeIds}
+        retainedNodeIds={props.retainedNodeIds}
         onElementHover={props.onElementHover}
         onElementSelect={props.onElementSelect}
         onSelectionRefresh={props.onSelectionRefresh}
@@ -1001,6 +1004,7 @@ export const CanvasV2CanvasScene = forwardRef<CanvasV2CanvasSceneHandle, CanvasV
         onNativeScene={props.onNativeScene}
         sceneOverride={props.nativeSceneOverride}
         visibleBounds={props.visibleBounds}
+        viewportScale={props.viewportScale}
         onBeforeUserEdit={props.onBeforeUserEdit}
         onAfterUserEdit={props.onAfterUserEdit}
         editTextRequest={props.editTextRequest}

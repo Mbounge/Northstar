@@ -1,11 +1,16 @@
+import {parseCanvasV2ChatAttachments} from '../chat-attachments';
 import { assertCanvasV2ArtifactDocument } from '../artifact-safety';
 import { northstarRunConfig } from '../model-catalog';
 import type { NorthstarSnapshot } from './types';
+import type { CanvasV2ArtifactDocument } from '../types';
 import { snapshotBlobUrls } from './snapshot-blob-urls';
 import { assertSnapshotSize, DEFAULT_SNAPSHOT_MAX_BYTES } from './snapshot-size';
 import { encodeSnapshotText, unpackSnapshotText } from './snapshot-codec';
+import { createSnapshotTransportEncoder } from './snapshot-transport';
 
-export function decodeSnapshot(value: unknown): NorthstarSnapshot {
+let encoder: ReturnType<typeof createSnapshotTransportEncoder> | undefined;
+
+function decodeSnapshotWithDocumentCheck(value: unknown, checkDocument: (document: CanvasV2ArtifactDocument) => void): NorthstarSnapshot {
   const s = value as NorthstarSnapshot;
   if (!s || s.schema !== 1 || s.revision?.state !== 'committed' || !s.revision.id || !Array.isArray(s.revision.evidence)
     || !Array.isArray(s.turns) || typeof s.draft !== 'string'
@@ -13,8 +18,29 @@ export function decodeSnapshot(value: unknown): NorthstarSnapshot {
     throw new Error('This saved canvas has an unsupported or incomplete snapshot. It has not been changed.');
   }
   northstarRunConfig(s.model, s.effort);
-  assertCanvasV2ArtifactDocument(s.revision.document);
-  return s;
+  checkDocument(s.revision.document);
+  // Imported drafts must satisfy the same attachment contract as live input.
+  // Historical turns can contain larger legacy aggregates; validate each new
+  // visual-feedback pair without imposing a new cap on those older turns.
+  const attachments=s.attachments===undefined?undefined:parseCanvasV2ChatAttachments(s.attachments);
+  for(const turn of s.turns){if(!Array.isArray(turn?.attachments))continue;for(const attachment of turn.attachments){if(attachment?.kind!=='text'||attachment.visualFeedback===undefined)continue;const image=turn.attachments.find(item=>item?.kind==='image'&&item.id===attachment.visualFeedback?.imageId);parseCanvasV2ChatAttachments(image?[image,attachment]:[attachment]);}}
+  return {...s,...(attachments?{attachments}:{})};
+}
+
+export function decodeSnapshot(value: unknown): NorthstarSnapshot {
+  return decodeSnapshotWithDocumentCheck(value, assertCanvasV2ArtifactDocument);
+}
+
+/** Internal repeated-save validation. Reuse only a successful check of the
+ * exact source strings; every call still checks current snapshot metadata and
+ * attachments. Imports and restores use the strict decoder above. */
+export function createSnapshotPersistenceDecoder() {
+  let checked: Pick<CanvasV2ArtifactDocument, 'html' | 'css' | 'javascript'> | undefined;
+  return (value: unknown): NorthstarSnapshot => decodeSnapshotWithDocumentCheck(value, document => {
+    if (checked && document && document.html === checked.html && document.css === checked.css && document.javascript === checked.javascript) return;
+    assertCanvasV2ArtifactDocument(document);
+    checked = { html: document.html, css: document.css, javascript: document.javascript };
+  });
 }
 
 export async function decodeSnapshotBlob(blob: Blob, maxBytes = DEFAULT_SNAPSHOT_MAX_BYTES): Promise<NorthstarSnapshot> {
@@ -26,21 +52,15 @@ export async function decodeSnapshotBlob(blob: Blob, maxBytes = DEFAULT_SNAPSHOT
 export async function encodeSnapshot(snapshot: NorthstarSnapshot, { maxBytes = DEFAULT_SNAPSHOT_MAX_BYTES }: { maxBytes?: number } = {}): Promise<Blob> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid canvas snapshot size limit.');
   if (typeof window !== 'undefined' && typeof Worker !== 'undefined') {
-    return new Promise<Blob>((resolve, reject) => {
-      const worker = new Worker(new URL('./snapshot-encode.worker.ts', import.meta.url));
-      worker.onmessage = (event: MessageEvent<{blob?: Blob; error?: string; stage?: string; bytes?: number}>) => {
-        worker.terminate();
-        if (event.data.blob) resolve(event.data.blob);
-        else reject(Object.assign(new Error(event.data.error || 'Could not save this canvas.'), { stage: event.data.stage, bytes: event.data.bytes }));
-      };
-      worker.onerror = () => {
-        worker.terminate();
-        reject(new Error('Could not prepare this canvas for saving. Please retry.'));
-      };
-      try { worker.postMessage({ snapshot, maxBytes }); }
-      catch (error) { worker.terminate(); reject(error); }
+    encoder ??= createSnapshotTransportEncoder({
+      createWorker: () => new Worker(new URL('./snapshot-encode.worker.ts', import.meta.url)),
+      onTransfer: (startedAt, durationMs) => {
+        if (process.env.NODE_ENV === 'development' && window.location.pathname.startsWith('/canvas-v2-e2e/') && new URLSearchParams(window.location.search).get('hardening') === '1') window.dispatchEvent(new CustomEvent('northstar:e2e:snapshot-copy-timing', { detail: { stage: 'worker-post-message', startedAt, durationMs } }));
+      },
     });
+    return encoder.encode(snapshot, maxBytes);
   }
+
   let text = JSON.stringify(snapshot);
   const urls = snapshotBlobUrls(text);
   for (const url of urls) {

@@ -53,10 +53,16 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
   // A same-product baseline already contains its retained token declarations.
   // Re-injecting them changes the copy and can reject a valid near-limit source.
   const inheritedTokens = base && !base.screen.simulation && identity?.id === base.screen.productIdentityId && css === base.screen.css;
-  const screen = validateCanvasV2Screen({ version: 1, device: input.device ?? previous?.screen.device ?? identity?.device, referenceNodeId:input.referenceNodeId??previous?.screen.referenceNodeId,referenceIntent,referenceAppearance:input.referenceAppearance??previous?.screen.referenceAppearance??identity?.appearance, productIdentityId: identityId, mockData:input.mockData ?? previous?.screen.mockData ?? identity?.mockData, simulation: input.simulation, title: input.title ?? previous?.screen.title,
+  const screen = validateCanvasV2Screen({ version: 1, design: previous?.screen.design??base?.screen.design, device: input.device ?? previous?.screen.device ?? identity?.device, referenceNodeId:input.referenceNodeId??previous?.screen.referenceNodeId,referenceIntent,referenceAppearance:input.referenceAppearance??previous?.screen.referenceAppearance??identity?.appearance, productIdentityId: identityId, mockData:input.mockData ?? previous?.screen.mockData ?? identity?.mockData, simulation: input.simulation, title: input.title ?? previous?.screen.title,
     width: input.width ?? previous?.screen.width ?? 390, height: input.height ?? previous?.screen.height ?? 844,
     html: input.html ?? previous?.screen.html, css: !previous && identity && !inheritedTokens ? canvasV2ProductTokenCss(identity) + '\n' + css : css, javascript: input.javascript ?? previous?.screen.javascript ?? '',
     referenceAssetIds: [...new Set([...(input.referenceAssetIds ?? previous?.screen.referenceAssetIds ?? []) as string[], ...(!previous ? identityReferences : [])])], trustedRuntimeLibraries: input.trustedRuntimeLibraries ?? previous?.screen.trustedRuntimeLibraries, wasmModules: input.wasmModules ?? previous?.screen.wasmModules ?? base?.screen.wasmModules });
+  if(previous&&typeof DOMParser!=='undefined'){
+    const parser=new DOMParser(),before=parser.parseFromString(previous.screen.html,'text/html'),after=parser.parseFromString(screen.html,'text/html');
+    const locked=[...before.body.querySelectorAll('[data-northstar-locked="true"]')];
+    if(locked.length&&(screen.css!==previous.screen.css||screen.javascript!==previous.screen.javascript))throw new Error('Unlock native layers before changing the screen stylesheet or app behavior.');
+    for(const layer of locked){if(!layer.id)throw new Error('Unlock this layer before revising its screen.');const matches=after.body.querySelectorAll('#'+CSS.escape(layer.id)),next=matches[0];if(matches.length!==1||next.outerHTML!==layer.outerHTML)throw new Error('A native layer is locked. Unlock it before asking Northstar to change it.');let a=layer.parentElement,b=next.parentElement;while(a&&a!==before.body){if(!b||a.localName!==b.localName||JSON.stringify([...a.attributes].map(v=>[v.name,v.value]))!==JSON.stringify([...b.attributes].map(v=>[v.name,v.value])))throw new Error('Unlock native layers before changing their layout owner.');a=a.parentElement;b=b.parentElement;}}
+  }
   validateCanvasV2ScreenAssets(screen, evidence);
   validateCanvasV2ScreenJavaScript(screen.javascript);
   const encoded = encodeCanvasV2Screen(screen);
@@ -114,7 +120,11 @@ export function arrangeCanvasV2Screens(scene: CanvasV2NativeSceneDocument, input
   if (ids.includes(anchorId)) throw new Error('The read-only anchor must not be included in nodeIds.');
   const direction = input.direction ?? 'horizontal', gap = input.gap ?? 96;
   if (!['horizontal', 'vertical'].includes(String(direction)) || typeof gap !== 'number' || !Number.isInteger(gap) || gap < 64 || gap > 320) throw new Error('Choose horizontal or vertical with a gap from 64 to 320.');
-  const next = structuredClone(scene);
+  // Only movers get new node values. Source-preserving native serialization
+  // relies on immutable identity to leave unrelated legacy/protected tags exact.
+  const moverIds = new Set(ids);
+  const next = { ...scene, nodes: scene.nodes.map(node => moverIds.has(node.sourceNodeId ?? node.id)
+    ? { ...node, geometry: { ...node.geometry } } : node) };
   const anchor = anchorId === undefined ? undefined : next.nodes.find(node => (node.sourceNodeId ?? node.id) === anchorId);
   if (anchorId !== undefined && (!anchor || !anchor.attributes[SCREEN_ATTRIBUTE] || anchor.hidden)) throw new Error('The anchor screen was deleted or is unavailable. Read the canvas again.');
   if (anchor?.parentId && next.nodes.find(parent => parent.id === anchor.parentId)?.kind !== 'root') throw new Error('Choose a standalone anchor screen without changing its composition group.');

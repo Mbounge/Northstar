@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCanvasV2MediaPlaybackStore, releaseCanvasV2VideoSource, rememberCanvasV2MediaTime, restoreCanvasV2MediaTime, type CanvasV2RetainedMediaPlayback } from '../lib/canvas-v2/media-playback-store';
+import { createCanvasV2MediaPlaybackStore, createCanvasV2WarmMediaRetention, releaseCanvasV2VideoSource, rememberCanvasV2MediaTime, restoreCanvasV2MediaTime, type CanvasV2RetainedMediaPlayback } from '../lib/canvas-v2/media-playback-store';
 
 test('unselected reference media transitions never notify the selected control or a workspace observer', () => {
   const store = createCanvasV2MediaPlaybackStore();
@@ -61,4 +61,78 @@ test('resource release cannot unload a visible source reattached before the effe
   let loads = 0;
   const video = { readyState: 4, currentTime: 2, currentSrc: 'blob:visible-reference', getAttribute: () => 'blob:visible-reference', load() { loads++; } };
   assert.equal(releaseCanvasV2VideoSource({}, video), false); assert.equal(loads, 0);
+});
+
+function retentionClock(maxOffscreen = 4) {
+  let now = 0, id = 0;
+  const tasks = new Map<number, { at: number; run: () => void }>();
+  const callbacks: Array<() => void> = [];
+  const timers = {
+    set(run: () => void, delay: number) { const key = ++id; tasks.set(key, { at: now + delay, run }); callbacks.push(run); return key as unknown as ReturnType<typeof setTimeout>; },
+    clear(timer: ReturnType<typeof setTimeout>) { tasks.delete(timer as unknown as number); },
+  };
+  const pool = createCanvasV2WarmMediaRetention({ maxOffscreen, ttlMs: 45_000, timers });
+  return { pool, callbacks, tasks, advance(ms: number) {
+    const end = now + ms;
+    for (;;) {
+      const next = [...tasks].filter(([, task]) => task.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      now = next[1].at; tasks.delete(next[0]); next[1].run();
+    }
+    now = end;
+  } };
+}
+
+test('a previously viewed decoder stays warm for 45 seconds and its revisit cancels the old expiry', () => {
+  const { pool, advance, callbacks } = retentionClock(), owner = {};
+  let releases = 0;
+  pool.visible(owner, () => releases++); pool.offscreen(owner);
+  advance(44_999); assert.equal(releases, 0);
+  const oldExpiry = callbacks[0];
+  pool.visible(owner, () => releases++);
+  oldExpiry(); advance(60_000); assert.equal(releases, 0, 'Even an already queued stale expiry cannot evict a visible revisit.');
+  pool.offscreen(owner); advance(45_000); assert.equal(releases, 1);
+  advance(45_000); assert.equal(releases, 1, 'An evicted source is released once.');
+});
+
+test('the offscreen decoder budget evicts the least recently visited item while all visible media remain protected', () => {
+  const { pool, advance } = retentionClock(2), owners = Array.from({ length: 8 }, () => ({})), releases: number[] = [];
+  owners.forEach((owner, index) => pool.visible(owner, () => releases.push(index)));
+  advance(60_000); assert.deepEqual([...releases], [], 'Visible media do not count toward the offscreen budget.');
+  pool.offscreen(owners[0]); pool.offscreen(owners[1]);
+  pool.visible(owners[0], () => releases.push(0)); pool.offscreen(owners[0]);
+  pool.offscreen(owners[2]); assert.deepEqual([...releases], [1], 'Revisiting item 0 makes item 1 the oldest offscreen resource.');
+  advance(45_000); assert.deepEqual([...releases], [1, 0, 2]);
+});
+
+test('repeated offscreen observations do not indefinitely renew decoder residency', () => {
+  const { pool, advance } = retentionClock(), owner = {}; let releases = 0;
+  pool.visible(owner, () => releases++); pool.offscreen(owner);
+  for (let interval = 0; interval < 4; interval++) { advance(10_000); pool.offscreen(owner); }
+  advance(5_000); assert.equal(releases, 1);
+});
+
+test('source replacement and unmount cancel old retention work without releasing the new decoder', () => {
+  const { pool, advance, callbacks, tasks } = retentionClock(), owner = {}; const released: string[] = [];
+  pool.visible(owner, () => released.push('old-source')); pool.offscreen(owner);
+  const stale = callbacks[0]; pool.remove(owner);
+  pool.visible(owner, () => released.push('new-source')); stale(); advance(60_000);
+  assert.deepEqual([...released], []);
+  pool.offscreen(owner); pool.remove(owner); advance(60_000); assert.deepEqual([...released], []);
+  pool.visible({}, () => released.push('disposed')); pool.dispose(); assert.equal(tasks.size, 0);
+});
+
+test('eviction retains actual playback time and human pause preference until the source is deliberately reattached', () => {
+  const { pool, advance } = retentionClock(), owner = {}, playback: CanvasV2RetainedMediaPlayback = { userPaused: true };
+  let source: string | null = 'blob:exact-clip', loads = 0;
+  const video = { readyState: 4, currentTime: 7.375, currentSrc: source, getAttribute: () => source, load() { loads++; this.readyState = 0; this.currentTime = 0; this.currentSrc = ''; } };
+  pool.visible(owner, () => { source = null; releaseCanvasV2VideoSource(playback, video); }); pool.offscreen(owner);
+  advance(45_000); assert.equal(loads, 1); assert.deepEqual(playback, { userPaused: true, currentTime: 7.375 });
+  const resumed = { duration: 12, currentTime: 0 }; restoreCanvasV2MediaTime(playback, resumed); assert.equal(resumed.currentTime, 7.375);
+});
+
+test('a zero offscreen budget releases only departing media and invalid policies fail before registration', () => {
+  const { pool } = retentionClock(0), owner = {}; let releases = 0;
+  pool.visible(owner, () => releases++); assert.equal(releases, 0); pool.offscreen(owner); assert.equal(releases, 1);
+  for (const options of [{ maxOffscreen: -1 }, { maxOffscreen: 1.5 }, { ttlMs: 0 }, { ttlMs: Infinity }]) assert.throws(() => createCanvasV2WarmMediaRetention(options), /bounded/);
 });

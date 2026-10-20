@@ -1,4 +1,5 @@
 'use client';
+import { PendingCanvasInvitation } from './canvas-invitation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Archive, ChevronLeft, Clock3, LoaderCircle, MoreHorizontal, Plus, Search, X } from 'lucide-react';
 import { archiveSession, createSession, listSessions, renameSession } from '@/lib/canvas-v2/sessions/store';
@@ -84,7 +85,7 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
     const rest=opened.filter(s=>s.frameId!==item.frameId);setOpened(rest);
     if(active===item.frameId){if(rest.length)select(rest[rest.length-1]);else{setActive('');setSidebar(true);history.replaceState(null,'',testMode ? '/canvas?sessionTest=1':'/canvas');}}
   };
-  return <main className="fixed inset-0 overflow-hidden bg-[#10101a] text-[#ecebf1]">
+  return <main className="fixed inset-0 overflow-hidden bg-[#10101a] text-[#ecebf1]"><PendingCanvasInvitation/>
     {/* Inactive work must keep painting: hiding its frame can throttle agents and pending saves. */}
     {opened.map(item=><iframe key={item.frameId} ref={node=>{if(node)frames.current.set(item.frameId,node);else frames.current.delete(item.frameId);}}
       title={`Canvas: ${item.title}`} src={`${path}workspace=${encodeURIComponent(item.frameId)}${item.originalTemporary?'&temporary=1':''}`}

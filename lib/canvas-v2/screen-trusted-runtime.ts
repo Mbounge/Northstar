@@ -4,9 +4,24 @@ import { NORTHSTAR_THREE_WEBGPU_SOURCE } from './vendor/three-webgpu-runtime-sou
 export type CanvasV2TrustedRuntimeLibrary = 'three' | 'three-webgpu';
 export const hasCanvasV2ThreeRuntime = (libraries: readonly CanvasV2TrustedRuntimeLibrary[] | undefined) => Boolean(libraries?.some(library => library === 'three' || library === 'three-webgpu'));
 
+/** Actual local paint contribution, independent of pointer hit testing. */
+export function screenCanvasContributesPaint(canvas: HTMLCanvasElement): boolean {
+  const view = canvas.ownerDocument?.defaultView ?? window;
+  const rect = typeof canvas.getBoundingClientRect === 'function' ? canvas.getBoundingClientRect() : { width: canvas.clientWidth, height: canvas.clientHeight, left: 0, top: 0, right: canvas.clientWidth, bottom: canvas.clientHeight };
+  if (!(rect.width > 0 && rect.height > 0)) return false;
+  if (Number.isFinite(view.innerWidth) && Number.isFinite(view.innerHeight) && !(rect.right > 0 && rect.bottom > 0 && rect.left < view.innerWidth && rect.top < view.innerHeight)) return false;
+  for (let node: HTMLElement | null = canvas; node; node = node.parentElement) {
+    const style = typeof view.getComputedStyle === 'function' ? view.getComputedStyle(node) : undefined;
+    if (!style && node.hidden) return false;
+    if (style && (style.display === 'none' || style.contentVisibility === 'hidden' || Number(style.opacity) === 0 || node === canvas && (style.visibility === 'hidden' || style.visibility === 'collapse'))) return false;
+  }
+  return true;
+}
+
 /** Small host-owned facade around the pinned local Three bundle. It never fetches
  * resources: GLTFLoader callers must provide bytes from northstarAssets. */
 export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
+  const contributesPaint = ${screenCanvasContributesPaint.toString()};
   const THREE = window.northstarThreeCore;
   const GLTFLoader = window.northstarGLTFLoader;
   if (!THREE || !GLTFLoader) throw new Error('The pinned Three runtime is unavailable.');
@@ -18,9 +33,9 @@ export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
   const shortError = error => String(error?.message || error || 'Unknown trusted Three error').slice(0, 500);
   const recordError = error => { const message = shortError(error); if (!readinessErrors.includes(message)) readinessErrors.push(message); return message; };
   const readiness = () => {
-    const rendererStates = [...renderers].map(entry => ({ renders: entry.renders, skippedDraws: entry.skippedDraws, requiredDraw: entry.requiredDraw, backend: entry.renderer.backend?.isWebGPUBackend ? 'webgpu' : 'webgl2', error: entry.error }));
+    const rendererStates = [...renderers].map(entry => ({ renders: entry.renders, skippedDraws: entry.skippedDraws, requiredDraw: entry.requiredDraw, backend: entry.renderer.backend?.isWebGPUBackend ? 'webgpu' : 'webgl2', error: entry.error, paintAvailable: Number.isFinite(entry.canvas.width)&&Number.isFinite(entry.canvas.height)?entry.canvas.width>0&&entry.canvas.height>0:undefined, drawingBuffer: {width:entry.canvas.width??null,height:entry.canvas.height??null,clientWidth:entry.canvas.clientWidth??null,clientHeight:entry.canvas.clientHeight??null} }));
     const hasRenderer = rendererStates.length > 0;
-    const firstDraw = hasRenderer && rendererStates.every(entry => entry.renders > entry.requiredDraw);
+    const firstDraw = hasRenderer && rendererStates.every(entry => entry.renders > entry.requiredDraw && entry.paintAvailable !== false);
     const ready = pendingLoads.size === 0 && firstDraw && !readinessErrors.length;
     return { library: 'three', ready, viewportActive, reviewDraws, status: ready ? 'ready' : readinessErrors.length ? 'error' : 'pending', pendingLoads: pendingLoads.size, renderers: rendererStates, errors: readinessErrors.slice(-8) };
   };
@@ -37,6 +52,9 @@ export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
     check();
   });
   const whenReady = async (timeoutMs = 4000) => {
+    // Capture pins the existing iframe layout before this readiness boundary.
+    // Materialize a zero-initialized renderer from that actual current layout.
+    if (reviewDraws) drawCurrent();
     const state = await waitForReadiness(timeoutMs);
     if (!state.ready) return state;
     const pending = [...renderers].filter(entry => typeof entry.renderer.waitForGPU === 'function');
@@ -51,10 +69,23 @@ export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
     return readiness();
   };
   const isPresentationDraw = renderer => typeof renderer.getRenderTarget !== 'function' || renderer.getRenderTarget() === null;
-  const drawCurrent = () => { for (const entry of renderers) if (entry.lastArgs && isPresentationDraw(entry.renderer)) entry.draw(entry.lastArgs); };
+  const drawCurrent = () => { for (const entry of renderers) if (entry.lastArgs && isPresentationDraw(entry.renderer)) {
+    const canvas=entry.canvas, width=canvas.clientWidth, height=canvas.clientHeight;
+    const ratio=typeof entry.renderer.getPixelRatio==='function'?entry.renderer.getPixelRatio():1;
+    // Only repair absent backing pixels, never resize a valid authored buffer.
+    // Offscreen initialization can observe 0×0 before its layout is pinned.
+    if((canvas.width===0||canvas.height===0)&&contributesPaint(canvas)&&Number.isFinite(width)&&Number.isFinite(height)&&width>0&&height>0&&Number.isFinite(ratio)&&ratio>0&&width*ratio<=8192&&height*ratio<=8192&&width*height*ratio*ratio<=16000000&&typeof entry.renderer.setSize==='function'){
+      entry.renderer.setSize(width,height,false);
+      const camera=entry.lastArgs[1];
+      if(camera?.isPerspectiveCamera&&(!Number.isFinite(camera.aspect)||camera.aspect<=0)){
+        camera.aspect=width/height;camera.updateProjectionMatrix?.();
+      }
+    }
+    entry.draw(entry.lastArgs);
+  } };
   const trackRenderer = (renderer, canvas) => {
     canvas.dataset.northstarRenderer = renderer.backend?.isWebGPUBackend ? 'webgpu' : 'webgl2';
-    const entry = { renderer, renders: 0, skippedDraws: 0, requiredDraw: 0, error: undefined, lastArgs: undefined, draw: undefined };
+    const entry = { renderer, canvas, renders: 0, skippedDraws: 0, requiredDraw: 0, error: undefined, lastArgs: undefined, draw: undefined };
       renderers.add(entry);
       const render = renderer.render.bind(renderer);
       entry.draw = args => { try { const result = render(...args); entry.renders += 1; return result; } catch (error) { entry.error = recordError(error); throw error; } };

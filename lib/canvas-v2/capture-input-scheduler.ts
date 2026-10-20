@@ -2,6 +2,16 @@ let tracking = false;
 let lastInputAt = -Infinity;
 const activePointers = new Map<number, string>();
 
+/** Call only after validating the sending frame, protocol and scoped token (or
+ * a first-party event's isTrusted flag). Iframe input does not bubble here. */
+export function noteCanvasInputActivity(type: unknown, sequence?: unknown): boolean {
+  if (typeof type !== 'string' || !['pointerdown', 'wheel', 'keydown', 'input', 'click', 'change'].includes(type)
+    || sequence !== undefined && (typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence < 1)) return false;
+  trackCanvasInput();
+  lastInputAt = performance.now();
+  return true;
+}
+
 function trackCanvasInput() {
   if (tracking || typeof document === "undefined") return;
   tracking = true;

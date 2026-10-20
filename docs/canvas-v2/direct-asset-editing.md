@@ -1,3 +1,19 @@
+## Designer studio authoring (local implementation, 17 October 2026)
+
+The focused Edit view now includes source-backed shared controls across native apps/sites, layered posters/images and SVG artwork. Multiple selection is both a manual editing scope and a Northstar conversation scope. Changes use the existing current-source checks, retained assets, user authorship and one native undo transaction per action.
+
+- **Shared manual editing:** mixed property values remain explicit. Set shared dimensions, typography, colour, opacity, rotation or scale; move, align against selection bounds, and distribute unequal objects with equal gaps. Ancestor-plus-descendant selections reject rather than applying a transform twice. SVG translation uses its parent coordinate basis.
+- **Native layers:** rename without changing IDs; reorder siblings, duplicate with unique IDs and rewritten local references, group adjacent siblings, ungroup unchanged wrappers, delete and lock/unlock native layers. The layer tree reflects real source. Selection is remembered across structural undo/redo. ID-bound CSS rules are copied for duplicates and inserted components. Locked parts remain selectable; source-owned behavior or structural selectors require a scoped Northstar change.
+- **Design systems:** bounded, persisted per-screen shared styles, linked component instances and named source variants; responsive width/stack/grid presets with a read-only preview at real iframe widths; additional text case, decoration, tracking, leading and OpenType feature controls. Shared style updates preserve local property overrides. Libraries are retained through subsequent AI source revisions. These are local screen libraries, not cross-document team libraries or a full constraint solver.
+- **Artwork and delivery:** numeric editing of real SVG anchors and Bézier handles, with relative/absolute curves and elliptical arcs retained as native paths; non-destructive ellipse, inset and polygon image masks, including restoring original clipping. PNG exports preserve transparency and use the original native viewport; standalone native HTML embeds retained assets and product data; SVG exports the containing native artwork with definitions and embedded resources. There is no vector boolean/pen tool, automatic subject segmentation, raster retouching, 3D/WASM packaging or editable raster text extraction in this milestone.
+- **Comparison:** saved versions identify You/Northstar and display an earlier design beside the current source, with changed layer/style/behavior summaries. Both comparison and responsive previews disable authored scripts and interaction, so opening them does not create another running copy of the live app. Restore remains an undoable source revision.
+
+Safe source reconciliation preserves existing DOM elements, listeners and live form/closure state when native layer structure changes. It validates owners and live topology before changing anything, applies only source differences, and preserves current focus. Unknown runtime-created structure does not silently become an editing target. HTML layout groups use `display: contents` to retain existing flow; their children must be selected for transforms and painted surfaces, rather than accepting a visually ineffective wrapper transform.
+
+The controls remain contextual, save automatically and share Northstar's compact rails, custom menus and hidden scrollbar treatment. There is no Apply step. Review the dated verification receipt for executed checks and remaining boundaries; source test files alone are not evidence of an executed browser pass.
+
+The final local verification passed 1,327 active tests with no skips, 65 browser DOM contracts, TypeScript, affected-file lint and an isolated production build. Sol subagents exercised the editing workflows in Chrome and independently inspected the actual PNG, SVG and HTML export bytes. The final interaction pass verified that a blurred field saves to its original layer while the first click selects a different layer, Shift-selection scopes both layers for Northstar, structural undo/redo restores selection, and the original live app draft and Save closure survive. The deterministic Northstar fixture verifies source and selection handoff, rather than fresh model design quality. See `outputs/designer-studio-verification-20261017/verification-receipt.json` and `browser-receipt-final-F.json` for exact evidence and execution boundaries. These changes are local; they have not been committed or deployed.
+
 # Direct canvas editing — October 10, 2026
 
 The first direct-manipulation milestone replaces an existing image inside an authored product screen. It changes that screen's saved component source and uses the same canvas revision history and source that chat edits read.
@@ -70,3 +86,108 @@ Verification for this milestone uses the in-app browser against the development-
 TypeScript, changed-file ESLint and 62 focused source/runtime/history/ownership tests passed. Two browser regression cases were added: appearance/history/chat continuity (without a border-selection workaround), and code-controlled styling. Their automated Playwright run could not reach the app because bundled Chromium was missing and the installed Chrome process aborted at launch. The interactions above were checked through the in-app browser instead; an automated E2E pass is not claimed. The browser log also contained unassigned MutationObserver errors during preview creation/reloads; their origin is unresolved, so a clean browser console is not claimed.
 
 The isolated production build passed on retry after a transient next/font Google-font loader failure. Existing PostCSS and deprecated middleware-size warnings remain. Remaining verification boundaries are recorded in the local appearance receipt. These changes remain local and do not establish deployed behavior or universal reference fidelity.
+
+## Edit view and selection inspector (October 17, local)
+
+Select an editable app and choose Edit. Native clicks select its actual elements without activating app buttons. Preview returns input to the app. The selection outline follows the owning element at canvas zoom, names its type and supports dragging, arrow nudges, Shift increments and alignment guides. Containers keep their interiors available for selecting child elements. A move changes the selected element's CSS offset while preserving the surrounding layout; it does not reorder a flex/grid layout or implement a general component layout editor.
+
+A compact right inspector shows the owning app and the selected element's appropriate controls. Text has content, source font families, size, weight, alignment and spacing. Images have replacement, fit and crop position. Local surface and position properties remain bounded by the existing source validation. The font menus use the canvas toolbar's custom menu styling; colour selection reuses its shared palette. Number fields hide native steppers. Scrolling the inspector stays within its content region and does not navigate the canvas. The selection header remains visible and scrollbar chrome is hidden.
+
+Changes save automatically after a short pause; there is no Apply or Cancel action. Switching selection or returning to Preview flushes pending input. Edits use the native source transaction, ownership checks and history. Source-controlled text/appearance and baked image pixels retain their existing boundaries and a scoped Ask Northstar path. A native font selector cannot change lettering baked into a raster image or SVG paths.
+
+The deterministic Chrome fixture has verified direct native source changes, custom font selection, actual keyboard and pointer movement, image fit/crop and replacement, unchanged unrelated imagery, undo/redo and retained form values/closure counters. Automatic text saving was verified with the caret still focused after the actual app text changed. These local checks do not claim deployed behaviour, universal support for arbitrary authored scripts, or an aesthetic quality guarantee. The automated browser regression source has been updated; a fresh automated Playwright pass is not claimed.
+
+### Native inline text and scroll continuity
+
+Double-click a text element, or choose “Highlight and edit on canvas,” to place a caret directly in it. Select a phrase and use the existing canvas text toolbar for colour, font, size, bold, italic or strikethrough. Supported formatting becomes bounded native inline runs inside the original app element and saves automatically. The live patch preserves the owning element, app closures and input state. Switching out of text editing flushes the latest input. The same text can be reopened and its runs survive undo/redo. This path excludes links, lists, arbitrary HTML, images, controls, identities and executable markup. Source-owned text still requires an app-code change.
+
+The inspector reports mixed typography/colour when text contains different runs. A whole-element typography change applies across its text runs; range formatting remains available through the inline toolbar. Baked image lettering and SVG paths are not converted into editable font text.
+
+Scrolling no longer clears and recreates the selected element. Source/capability checks are retained while its scroll position changes; geometry updates through a reference read by the selection surface. This avoids parsing the complete app HTML and rebuilding the inspector on every scroll frame. The inline editing surface clips to its owning app viewport. No claim of a measured universal frame-rate guarantee is made.
+
+
+Final local Chrome checks confirmed phrase-only violet/Georgia formatting in the real heading source; whole-element colour changes propagated across its runs and undo restored their independent styling. The original input remained “My creative studio” and its closure counter advanced from Saved 1 to Saved 2 after formatting. Native scrolling moved the app scroll owner from 0 to 753.5 and back to 0 while the inspector retained the same DOM identity, the committed revision stayed unchanged and the iframe's canvas coordinates stayed identical. The outline hid outside the app viewport and returned to the selected heading; inspector scrolling left both the app scroll and canvas camera unchanged. This establishes interaction continuity for the fixture, not a universal measured frame-rate guarantee.
+
+
+### Human-to-Northstar handoff
+
+Both chat runtimes flush pending native text/style edits before reading or submitting context. A failed save keeps the draft and reports the failure instead of running the agent against older work. Ask Northstar flushes first, then reads a fresh, validated descriptor from the current screen; it does not tag the pre-save source. The native workspace directory reports human authorship and edit versions. Instructions treat current human decisions as the refinement baseline and permit explicitly requested selected edits, while retaining protection for unrelated work. This is a source/scope contract, not proof of the model's aesthetic judgment.
+
+
+## Focused Edit view: layers and properties
+
+Edit keeps the existing live screen mounted on the canvas. The workspace saves its camera, fits the selected object between a 232px left layers rail and 280px right properties rail, places the conversation over the left layers rail when opened, and restores the camera on exit. Closing chat reveals the same layers/search/selection without leaving Edit mode. Resizing the browser refits the active object. Back to canvas and Preview flush pending manual edits before leaving. Ask Northstar flushes all pending native edits, refreshes every selected descriptor against one current source version, attaches the entire selection atomically, and opens chat within Edit mode. It does not clear the selection or restore the canvas camera.
+
+The layers rail enumerates the entire composition from saved HTML, including nested SVG groups and individual artwork parts; selecting a part never shrinks the tree to that part's SVG. It exposes source order, actual represented parent relationships, collapse/expand, search, keyboard navigation and synchronized selection. Selecting a layer explicitly reveals it within its live scroll container. The inspector displays grouped contextual sections rather than a row of crowded property tabs. No Apply step is required.
+
+Research references and implementation boundaries:
+
+- [Figma layer selection](https://help.figma.com/hc/en-us/articles/360040449873-Select-layers-and-objects): the tree and canvas must identify the same object, with meaningful nested navigation. The current designer studio adds multi-selection and native layer actions; these are source operations rather than inferred image layers.
+- [Figma properties panel](https://help.figma.com/hc/en-us/articles/360039832014-Design-prototype-and-explore-layer-properties-in-the-right-sidebar): selection determines visible editing controls. Northstar uses compact contextual typography, position, layout, image and appearance sections, with a clear empty selection state.
+- [Figma auto layout](https://help.figma.com/hc/en-us/articles/360040451373-Guide-to-auto-layout-in-Figma): fixed dimensions, content sizing and filling a parent have different semantics. Northstar currently exposes actual CSS dimensions/units, auto sizing, bounded flex/grid controls, padding and gaps. It does not claim Figma auto-layout feature parity or label every percentage as Fill.
+- [Figma image properties](https://help.figma.com/hc/en-us/articles/360041098433-Adjust-the-properties-of-an-image): source imagery and its frame are distinct. Northstar retains image identities and separately editable poster text/logo layers, with image fit and crop position. Flattened raster lettering is still pixels; the tree does not invent recoverable text or subject layers.
+- [Figma vector editing](https://help.figma.com/hc/en-us/articles/360039957634-Edit-vector-layers): editing a vector's points and curves is distinct from changing paint or object geometry. Current SVG controls cover native part/group selection, fill, stroke, opacity, position, rotation, scale and numeric shape dimensions; native anchor/control-point coordinates are now editable in Artwork; a pen/drawing tool is not implemented.
+
+Native edits remain subject to current-source checks and target-owned code analysis. A script controlling one element must not disable unrelated static layers; ambiguous code ownership requires a scoped Northstar change. SVG live patches preserve definitions, IDs, unrelated elements and existing app state, including Undo/Redo.
+
+
+## Collaborative selection and text geometry
+
+Within the edited object, Cmd/Ctrl-click adds or removes a layer, Shift-click in the tree selects a range, and Shift-click on the artwork adds/removes a part. Multiple selections show their exact names and outlines in a separate right-hand summary. The summary scopes one Northstar instruction and now exposes explicit shared manual controls with mixed-value states. The existing feedback collection can append/remove those native targets and retains its combined 24-item limit across screen parts and canvas objects.
+
+Feedback batches validate all members before attaching any. Sending waits for pending human edits and refreshes target source/text/geometry, so a later manual edit does not leave the agent with an older version. Stable IDs survive local edits/history; ambiguous positional selectors are rejected after structural shifts instead of being redirected to a sibling. Async descriptor refreshes cannot overwrite a newer user selection, and duplicate Send actions are blocked while preparing a request.
+
+Inline text editing preserves the native element's padding, border space, horizontal alignment and glyph baseline. Source glyph bounds come from a real DOM Range inside the live frame; the host editor uses those metrics without persisting its positioning correction into the authored source. This addresses labels jumping upward when double-clicking padded or centered buttons.
+
+The designer studio milestone adds shared manual properties, layer actions, local systems, native point coordinates, masks, export and comparison as described above. Advanced constraint solving, a pen/boolean drawing tool, raster retouching and team component libraries remain separate capabilities.
+
+Incremental verification: `outputs/collaborative-editing-20261017/verification-receipt.json` and `browser-receipt.json` record independent Sol testing, actual Chrome interactions, source/history/state checks, and the deterministic fixture boundary. These tests verify routing and atomic refinement behavior; they do not claim a fresh live-model design-quality evaluation.
+
+
+## Layer hover and visual feedback sessions (18 October, local)
+
+Layer-row hover outlines the exact rendered element, including SVG parts and
+contents groups, without changing selection, inspector, source or history.
+Leaving the row clears the outline. Geometry follows motion and scrolling;
+stationary bounds do not trigger repeated overlay style writes.
+
+Ask Northstar starts a temporary feedback session within Edit view or the main
+canvas. Click a part, select an area or draw a freehand mark, then write its
+anchored comment. Multiple comments may refer to the same part. A closed circle
+remains a drawn region. Readable numbered comment bubbles sit beside the artwork,
+with leader lines to their exact regions. Saved comments remain visible while
+another comment is being written; each can be reopened for editing. Placement
+avoids the editing rails and separates nearby bubbles when space permits. Regions
+and leaders follow pan and zoom; offscreen regions hide their bubbles. Long
+comments scroll inside their bubbles. Crowded views use a scrollable column of
+the same readable comments, with leaders for the currently visible rows, instead
+of covering earlier comments. A newly opened editor scrolls into that column
+once; typing does not keep moving the reader's position. Portal mount and size
+changes invalidate placement, including when adding another comment without
+moving the camera. Canvas mutation shortcuts are suspended while marking; text input
+keeps its normal editing behavior. Cancel discards the temporary session.
+
+Done includes the pending comment and prepares numbered captures alongside the
+individual comments. Only an acknowledged, fully validated batch clears marks
+and opens chat. Chat initially shows a compact comment count; Review expands the
+individual comments and small marked-region thumbnails. Send is a separate action.
+The attachment pair stores visual
+metadata with stable owner IDs, selectors where available, local/world bounds
+and source fingerprints. Whole-object and child-element scopes remain distinct
+when removing a batch. Source changes are checked again before Send, including
+restored drafts; native artwork also checks its stylesheet fingerprint. Imports
+validate draft attachments and historical visual-feedback pairs before display.
+
+Captures retain marked native subtrees while navigating to distant canvas areas.
+They normalize cloned paint origins while preserving rotation and child layout.
+Public camera image culling records authored visibility, which marked captures
+restore only on their clones. Intentionally hidden artwork remains hidden.
+These operations do not modify authored artwork or its undo history.
+
+Large-board performance work caches screen-source indexes and lazily fingerprints
+marked owners, memoizes runtime asset bindings, stabilizes the editing context,
+and avoids stationary annotation/hover style updates. The opt-in DEV observer
+records host callback timing, long tasks and observable selection latency. Its
+versioned reports explicitly distinguish host scheduling from GPU presentation
+FPS and discard background-tab captures. Actual 49-screen board receipts and
+raw measurements are retained in outputs/designer-workspace-hardening-20261018.

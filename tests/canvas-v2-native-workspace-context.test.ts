@@ -77,3 +77,14 @@ test('a native Northstar ledger still rejects unauthorized replacement of human 
   const transaction=compileCanvasV2NativeSceneTransaction({origin:'northstar',baseRevisionId:scene.revisionId,previousScene:scene,nextScene,previous,next});
   assert.throws(()=>assertCanvasV2SceneTransaction({transaction,baseRevisionId:scene.revisionId,previous,next}),/human|user|preserve|protected/i);
 });
+
+
+test('current object reads identify human edits without inventing visual approval',()=>{
+  const scene=populated(),node=scene.nodes[0];
+  node.userEdited=true;node.lastAuthor='user';node.editVersion=7;
+  const context=readCanvasV2NativeWorkspaceContext(scene,'current')!;
+  assert.equal(context.objects[0].userEdited,true);
+  assert.equal(context.objects[0].lastAuthor,'user');
+  assert.equal(context.objects[0].editVersion,7);
+  assert.match(context.inspection,/Source and geometry only/);
+});

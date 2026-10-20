@@ -1,4 +1,5 @@
 import type { CanvasV2ArtifactDocument } from "@/lib/canvas-v2/types";
+import type { CanvasV2NativeSceneDocument, CanvasV2NativeSceneNode } from "./native-scene";
 
 export type CanvasV2BoardObjectKind = "root" | "frame" | "group" | "island" | "text" | "note" | "image" | "model" | "shape" | "line" | "connector" | "drawing" | "table" | "evidence" | "object";
 
@@ -18,6 +19,49 @@ export interface CanvasV2BoardObject {
   editVersion: number;
   rotation: number;
   canonicalEvidence: boolean;
+}
+
+/** The compiled scene is current board truth. Opening Layers should not parse
+ * the entire serialized document (including embedded app and image sources). */
+export function readCanvasV2NativeBoardObjectGraph(scene: CanvasV2NativeSceneDocument): CanvasV2BoardObject[] {
+  const byId = new Map(scene.nodes.map(node => [node.id, node]));
+  const sourceId = (node: CanvasV2NativeSceneNode) => node.sourceNodeId || node.attributes["data-canvas-v2-node-id"];
+  const parents = new Map<string, CanvasV2NativeSceneNode | undefined>();
+  const sourceParent = (node: CanvasV2NativeSceneNode): CanvasV2NativeSceneNode | undefined => {
+    if (parents.has(node.id)) return parents.get(node.id);
+    const visited = new Set([node.id]);
+    let parent = node.parentId ? byId.get(node.parentId) : undefined;
+    while (parent && !visited.has(parent.id)) {
+      visited.add(parent.id);
+      if (sourceId(parent)) { parents.set(node.id, parent); return parent; }
+      parent = parent.parentId ? byId.get(parent.parentId) : undefined;
+    }
+    parents.set(node.id, undefined);
+    return undefined;
+  };
+  const result = scene.nodes.flatMap<CanvasV2BoardObject>(node => {
+    const nodeId = sourceId(node);
+    if (!nodeId) return [];
+    const parent = sourceParent(node);
+    let depth = 0, cursor = parent;
+    const visited = new Set([node.id]);
+    while (cursor && !visited.has(cursor.id)) { visited.add(cursor.id); depth++; cursor = sourceParent(cursor); }
+    const attrs = node.attributes, origin = attrs["data-canvas-v2-origin"];
+    return [{
+      nodeId, ...(parent ? { parentNodeId: sourceId(parent) } : {}), childNodeIds: [], depth,
+      tagName: node.tagName, kind: node.kind, label: attrs["aria-label"],
+      hidden: node.hidden, locked: node.locked, userEdited: node.userEdited,
+      lastAuthor: node.lastAuthor, editVersion: node.editVersion, rotation: node.geometry.rotation,
+      canonicalEvidence: node.canonicalEvidence,
+      origin: origin === "user" || origin === "northstar" || origin === "research" || origin === "imported"
+        ? origin : node.canonicalEvidence || node.evidence ? "research"
+          : node.lastAuthor === "northstar" ? "northstar"
+            : attrs["data-canvas-v2-user-edited"]?.includes("create") ? "user" : "imported",
+    }];
+  });
+  const objects = new Map(result.map(node => [node.nodeId, node]));
+  for (const node of result) if (node.parentNodeId) objects.get(node.parentNodeId)?.childNodeIds.push(node.nodeId);
+  return result;
 }
 function kindFor(element: HTMLElement): CanvasV2BoardObjectKind {
   if (element.dataset.canvasV2WorkspaceRoot === "true" || element.dataset.canvasV2PermanentRoot === "true" || element.dataset.canvasV2NodeId === "canvas") return "root";

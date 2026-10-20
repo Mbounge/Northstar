@@ -82,3 +82,54 @@ test('bounds reject oversized or malformed experience records', () => {
   assert.throws(() => screenExperiencePlan(dense, known), /12000 characters/);
   assert.equal(validate({ ...plan, transitions: [{ ...transition, unknown: true }] }), false);
 });
+
+test('missing settled expectations identify the exact state or transition path for correction', () => {
+  const stateMissingExpectation = { id: states[1].id, description: states[1].description };
+  assert.throws(() => screenExperiencePlan({ ...plan, states: [states[0], stateMissingExpectation] }, known), error => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /experiencePlan\.states\[1\]\.settledExpectation/);
+    assert.match(error.message, /1–500 characters/);
+    return true;
+  });
+  const edgeMissingExpectation: Partial<typeof transition> = { ...transition, id: 'second' };
+  delete edgeMissingExpectation.settledExpectation;
+  assert.throws(() => screenExperiencePlan({ ...plan, transitions: [transition, edgeMissingExpectation] }, known), error => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /experiencePlan\.transitions\[1\]\.settledExpectation/);
+    assert.match(error.message, /1–500 characters/);
+    return true;
+  });
+});
+
+test('unexpected experience keys report their location and exact allowed keys without accepting aliases', () => {
+  const misspelled = { id: states[1].id, description: states[1].description, settledStateExpectation: states[1].settledExpectation };
+  assert.throws(() => screenExperiencePlan({ ...plan, states: [states[0], misspelled] }, known), error => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /Unknown experiencePlan\.states\[1\] field\(s\): "settledStateExpectation"/);
+    assert.match(error.message, /Allowed fields: id, description, settledExpectation\./);
+    assert.match(error.message, /Resubmit using these exact keys/);
+    return true;
+  });
+  assert.equal(validate({ ...plan, states: [states[0], misspelled] }), false, 'the public schema must reject the same alias');
+  const wrongVerification = { action: 'click', selector: '#start', viewSelector: '#running', expectedText: 'Running', destination: '#running' };
+  assert.throws(() => screenExperiencePlan({ ...plan, transitions: [{ ...transition, verification: wrongVerification }] }, known), error => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /experiencePlan\.transitions\[0\]\.verification/);
+    assert.match(error.message, /"destination"/);
+    assert.match(error.message, /Allowed fields: action, selector, viewSelector, expectedText\./);
+    return true;
+  });
+});
+
+test('an exact-key resubmission is accepted while existing experience constraints remain strict', () => {
+  const corrected = { ...plan, states: [states[0], { id: states[1].id, description: states[1].description, settledExpectation: states[1].settledExpectation }] };
+  assert.deepEqual(screenExperiencePlan(corrected, known), corrected);
+  assert.equal(validate(corrected), true, JSON.stringify(validate.errors));
+  for (const settledExpectation of ['', ' ', 'x'.repeat(501)]) {
+    assert.throws(() => screenExperiencePlan({ ...corrected, states: [states[0], { ...states[1], settledExpectation }] }, known), /experiencePlan\.states\[1\]\.settledExpectation/);
+    assert.throws(() => screenExperiencePlan({ ...corrected, transitions: [{ ...transition, settledExpectation }] }, known), /experiencePlan\.transitions\[0\]\.settledExpectation/);
+  }
+  assert.throws(() => screenExperiencePlan({ ...corrected, transitions: [{ ...transition, to: 'missing' }] }, known), /must exist/);
+  assert.throws(() => screenExperiencePlan({ ...corrected, states: [states[0], states[0]] }, known), /distinct/);
+  assert.throws(() => screenExperiencePlan({ ...corrected, states: [{ ...states[0], id: 'invalid id' }] }, known), /id/);
+});

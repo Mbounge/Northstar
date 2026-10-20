@@ -2,6 +2,7 @@ import {
   CANVAS_V2_ARTIFACT_SCHEMA,
   type CanvasV2ArtifactDocument,
   type CanvasV2ArtifactRevision,
+  type CanvasV2IslandExecutionContract,
   type CanvasV2EvidenceAsset,
   type CanvasV2EvidencePacket,
 } from "@/lib/canvas-v2/types";
@@ -15,6 +16,11 @@ import {
   synchronizeCanvasV2DiscoveryState,
   type CanvasV2DiscoveryState,
 } from "@/lib/canvas-v2/discovery-state";
+
+import type { CanvasV2NativeSceneDocument } from './native-scene';
+import { persistCanvasV2NativePlacement } from './native-placement-persistence';
+import { compileCanvasV2SceneTransaction } from './scene-transaction';
+import { assertCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings, validateCanvasV2EvidenceContinuity } from './artifact-safety';
 
 function cloneDocument(document: CanvasV2ArtifactDocument): CanvasV2ArtifactDocument {
   return {
@@ -159,6 +165,11 @@ export function createCanvasV2CandidateRevision(input: {
 export function commitCanvasV2Candidate(input: {
   candidate: CanvasV2ArtifactRevision;
   expectedParentId: string;
+  /** Exact native geometry already accepted by rendered validation. */
+  acceptedNativeScene?: CanvasV2NativeSceneDocument;
+  /** Required with acceptedNativeScene for source protection revalidation. */
+  previous?: CanvasV2ArtifactRevision;
+  execution?: CanvasV2IslandExecutionContract;
 }): CanvasV2ArtifactRevision {
   if (input.candidate.state !== "candidate") {
     throw new Error("Only a Canvas V2 candidate revision can be committed.");
@@ -167,10 +178,29 @@ export function commitCanvasV2Candidate(input: {
     throw new Error("Canvas V2 refused to commit a candidate from a stale parent revision.");
   }
 
+  let candidate = input.candidate;
+  if (input.acceptedNativeScene) {
+    if (input.acceptedNativeScene.revisionId !== candidate.id) throw new Error('The accepted native placement belongs to another candidate.');
+    if (!input.previous || input.previous.id !== input.expectedParentId || input.previous.state !== 'committed') throw new Error('The accepted placement requires its current committed parent.');
+    const transaction = candidate.sceneTransaction;
+    if (!transaction || transaction.baseRevisionId !== input.expectedParentId) throw new Error('The accepted placement requires its validated scene transaction.');
+    const document = persistCanvasV2NativePlacement({document:candidate.document,previousDocument:input.previous.document,scene:input.acceptedNativeScene,transaction,execution:input.execution});
+    if (document !== candidate.document) {
+      const safeDocument = assertCanvasV2ArtifactDocument(document);
+      // Only compiler-owned root geometry changed. Recheck protection against
+      // the original parent, and bindings/continuity against the approved
+      // candidate so an already-authorized removal is not reinterpreted here.
+      const failures = [...validateCanvasV2EvidenceBindings(safeDocument,candidate.evidence),...validateCanvasV2EvidenceContinuity(candidate.document,safeDocument,candidate.evidence)];
+      if (failures.length) throw new Error([...new Set(failures)].join(' '));
+      const sceneTransaction = compileCanvasV2SceneTransaction({origin:transaction.origin,baseRevisionId:input.expectedParentId,previous:input.previous.document,next:safeDocument,focusIslandId:transaction.targetIslandId,execution:input.execution,
+        workingContext:transaction.targeting?{schema:'canvas-v2.working-context.v1',...transaction.targeting,viewportScale:1,visibleNodeIds:[],nearbyNodeIds:[],objects:[],relationships:[]}:undefined});
+      candidate = {...candidate,document:safeDocument,sceneTransaction:{...sceneTransaction,...(transaction.geometryOnly?{geometryOnly:true}:{})}};
+    }
+  }
   return {
-    ...input.candidate,
+    ...candidate,
     state: "committed",
-    document: cloneDocument(input.candidate.document),
+    document: cloneDocument(candidate.document),
     evidence: cloneEvidence(input.candidate.evidence),
     ...(input.candidate.evidencePackets ? { evidencePackets: cloneEvidencePackets(input.candidate.evidencePackets) } : {}),
     ...(input.candidate.discoveryGraph ? { discoveryGraph: cloneCanvasV2DiscoveryGraph(input.candidate.discoveryGraph) } : {}),

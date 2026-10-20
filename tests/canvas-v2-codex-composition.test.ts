@@ -127,9 +127,13 @@ test('attached islands inherit narrative identity while a new independent compos
   const first = planCodexComposition({...args,relation:'none'},'r1',observation,[],1);
   const doc = normalizeCodexCompositionSurface(first,materialize(first.execution.target.islandId));
   assert.match(doc.html, new RegExp(`data-canvas-v2-narrative-id="${first.execution.target.islandId}"`));
-  const next = planCodexComposition({...args,anchorNodeId:'heading'},'r1',observation,[],2);
+  const next = planCodexComposition({...args,anchorNodeId:first.execution.target.islandId},'r1',observation,[],2);
   const combined = {...doc,html:doc.html.replace('</main>',materialize(next.execution.target.islandId).html.replace(/<main[^>]*>|<\/main>/g,'')+'</main>')};
-  const normalized = normalizeCodexCompositionSurface(next,combined);
+  const { applyCanvasV2NativeSceneMutation } = await import('../lib/canvas-v2/native-scene');
+  const empty: import('../lib/canvas-v2/native-scene').CanvasV2NativeSceneDocument = {schema:'canvas-v2.native-scene.v1',revisionId:'r1',width:12000,height:8000,nodes:[],rootIds:[],css:''};
+  const reference = applyCanvasV2NativeSceneMutation(empty,{kind:'batch',label:'Current standalone island',mutations:[{kind:'create',primitive:'shape',nodeId:'root',x:0,y:0,width:12000,height:8000},{kind:'create',primitive:'shape',nodeId:first.execution.target.islandId,x:100,y:100,width:600,height:200}]});
+  reference.nodes[0].kind='root';reference.nodes[0].childIds=[reference.nodes[1].id];reference.nodes[0].content=[{kind:'node',id:reference.nodes[1].id}];reference.nodes[1].parentId='root';reference.rootIds=['root'];
+  const normalized = normalizeCodexCompositionSurface(next,combined,reference);
   assert.equal(normalized.html.split(`data-canvas-v2-narrative-id="${first.execution.target.islandId}"`).length,3);
 });
 

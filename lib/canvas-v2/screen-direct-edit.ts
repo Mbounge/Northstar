@@ -1,14 +1,46 @@
+import type {ScreenDesignOperation} from './screen-design-edit';
 import { encodeCanvasV2Screen, type CanvasV2InteractiveScreen } from './interactive-screen';
 import { canvasV2FeedbackFingerprint, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from './screen-feedback';
-import { analyzeScreenTextMutations } from './screen-direct-text-analysis';
+import { screenInlineTextContentsEditable, screenInlineTextMarkup } from './screen-inline-text';
+import { screenVectorElement, patchScreenVectorAttributes } from './screen-vector-edit';
+import { analyzeScreenTextMutations, analyzeScreenAppearanceMutations } from './screen-direct-text-analysis';
 
 export const SCREEN_DIRECT_EDIT_EVENT = 'northstar-screen-direct-edit';
 export const SCREEN_DIRECT_PROMPT_EVENT = 'northstar-screen-direct-prompt';
+export const SCREEN_DIRECT_SAVE_FAILURE_EVENT = 'northstar-screen-direct-save-failure';
+const SCREEN_DIRECT_FLUSH_EVENT = 'northstar-screen-direct-flush';
+
+/** Chat must read committed work, including the last keystroke before Send.
+ * The event carries no authored content or mutation authority. */
+export function registerScreenDirectFlush(flush: () => Promise<void>, events: EventTarget = window, ownerId?: string) {
+  const receive = (event: Event) => {
+    if(ownerId!==undefined&&(event as CustomEvent<{skipOwnerId?:string}>).detail.skipOwnerId===ownerId)return;
+    (event as CustomEvent<{waitUntil: (pending: Promise<void>) => void}>).detail.waitUntil(Promise.resolve().then(flush));
+  };
+  events.addEventListener(SCREEN_DIRECT_FLUSH_EVENT, receive);
+  return () => events.removeEventListener(SCREEN_DIRECT_FLUSH_EVENT, receive);
+}
+
+export async function flushScreenDirectEdits(events: EventTarget = window, skipOwnerId?:string): Promise<void> {
+  const pending: Promise<void>[] = [];
+  events.dispatchEvent(new CustomEvent(SCREEN_DIRECT_FLUSH_EVENT, {detail: {skipOwnerId,waitUntil: (task: Promise<void>) => pending.push(task)}}));
+  if (!pending.length) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const results = await Promise.race([
+      Promise.allSettled(pending),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Your changes are still saving. Try sending again.')), 8000); }),
+    ]);
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  } finally { clearTimeout(timer); }
+}
 export interface ScreenDirectOptions { text?: CanvasV2ScreenFeedbackTarget; section?: CanvasV2ScreenFeedbackTarget; appearance?: CanvasV2ScreenFeedbackTarget; x: number; y: number; sectionNeedsAgent?: boolean; textNeedsAgent?: boolean; appearanceNeedsAgent?: boolean; encoded?: string; moves?: {up?: boolean; down?: boolean}; moveNeedsAgent?: boolean; arrangementNeedsAgent?: boolean }
-export interface ScreenDirectResult { ok: boolean; needsAgent?: boolean; error?: string }
+export interface ScreenDirectResult { ok: boolean; needsAgent?: boolean; error?: string; encoded?: string; selectors?:string[] }
 export interface ScreenDirectRequest {
   nodeId: string; encoded: string; target: CanvasV2ScreenFeedbackTarget;
-  action: 'text' | 'appearance' | 'remove' | 'move-up' | 'move-down'; text?: string; styles?: Record<string,string>; resolve: (result: ScreenDirectResult) => void;
+  operation?:ScreenDesignOperation; targets?:CanvasV2ScreenFeedbackTarget[];
+  action: 'design' | 'rich-text' | 'text' | 'appearance' | 'element' | 'remove' | 'move-up' | 'move-down'; text?: string; html?:string; styles?: Record<string,string>; attributes?:Record<string,string>; resolve: (result: ScreenDirectResult) => void;
 }
 export interface ScreenStructurePatch { action: 'remove' | 'insert' | 'move'; selector?: string; parent: string; index: number; html: string; key: string; otherSelector?: string; otherIndex?: number; nativeInsert?: boolean; markup?: string }
 
@@ -49,10 +81,26 @@ function sourceSelector(element: Element, body: Element): string {
 
 /** Embedded in the isolated frame. It describes an existing target; it never
  * authorizes an edit or sends generated markup to the host. */
-export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number): ScreenDirectOptions | undefined {
-  let hit = doc.elementFromPoint(x, y);
-  if(hit && !(hit instanceof HTMLElement))hit=hit.closest('svg')?.parentElement ?? hit.parentElement;
-  if (!(hit instanceof HTMLElement) || hit.closest('[data-northstar-raster-interface],[data-northstar-feedback-overlay]')) return;
+export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, includeControls=false, selectedSelector?:string): ScreenDirectOptions | undefined {
+  let hit = selectedSelector?doc.querySelector(selectedSelector):doc.elementFromPoint(x, y);
+  const vectorTags=new Set(['svg','g','path','rect','circle','ellipse','line','polyline','polygon','text','tspan','use','image']);
+  const vector=(element:Element):element is SVGElement=>element.namespaceURI==='http://www.w3.org/2000/svg'&&vectorTags.has(element.localName)&&!element.closest('defs,clipPath,mask,pattern,marker,symbol,filter,linearGradient,radialGradient');
+  if (!(hit instanceof HTMLElement)&&!(hit&&vector(hit)))return;
+  if (!(hit instanceof HTMLElement||vector(hit)) || hit.closest('[data-northstar-raster-interface],[data-northstar-feedback-overlay]')) return;
+  // Candidate discovery stays self-contained because this function is embedded
+  // in the isolated runtime. The host still validates markup and code ownership.
+  const inlineTags=new Set(['SPAN','B','STRONG','I','EM','U','S','STRIKE','BR','SMALL','SUB','SUP','CODE']);
+  const inlineContent=(element:Element)=>{
+    const children=[...element.querySelectorAll('*')];
+    return children.length<=320&&(element.textContent??'').length<=3000&&children.every(child=>inlineTags.has(child.tagName)&&[...child.attributes].every(attribute=>attribute.name==='style'));
+  };
+  const owner=hit.closest('[data-northstar-inline-text="true"]');
+  if(owner instanceof HTMLElement)hit=owner;
+  else if(!selectedSelector&&hit instanceof HTMLElement){
+    const textOwner=hit.closest('h1,h2,h3,h4,h5,h6,p,blockquote,button,a,label,[contenteditable]');
+    if(textOwner instanceof HTMLElement&&inlineContent(textOwner))hit=textOwner;
+  }
+  if(!(hit instanceof HTMLElement||vector(hit)))return;
   const selector = (element: Element) => {
     if (element.id && /^[A-Za-z_][\w-]*$/.test(element.id) && doc.querySelectorAll('#' + element.id).length === 1) return '#' + element.id;
     const path: string[] = [];
@@ -63,18 +111,25 @@ export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number):
     }
     return 'body > ' + path.join(' > ');
   };
-  const describe = (element: HTMLElement, resolveBackground=true) => {
-    const rect = element.getBoundingClientRect(), style = doc.defaultView!.getComputedStyle(element);
+  const describe = (element: HTMLElement|SVGElement, resolveBackground=true) => {
+    let rect = element.getBoundingClientRect();if(!rect.width&&!rect.height&&element.getAttribute('data-northstar-group')==='true'){const boxes=[...element.children].map(c=>c.getBoundingClientRect()).filter(r=>r.width&&r.height);if(boxes.length){const x=Math.min(...boxes.map(r=>r.x)),y=Math.min(...boxes.map(r=>r.y));rect=new DOMRect(x,y,Math.max(...boxes.map(r=>r.right))-x,Math.max(...boxes.map(r=>r.bottom))-y);}}const style = doc.defaultView!.getComputedStyle(element);
     const styles: Record<string, string> = {};
-    for (const key of ['color', 'background-color', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'font-feature-settings', 'font-kerning', 'text-transform', 'line-height', 'letter-spacing', 'text-align', 'border-radius']) styles[key] = style.getPropertyValue(key);
-    let parent: HTMLElement | null = element;
+    for (const key of ['color', 'background-color', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'font-feature-settings', 'font-kerning', 'text-decoration-line', 'text-transform', 'line-height', 'letter-spacing', 'text-align', 'object-fit', 'object-position', 'translate', 'position', 'border-radius','width','height','min-width','min-height','max-width','max-height','padding-top','padding-right','padding-bottom','padding-left','gap','row-gap','column-gap','display','flex-direction','flex-wrap','justify-content','align-items','align-self','grid-template-columns','grid-template-rows','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','opacity','rotate','scale','visibility','border-top-width','border-right-width','border-bottom-width','border-left-width','white-space','direction']) styles[key] = style.getPropertyValue(key);
+    for(const property of ['width','height','min-width','min-height','max-width','max-height','grid-template-columns','grid-template-rows'])if(element.style.getPropertyValue(property))styles[property]=element.style.getPropertyValue(property);
+    if(element.matches('[data-northstar-inline-text="true"]')){
+      for(const property of ['color','font-family','font-size','font-weight']){const values=new Set<string>();const walker=doc.createTreeWalker(element,4);let node=walker.nextNode();while(node){if(node.textContent?.trim()&&node.parentElement)values.add(doc.defaultView!.getComputedStyle(node.parentElement).getPropertyValue(property));node=walker.nextNode()}styles[property+'-mixed']=values.size>1||values.size===1&&!values.has(styles[property])?'true':'false';}
+    }
+    let parent: Element | null = element;
     while (resolveBackground && parent && ['transparent', 'rgba(0, 0, 0, 0)'].includes(styles['background-color'])) {
       parent = parent.parentElement;
       if (parent) styles['background-color'] = doc.defaultView!.getComputedStyle(parent).backgroundColor;
     }
-    return {nodeId: '', title: '', selector: selector(element), tag: element.tagName.toLowerCase(), label: (element.getAttribute('aria-label') || element.querySelector('h1,h2,h3,h4')?.textContent || element.textContent || 'Section').trim().slice(0,180), text: (element.textContent || '').slice(0,500), rect: {x:rect.x,y:rect.y,width:rect.width,height:rect.height}, styles};
+    const svg=vector(element),matrix=svg&&element.localName!=='svg'&&(element.parentElement as unknown as SVGGraphicsElement)?.getScreenCTM?.();
+    const attributes:Record<string,string>={};if(svg)for(const name of ['x','y','width','height','rx','ry','cx','cy','r','x1','y1','x2','y2']){const value=element.getAttribute(name);if(value!==null)attributes[name]=value;}
+    const range=doc.createRange();range.selectNodeContents(element);const glyph=range.getBoundingClientRect(),textRect=glyph.height>0?{x:glyph.x,y:glyph.y,width:glyph.width,height:glyph.height}:undefined;
+    return {nodeId: '', title: '', selector: selector(element), tag: element.localName,...(textRect?{textRect}:{}),...(svg?{namespace:'svg' as const,attributes,...(matrix?{vectorMatrix:{a:matrix.a,b:matrix.b,c:matrix.c,d:matrix.d}}:{})}:{}), label: (element.getAttribute('data-northstar-layer') || element.getAttribute('aria-label') || element.getAttribute('alt') || element.querySelector(':scope > title')?.textContent || element.id || element.querySelector('h1,h2,h3,h4')?.textContent || element.textContent || element.localName).trim().slice(0,180), text: (element.textContent || '').slice(0,500), rect: {x:rect.x,y:rect.y,width:rect.width,height:rect.height}, styles};
   };
-  const text = !hit.children.length && Boolean(hit.textContent?.trim()) && !hit.closest('button,a,input,textarea,select,option,[role="button"],[contenteditable]') && !['SCRIPT','STYLE'].includes(hit.tagName) ? describe(hit) : undefined;
+  const text = (vector(hit)?['text','tspan'].includes(hit.localName)&&!hit.children.length:inlineContent(hit)) && Boolean(hit.textContent?.trim()) && !hit.closest(includeControls?'input,textarea,select,option':'button,a,input,textarea,select,option,[role="button"],[contenteditable]') && !['SCRIPT','STYLE'].includes(hit.tagName) ? describe(hit) : undefined;
   const section = hit.closest<HTMLElement>('section,article,[data-northstar-component],[data-northstar-source-container]');
   const arranged = (element: Element) => {
     const style=doc.defaultView!.getComputedStyle(element), owner=element.parentElement&&doc.defaultView!.getComputedStyle(element.parentElement);
@@ -90,7 +145,8 @@ export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number):
 function currentElement(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser) {
   if (screen.simulation) throw new Error('Create an editable version of this reference first.');
   const doc = parser.parseFromString(screen.html, 'text/html'), matches = doc.body.querySelectorAll(target.selector), element = matches[0];
-  if (matches.length !== 1 || !(element instanceof HTMLElement) || element === doc.body || element.tagName.toLowerCase() !== target.tag || element.closest('[data-northstar-raster-interface]')) throw new Error('This item changed. Select it again.');
+  if (matches.length !== 1 || !(element instanceof HTMLElement||element&&screenVectorElement(element)) || element === doc.body || element.localName !== target.tag || element.closest('[data-northstar-raster-interface]')) throw new Error('This item changed. Select it again.');
+  if(element.closest('[data-northstar-locked="true"]')||element.querySelector('[data-northstar-locked="true"]'))throw new Error('Unlock this layer before editing.');
   return {doc,element};
 }
 
@@ -113,7 +169,7 @@ export function screenSectionNeedsAgent(screen: CanvasV2InteractiveScreen, targe
   return false;
 }
 
-function screenTextMutationTarget(doc: Document, element: HTMLElement, target: CanvasV2ScreenFeedbackTarget) {
+function screenTextMutationTarget(doc: Document, element: Element, target: CanvasV2ScreenFeedbackTarget,includeGlobalStyles=false) {
   const ancestorSelectors: string[] = [];
   for (let parent = element.parentElement; parent && parent !== doc.body; parent = parent.parentElement) {
     ancestorSelectors.push(sourceSelector(parent, doc.body));
@@ -124,7 +180,7 @@ function screenTextMutationTarget(doc: Document, element: HTMLElement, target: C
     resolveSelectorRelation: (selector: string): 'affected' | 'disjoint' | 'unknown' => {
       try {
         const matches = [...doc.querySelectorAll(selector)];
-        return matches.some(node => node === element || node.contains(element)) ? 'affected' : 'disjoint';
+        return matches.some(node => node === element || node.contains(element)||includeGlobalStyles&&['style','link','head'].includes(node.localName)) ? 'affected' : 'disjoint';
       } catch {
         return 'unknown';
       }
@@ -135,7 +191,7 @@ function screenTextMutationTarget(doc: Document, element: HTMLElement, target: C
 export function screenTextCanEditDirectly(screen:CanvasV2InteractiveScreen,target:CanvasV2ScreenFeedbackTarget,parser:DOMParser):boolean {
   try {
     const {doc,element}=currentElement(screen,target,parser);
-    if(element.children.length||['INPUT','TEXTAREA','SELECT','OPTION','SCRIPT','STYLE'].includes(element.tagName)||(element.textContent||'').length>3000||(element.textContent||'').slice(0,500)!==target.text)return false;
+    if(!(screenVectorElement(element)?['text','tspan'].includes(element.localName)&&!element.children.length:screenInlineTextContentsEditable(element,parser))||['INPUT','TEXTAREA','SELECT','OPTION','SCRIPT','STYLE'].includes(element.tagName)||(element.textContent||'').length>3000||(element.textContent||'').slice(0,500)!==target.text)return false;
     if(/\b(?:textContent|innerText|innerHTML|replaceChildren)\b/.test(screen.javascript)) {
       // A code-rendered label would revert on the next app update. Update its
       // actual data/code through Northstar instead of changing only the pixels.
@@ -149,35 +205,100 @@ export function screenTextCanEditDirectly(screen:CanvasV2InteractiveScreen,targe
 export function editScreenText(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, text: string, parser: DOMParser): string {
   const {element} = currentElement(screen,target,parser);
   if ((element.textContent || '').slice(0,500) !== target.text) throw new Error('This text changed. Select it again.');
+  if(element.children.length){const escaped=parser.parseFromString('<span></span>','text/html').body.firstElementChild!;escaped.textContent=text;return editScreenRichText(screen,target,escaped.innerHTML,parser);}
   return encodeCanvasV2Screen({...screen,html:patchCanvasV2ScreenElement(screen.html,target.selector,{text},parser)});
+}
+
+/** Formatting creates native inline runs in the existing element. */
+export function editScreenRichText(screen:CanvasV2InteractiveScreen,target:CanvasV2ScreenFeedbackTarget,html:string,parser:DOMParser):string {
+  if(!screenTextCanEditDirectly(screen,target,parser))throw new Error('This text needs its app code updated too.');
+  const {doc,element}=currentElement(screen,target,parser);
+  element.innerHTML=screenInlineTextMarkup(html,parser);
+  element.setAttribute('data-northstar-inline-text','true');
+  return encodeCanvasV2Screen({...screen,html:doc.body.innerHTML});
 }
 
 /** Style changes share the real screen source and history. Code-controlled
  * appearance must be changed in its owning code rather than patched temporarily. */
 export function screenAppearanceCanEditDirectly(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser): boolean {
   try {
-    const {element}=currentElement(screen,target,parser);
+    const {doc,element}=currentElement(screen,target,parser);
     return !['SCRIPT','STYLE','IFRAME','CANVAS','VIDEO'].includes(element.tagName)
       // A normal inline change cannot override an important product rule.
       // Ask for a source-aware edit instead of reporting a visual no-op.
-      && !/!important\b/i.test(screen.css)
-      && !/\.style\b|\.className\b|\bclassList\b|\bsetAttribute\s*\(|\.(?:innerHTML|outerHTML)\b|\breplaceChildren\b/.test(screen.javascript);
+      && !screenElementHasImportantStyle(screen.css,element)
+      && analyzeScreenAppearanceMutations(screen.javascript,screenTextMutationTarget(doc,element,target,true)).safe;
   } catch {return false}
+}
+
+/** Only important declarations which can style this selected element block
+ * direct overrides. Unrelated utility rules do not own the entire screen. */
+function screenElementHasImportantStyle(css:string,element:Element):boolean {
+  css=css.replace(/\/\* ns-responsive:[\s\S]*?\*\/\s*@media[^{}]*\{(?:[^{}]*\{[^{}]*\})*\}/g,'');
+  if(!/!important\b/i.test(css))return false;
+  try{
+    const sheet=new CSSStyleSheet();sheet.replaceSync(css);
+    const visit=(rules:CSSRuleList):boolean=>Array.from(rules).some(rule=>{
+      if('selectorText' in rule&&'style' in rule){
+        const entry=rule as CSSStyleRule;
+        if(!Array.from(entry.style).some(property=>entry.style.getPropertyPriority(property)==='important'))return false;
+        const selector=entry.selectorText.replace(/:(?:hover|active|focus(?:-visible|-within)?|visited|disabled|checked)\b/g,'');
+        try{return element.matches(selector)}catch{return true}
+      }
+      return 'cssRules' in rule&&visit((rule as CSSGroupingRule).cssRules);
+    });return visit(sheet.cssRules);
+  }catch{return true}
+}
+
+export function editScreenAttributes(screen:CanvasV2InteractiveScreen,target:CanvasV2ScreenFeedbackTarget,attributes:Record<string,string>,parser:DOMParser):string {
+  if(!screenAppearanceCanEditDirectly(screen,target,parser))throw new Error('This part changes with the app. Ask Northstar to update its source.');
+  const {doc,element}=currentElement(screen,target,parser);
+  if(!screenVectorElement(element))throw new Error('Select a vector artwork part.');
+  patchScreenVectorAttributes(element,attributes);
+  return encodeCanvasV2Screen({...screen,html:doc.body.innerHTML});
+}
+
+export function validateScreenAppearanceStyles(styles:Record<string,string>) {
+  if(!styles || typeof styles!=='object' || Array.isArray(styles) || !Object.keys(styles).length||Object.keys(styles).length>30)throw new Error('Choose an appearance change.');
+  for(const [property,value] of Object.entries(styles)) {
+    if(typeof value!=='string'||value.length>500||/[{};<>]|@import|url\s*\(|expression\s*\(/i.test(value))throw new Error('Choose a plain local style value.');
+    if(!['color','background-color','font-size','font-weight','font-family','font-style','font-variant','font-feature-settings','font-kerning','text-transform','text-decoration-line','letter-spacing','line-height','text-align','border-radius','object-fit','object-position','translate','width','height','min-width','min-height','max-width','max-height','padding-top','padding-right','padding-bottom','padding-left','gap','row-gap','column-gap','display','flex-direction','flex-wrap','justify-content','align-items','align-self','grid-template-columns','grid-template-rows','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','opacity','rotate','scale','visibility'].includes(property) || typeof value!=='string')throw new Error('Choose a supported appearance property.');
+    if(['width','height','min-width','min-height','max-width','max-height','padding-top','padding-right','padding-bottom','padding-left','gap','row-gap','column-gap'].includes(property)&&!['auto','none','min-content','max-content','fit-content','normal'].includes(value)&&(!/^\d+(?:\.\d+)?(?:px|%|rem|em|vw|vh)$/.test(value)||parseFloat(value)>8192))throw new Error('Use Auto, a relative size, or a size within 8192 px.');
+    if(['fill','stroke'].includes(property)&&!/^(?:none|transparent|currentColor|#[0-9a-f]{3,8}|rgba?\([\d\s.,%/]+\)|hsla?\([\d\s.,%/deg]+\)|[a-z]+)$/i.test(value))throw new Error('Choose a plain vector paint colour.');
+    if(property==='opacity'&&(!/^\d*(?:\.\d+)?$/.test(value)||!value||Number(value)<0||Number(value)>1))throw new Error('Opacity must be between 0 and 1.');
+    if(property==='stroke-width'&&(!/^\d+(?:\.\d+)?(?:px)?$/.test(value)||parseFloat(value)>500))throw new Error('Stroke width must be between 0 and 500.');
+    if(property==='rotate'&&(!/^-?\d+(?:\.\d+)?deg$/.test(value)||Math.abs(parseFloat(value))>36000))throw new Error('Choose a rotation in degrees.');
+    if(property==='scale'&&(!/^(?:\d+(?:\.\d+)?|\.\d+)(?: (?:\d+(?:\.\d+)?|\.\d+))?$/.test(value)||value.split(' ').some(part=>Number(part)<=0||Number(part)>100)))throw new Error('Scale must be greater than 0 and at most 100.');
+    if(property==='visibility'&&!['visible','hidden'].includes(value))throw new Error('Choose visible or hidden.');
+    if(property==='grid-template-columns'&&(!/^[\d\s.frpx%(),a-z-]+$/.test(value)||/(?:repeat\(\s*(?:[1-9]\d{2,}|[2-9]\d))/.test(value)))throw new Error('Use a bounded grid column layout.');
+    if(property==='font-size' && (!/^\d+(?:\.\d+)?px$/.test(value) || parseFloat(value)<1 || parseFloat(value)>200))throw new Error('Text size must be between 1 and 200 px.');
+    if(property==='border-radius' && (!/^\d+(?:\.\d+)?px$/.test(value) || parseFloat(value)>500))throw new Error('Corner radius must be between 0 and 500 px.');
+    if(property==='font-weight' && !/^[1-9]00$/.test(value))throw new Error('Choose a text weight from 100 to 900.');
+    if(property==='translate' && (!/^-?\d+(?:\.\d+)?px -?\d+(?:\.\d+)?px$/.test(value)||value.split(' ').some(part=>Math.abs(parseFloat(part))>8192)))throw new Error('Choose a position within 8192 px of the layout.');
+    if(property==='object-position' && (!/^\d+(?:\.\d+)?% \d+(?:\.\d+)?%$/.test(value)||value.split(' ').some(part=>parseFloat(part)>100)))throw new Error('Choose a crop position between 0 and 100 percent.');
+    if(property==='font-family' && (value.length>200||!/^['"\p{L}\p{N} _,.\-]+$/u.test(value)))throw new Error('Choose a local font family.');
+    if(property==='text-transform'&&!['none','uppercase','lowercase','capitalize'].includes(value))throw new Error('Choose a text case.');
+    if(property==='text-decoration-line'&&!['none','underline','line-through'].includes(value))throw new Error('Choose a text decoration.');
+    if(property==='font-kerning'&&!['auto','normal','none'].includes(value))throw new Error('Choose font kerning.');
+    if(property==='font-feature-settings'&&!/^(normal|(?:"[a-zA-Z0-9]{4}"\s+(?:on|off|[0-9]+))(?:,\s*"[a-zA-Z0-9]{4}"\s+(?:on|off|[0-9]+))*)$/.test(value))throw new Error('Use OpenType feature tags.');
+    if(property==='font-style' && !['normal','italic','oblique'].includes(value))throw new Error('Choose a text style.');
+    if(property==='text-align' && !['left','center','right','justify'].includes(value))throw new Error('Choose a text alignment.');
+    if(property==='letter-spacing' && (value!=='normal'&&(!/^-?\d+(?:\.\d+)?px$/.test(value)||parseFloat(value)<-20||parseFloat(value)>100)))throw new Error('Letter spacing must be between -20 and 100 px.');
+    if(property==='line-height'&&value!=='normal'&&!(/^\d+(?:\.\d+)?$/.test(value)&&Number(value)>=0.5&&Number(value)<=4||/^\d+(?:\.\d+)?px$/.test(value)&&parseFloat(value)>=1&&parseFloat(value)<=800))throw new Error('Choose a line height from 0.5 to 4, or 1 to 800 px.');
+    if(property==='object-fit' && !['cover','contain','fill','none','scale-down'].includes(value))throw new Error('Choose a supported image fit.');
+  }
 }
 
 export function editScreenAppearance(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, styles: Record<string,string>, parser: DOMParser): string {
   if(!screenAppearanceCanEditDirectly(screen,target,parser))throw new Error('This appearance needs its app code updated too.');
-  if(!styles || typeof styles!=='object' || Array.isArray(styles) || !Object.keys(styles).length)throw new Error('Choose an appearance change.');
-  for(const [property,value] of Object.entries(styles)) {
-    if(!['color','background-color','font-size','font-weight','border-radius'].includes(property) || typeof value!=='string')throw new Error('Choose a supported appearance property.');
-    if(property==='font-size' && (!/^\d+(?:\.\d+)?px$/.test(value) || parseFloat(value)<1 || parseFloat(value)>200))throw new Error('Text size must be between 1 and 200 px.');
-    if(property==='border-radius' && (!/^\d+(?:\.\d+)?px$/.test(value) || parseFloat(value)>500))throw new Error('Corner radius must be between 0 and 500 px.');
-    if(property==='font-weight' && !/^[1-9]00$/.test(value))throw new Error('Choose a text weight from 100 to 900.');
+  validateScreenAppearanceStyles(styles);
+  for(const [property,value] of Object.entries(styles)){
     const validation=parser.parseFromString('<span></span>','text/html').body.firstElementChild as HTMLElement;
     validation.style.setProperty(property,value);
     if(!value || !validation.style.getPropertyValue(property))throw new Error(`Choose a valid ${property.replaceAll('-',' ')}.`);
   }
-  return encodeCanvasV2Screen({...screen,html:patchCanvasV2ScreenElement(screen.html,target.selector,{styles},parser)});
+  const html=patchCanvasV2ScreenElement(screen.html,target.selector,{styles},parser);
+  return encodeCanvasV2Screen({...screen,html});
 }
 
 export function removeScreenSection(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser): string {
@@ -235,4 +356,20 @@ export function screenStructureLivePatch(before: CanvasV2InteractiveScreen, afte
     return oldChildren.every((node,i)=>node instanceof Element && newChildren[i] instanceof Element ? visit(node,newChildren[i] as Element) : serialized(node)===serialized(newChildren[i]));
   };
   return visit(a,b) ? patch : undefined;
+}
+
+
+/** Snap a manual move in logical product pixels using a constant screen-space tolerance. */
+export function screenElementDragOffset(rect:{x:number;y:number;width:number;height:number},viewport:{width:number;height:number},scale:number,dx:number,dy:number,options:{axisLock?:boolean;free?:boolean}={}) {
+  if(![...Object.values(rect),viewport.width,viewport.height,scale,dx,dy].every(Number.isFinite)||scale<=0||viewport.width<=0||viewport.height<=0)throw new Error('Choose a visible element to move.');
+  let x=dx/scale,y=dy/scale;
+  if(options.axisLock){if(Math.abs(x)>=Math.abs(y))y=0;else x=0;}
+  const snap=(start:number,size:number,extent:number,delta:number)=>{
+    const candidates=[{offset:-start,guide:0},{offset:(extent-size)/2-start,guide:extent/2},{offset:extent-size-start,guide:extent}];
+    const nearest=candidates.sort((a,b)=>Math.abs(a.offset-delta)-Math.abs(b.offset-delta))[0];
+    return Math.abs(nearest.offset-delta)*scale<=6?nearest:undefined;
+  };
+  const sx=!options.free&&!(options.axisLock&&x===0)?snap(rect.x,rect.width,viewport.width,x):undefined;
+  const sy=!options.free&&!(options.axisLock&&y===0)?snap(rect.y,rect.height,viewport.height,y):undefined;
+  return {x:sx?sx.offset:x,y:sy?sy.offset:y,...(sx?{guideX:sx.guide}:{}),...(sy?{guideY:sy.guide}:{})};
 }

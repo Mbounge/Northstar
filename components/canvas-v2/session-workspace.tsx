@@ -5,6 +5,16 @@ import { SnapshotQueue } from '@/lib/canvas-v2/sessions/snapshot';
 import { getSession, leaseSession, loadSnapshot, renameSession, saveSnapshot } from '@/lib/canvas-v2/sessions/store';
 import type { LiveSessionState, SessionCommand, NorthstarSession, NorthstarSnapshot } from '@/lib/canvas-v2/sessions/types';
 import { claimSessionWriter } from '@/lib/canvas-v2/sessions/writer';
+import { CanvasCollaborationClient } from '@/lib/canvas-v2/sessions/collaboration-client';
+import { SupabaseCanvasTransport, canvasCollaborationJournal } from '@/lib/canvas-v2/sessions/collaboration-supabase';
+import { privateCanvasWorkspace } from '@/lib/canvas-v2/sessions/collaboration-local';
+import { PrivateWorkspaceSync, type PrivateWorkspaceStatus } from '@/lib/canvas-v2/sessions/private-workspace-sync';
+import { privateCanvasHistory, type PrivateCanvasHistory } from '@/lib/canvas-v2/sessions/private-workspace';
+import { SupabasePrivateWorkspace } from '@/lib/canvas-v2/sessions/private-workspace-supabase';
+import { CANVAS_V2_DEFAULT_MODEL } from '@/lib/canvas-v2/model-catalog';
+import { centeredCanvasV2WorkspaceViewport } from '@/lib/canvas-v2/workspace-coordinate-space';
+import { createClient } from '@/lib/supabase/client';
+import type { CanvasV2ArtifactRevision } from '@/lib/canvas-v2/types';
 import { LiveSessionChannel } from '@/lib/canvas-v2/sessions/live-channel';
 
 export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:string; temporary:boolean; owner:string; agentEndpoint?:string}) {
@@ -13,6 +23,14 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
   const [error,setError] = useState('');
   const [replica,setReplica] = useState<LiveSessionState>();
   const [generation,setGeneration] = useState(0);
+  const [collaboration,setCollaboration]=useState<CanvasCollaborationClient>();
+  const collaborationRef=useRef<CanvasCollaborationClient|undefined>(undefined);
+  const localView=useRef(privateCanvasWorkspace(owner,id));
+  const privateSave=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+  const personal=useRef<PrivateWorkspaceSync|undefined>(undefined);
+  const privateOpening=useRef<Promise<PrivateCanvasHistory|undefined>|undefined>(undefined);
+  const privateClientId=useRef('');
+  const [privateStatus,setPrivateStatus]=useState<PrivateWorkspaceStatus>();
   const blockedRef = useRef(false);
   const writerClaim = useRef<Promise<string> | null>(null);
   const record = useRef<NorthstarSession | null>(null);
@@ -29,6 +47,12 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     window.parent.postMessage({type:'northstar-session',frameId:id,id:record.current?.id || id,title:titleRef.current,
       temporary:!record.current,busy:busy.current,...extra},window.location.origin);
   },[id]);
+  const openPrivate=useCallback((fallback?:PrivateCanvasHistory|(()=>Promise<PrivateCanvasHistory|undefined>))=>{
+    if(privateOpening.current)return privateOpening.current;
+    const sync=new PrivateWorkspaceSync({cache:localView.current.historyCacheFor(privateClientId.current),remote:new SupabasePrivateWorkspace(id,owner),
+      onStatus:status=>{if(personal.current===sync){setPrivateStatus(status);report({privateSaveStatus:status.phase});}}});
+    personal.current=sync;privateOpening.current=sync.open(fallback);return privateOpening.current;
+  },[id,owner,report]);
   const attach = useCallback((session: NorthstarSession) => {
     record.current = session; setTitle(session.title); titleRef.current = session.title;
     queue.current = new SnapshotQueue(async snapshot => {
@@ -37,8 +61,29 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     }, (status, cause) => { setError(cause?.message || ''); report({saveStatus:status,error:cause?.message}); });
   },[report]);
   useEffect(() => {
-    let disposed = false;
+    let disposed = false, booted = false, discovering = false;
+    const discoverShared = async () => {
+      const client=collaborationRef.current;
+      if(disposed||!booted||!client||client.enabled||discovering)return Boolean(client?.enabled);
+      discovering=true;
+      try{
+        if(!await client.connect())return false;
+        if(disposed){client.close();return true;}
+        const previous=latest.current,revision=client.getRevision()!;
+        if(previous){
+          if(queue.current?.dirty&&(previous.revision.document.html!==revision.document.html||previous.revision.document.css!==revision.document.css||previous.revision.document.javascript!==revision.document.javascript||JSON.stringify(previous.revision.evidence)!==JSON.stringify(revision.evidence)))client.retainLocalRevision(previous.revision,'Local edit before this canvas became shared');
+          void localView.current.writeCamera(previous.viewport).catch(()=>{});
+        }
+        clearTimeout(timer.current);queue.current=null;blockedRef.current=false;
+        channel.current?.close();channel.current=null;setReplica(undefined);
+        const history=await openPrivate(previous?privateCanvasHistory(previous):undefined);
+        if(disposed)return true;
+        const snapshot:NorthstarSnapshot={schema:1,turns:[],draft:'',model:CANVAS_V2_DEFAULT_MODEL,effort:'high',...history,revision,viewport:previous?.viewport??centeredCanvasV2WorkspaceViewport({width:1440,height:900})};
+        latest.current=snapshot;setLoaded({snapshot});setGeneration(value=>value+1);setError('');report({saveStatus:'saved',multiplayer:true});return true;
+      }finally{discovering=false;}
+    };
     if(!temporary)channel.current=new LiveSessionChannel(new BroadcastChannel(`northstar-live:${owner}:${id}`),{
+      multiplayer:()=>{void discoverShared().catch(()=>{});},
       owns:()=>Boolean(record.current) && !blockedRef.current,
       read:()=>latest.current?{snapshot:latest.current,busy:busy.current,title:titleRef.current}:undefined,
       receive:state=>{
@@ -58,6 +103,35 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
         writerClaim.current ||= claimSessionWriter(`northstar-writer:${owner}:${id}`,sessionStorage,navigator.locks);
         writer.current = await writerClaim.current;
         if (disposed) return;
+        const db=createClient(),transport=new SupabaseCanvasTransport(id,db);
+        const invitation=new URLSearchParams(window.location.hash.slice(1)).get('invite');
+        if(invitation){const joined=await transport.redeem(invitation);if(joined!==id)throw new Error('This invitation belongs to another canvas.');window.history.replaceState(null,'',window.location.pathname+window.location.search);}
+        const {data:{user}}=await db.auth.getUser();
+        const name=[user?.user_metadata?.full_name,user?.user_metadata?.name,user?.email?.split('@')[0]].find((value):value is string=>typeof value==='string'&&!!value.trim())?.trim().slice(0,48)||'Teammate';
+        const clientId=await claimSessionWriter(`northstar-collaborator:${owner}:${id}`,sessionStorage,navigator.locks);
+        if(disposed)return;privateClientId.current=clientId;
+        const multiplayer=new CanvasCollaborationClient({clientId,userId:owner,name,transport,...canvasCollaborationJournal(`${owner}:${id}:${clientId}`)});
+        const shared=await multiplayer.connect();
+        if(disposed){multiplayer.close();return;}
+        collaborationRef.current=multiplayer;setCollaboration(multiplayer);
+        if(shared){
+          channel.current?.close();channel.current=null;
+          const session=await getSession(id),local=await localView.current.read().catch(()=>undefined);
+          const viewport=await localView.current.readCamera().catch(()=>undefined)??local?.viewport;
+          const history=await openPrivate(async()=>{
+            if(local)return privateCanvasHistory(local);
+            // Only the original owner may migrate their pre-sharing history.
+            // Teammates never download that legacy private snapshot.
+            if(session.owner_id===owner){const legacy=await loadSnapshot(session);if(legacy)return privateCanvasHistory(legacy);}
+            return undefined;
+          });
+          if(disposed)return;
+          const revision=multiplayer.getRevision()!;
+          const snapshot:NorthstarSnapshot={schema:1,revision,turns:[],draft:'',model:CANVAS_V2_DEFAULT_MODEL,effort:'high',...history,
+            viewport:viewport??centeredCanvasV2WorkspaceViewport({width:1440,height:900}),
+            memory:{...history?.memory,assets:revision.evidence,sourceMedia:history?.memory?.sourceMedia??[],sourcePages:history?.memory?.sourcePages??[],accountPackets:history?.memory?.accountPackets??[],accountFlows:history?.memory?.accountFlows??[],compositionHistory:history?.memory?.compositionHistory??[],compositionSequence:history?.memory?.compositionSequence??0}};
+          record.current=session;latest.current=snapshot;titleRef.current=session.title;setTitle(session.title);setLoaded({snapshot});report({saveStatus:'saved',multiplayer:true});return;
+        }
         const editable = await leaseSession(id,writer.current);
         const session = await getSession(id);
         const snapshot = await loadSnapshot(session);
@@ -66,12 +140,17 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
           latest.current=snapshot || null;
           if(!editable && snapshot){receivedRevisions.current.add(snapshot.revision.id);setReplica({snapshot,busy:snapshot.turns.some(t=>t.status==='running'),title:session.title});}
           attach(session);if(editable || snapshot)setLoaded({snapshot});report({saveStatus:editable?'saved':'viewing',mirrored:!editable});
-          channel.current?.request();
+          channel.current?.request();booted=true;
+          // The owner may have enabled sharing between our initial room read
+          // and loading its legacy snapshot. Recheck before accepting edits.
+          void discoverShared().catch(()=>{});
         }
       } catch (e) {if (!disposed) setError((e as Error).message);}
     };
     void boot();
     const heartbeat = setInterval(() => {
+      void (async()=>{
+      if(collaborationRef.current?.enabled||await discoverShared())return;
       const session = record.current;
       if (session) void leaseSession(session.id,writer.current).then(async ok => {
         if(disposed)return;
@@ -88,15 +167,19 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
           setGeneration(v=>v+1);setError('');channel.current?.request();
         }
       }).catch(() => { if (!disposed) report({saveStatus:'error',error:'Connection lost. Keep this tab open.'}); });
+      })().catch(()=>{if(!disposed)report({saveStatus:'error',error:'Connection lost. Keep this tab open.'});});
     },15000);
-    const checkpoint = setInterval(() => { if (!blockedRef.current) void queue.current?.flush(); },5000);
+    const checkpoint = setInterval(() => { if(collaborationRef.current?.enabled){void personal.current?.flush();return;}if(!blockedRef.current)void queue.current?.flush(); },5000);
     const sync=setInterval(()=>channel.current?.request(),2000);
     // Do not release on pagehide: its delayed request can clear a refreshed
     // document's renewed lease. Refresh reuses the writer; closed leases expire.
-    const unload = (event: BeforeUnloadEvent) => {if (!blockedRef.current && queue.current?.dirty) {event.preventDefault();event.returnValue = '';}};
+    const unload = (event: BeforeUnloadEvent) => {if ((!blockedRef.current && queue.current?.dirty)||personal.current?.dirty) {event.preventDefault();event.returnValue = '';}};
     window.addEventListener('beforeunload',unload);
-    return () => {disposed=true;clearInterval(heartbeat);clearInterval(checkpoint);clearInterval(sync);channel.current?.close();channel.current=null;window.removeEventListener('beforeunload',unload);};
-  },[id,temporary,owner,attach,report]);
+    const reconnect=()=>{void personal.current?.flush();};
+    const hide=()=>{void personal.current?.flush();if(latest.current)void localView.current.writeCamera(latest.current.viewport).catch(()=>{});};
+    window.addEventListener('online',reconnect);window.addEventListener('pagehide',hide);
+    return () => {disposed=true;void personal.current?.close();personal.current=undefined;privateOpening.current=undefined;window.removeEventListener('online',reconnect);window.removeEventListener('pagehide',hide);collaborationRef.current?.close();collaborationRef.current=undefined;clearTimeout(privateSave.current);clearInterval(heartbeat);clearInterval(checkpoint);clearInterval(sync);channel.current?.close();channel.current=null;window.removeEventListener('beforeunload',unload);};
+  },[id,temporary,owner,attach,report,openPrivate]);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.frameId !== id) return;
@@ -117,6 +200,14 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     catch(e){setError((e as Error).message);throw e;}
   },[]);
   const snapshotChanged = useCallback((snapshot:NorthstarSnapshot,running:boolean) => {
+    if(collaborationRef.current?.enabled){
+      latest.current=snapshot;busy.current=running;
+      personal.current?.observe(privateCanvasHistory(snapshot));
+      // A bounded camera checkpoint is separate from personal history. Panning
+      // cannot postpone a chat save or trigger transcript/media re-encoding.
+      if(!privateSave.current)privateSave.current=setTimeout(()=>{privateSave.current=undefined;const current=latest.current;if(current)void localView.current.writeCamera(current.viewport).catch(()=>{})},900);
+      report({busy:running,multiplayer:true,saveStatus:collaborationRef.current.getStatus().pending?'saving':'saved'});return;
+    }
     if (blockedRef.current) {
       if(!latest.current) return;
       // Mirrored revisions are presentation updates, never a new edit.
@@ -141,10 +232,25 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     report();
     if(!broadcastTimer.current)broadcastTimer.current=setTimeout(()=>{broadcastTimer.current=undefined;channel.current?.publish();},100);
   },[report,sendCommand]);
+  const enableCollaboration=useCallback(async(revision:CanvasV2ArtifactRevision)=>{
+    const client=collaborationRef.current;if(!client||temporary)throw new Error('Save this canvas before inviting teammates.');
+    if(blockedRef.current)throw new Error('Open the canvas in its active editing tab before inviting teammates.');
+    await queue.current?.flush();
+    await client.enable(revision);
+    blockedRef.current=false;channel.current?.upgrade();channel.current?.close();channel.current=null;setReplica(undefined);
+    if(latest.current){await openPrivate(privateCanvasHistory(latest.current));personal.current?.observe(privateCanvasHistory(latest.current));void localView.current.writeCamera(latest.current.viewport).catch(()=>{});}
+    setCollaboration(client);report({multiplayer:true,saveStatus:'saved'});
+  },[report,temporary,openPrivate]);
   const openSessionMenu = useCallback(() => report({menu:true}), [report]);
   const registerController = useCallback((execute:(command:SessionCommand)=>Promise<void>) => { controller.current=execute; }, []);
   if(!loaded) return <div role="status" className="flex min-h-screen items-center justify-center bg-[#11111b] text-white/60">{error || 'Opening canvas…'}{error && <button className="ml-3 underline" onClick={()=>report({menu:true})}>Sessions</button>}</div>;
   return <><CanvasV2Workspace key={generation} initialSnapshot={loaded.snapshot} onSnapshot={snapshotChanged} sessionTitle={title} onSessionMenu={openSessionMenu} agentEndpoint={agentEndpoint}
-    liveReplica={replica} sendSessionCommand={sendCommand} registerSessionController={registerController}/>
+    collaboration={collaboration} onEnableCollaboration={enableCollaboration} liveReplica={replica} sendSessionCommand={sendCommand} registerSessionController={registerController}/>
+    {privateStatus?.error&&<div role="status" data-testid="canvas-private-history-status" className="fixed bottom-28 left-1/2 z-[1200] flex max-w-[min(90vw,560px)] -translate-x-1/2 items-center gap-3 rounded-xl border border-[#a994ff]/20 bg-[#211d28] px-4 py-2.5 text-[11px] leading-4 text-[#d4c9df]">
+      <span>{privateStatus.error}</span>
+      {privateStatus.phase==='conflict'?<><button className="shrink-0 text-[#bda6ff]" onClick={()=>{
+        const history=personal.current?.getHistory();if(!history)return;const url=URL.createObjectURL(new Blob([JSON.stringify(history)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='northstar-my-conversation.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      }}>Save my copy</button><button disabled={busy.current} className="shrink-0 text-[#bda6ff] disabled:opacity-40" onClick={()=>{void personal.current?.useSavedHistory().then(history=>{const current=latest.current;if(!current)return;const next={...current,...history};latest.current=next;setLoaded({snapshot:next});setGeneration(value=>value+1);}).catch(cause=>setError(String(cause)))}}>Open saved chat</button></>:<button className="shrink-0 text-[#bda6ff]" onClick={()=>void personal.current?.flush()}>Retry</button>}
+    </div>}
     {error && <div role="alert" className="fixed bottom-36 right-5 z-[100] max-w-sm rounded-xl bg-[#302323] p-3 text-sm text-white">{error}{!replica && <button className="ml-3 underline" onClick={()=>void queue.current?.flush()}>Retry save</button>}</div>}</>;
 }

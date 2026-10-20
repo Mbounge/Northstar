@@ -362,3 +362,52 @@ export function analyzeScreenTextMutations(source: string, target: ScreenTextMut
   const unknown = sites.some(site => site.unknown || site.unbounded) || relations.some(relation => relation === 'unknown');
   return {safe: !affected && !unknown, affected, unknown, sites};
 }
+
+/** Resolve appearance writes to the same selected owner rather than treating
+ * an unrelated button's class or status colour as ownership of the whole app. */
+export function analyzeScreenAppearanceMutations(source:string,target:ScreenTextMutationTarget):ScreenTextMutationAnalysis {
+  const text=analyzeScreenTextMutations(source,target);
+  if(!text.safe)return text;
+  let ast:AstNode;
+  try{ast=parse(source)}catch(error){return {...text,safe:false,affected:true,unknown:true,parseError:String(error)}}
+  const bindings=collectBindings(ast),sites:ScreenTextMutationSite[]=[],aliases=new Map<string,unknown>();
+  walk(ast,node=>{
+    if(node.type!=='VariableDeclarator'||!isNode(node.init))return;
+    if(node.init.type==='MemberExpression'&&['style','classList'].includes(propertyName(node.init)??'')){
+      const name=identifierName(node.id);if(name)aliases.set(name,bindings.invalid.has(name)||bindings.ambiguous.has(name)?undefined:node.init.object);
+    }else if(isNode(node.id)&&node.id.type==='ObjectPattern'){
+      for(const property of Array.isArray(node.id.properties)?node.id.properties:[]){
+        if(!isNode(property)||property.type!=='Property')continue;
+        const key=identifierName(property.key)??(isNode(property.key)&&property.key.type==='Literal'?String(property.key.value):undefined);
+        const name=identifierName(property.value);
+        if(name&&['style','classList'].includes(key??''))aliases.set(name,bindings.invalid.has(name)||bindings.ambiguous.has(name)?undefined:node.init);
+      }
+    }
+  });
+  const add=(receiver:unknown,reason:string)=>{
+    const resolution=receiverResolution(receiver,bindings),selectors=resolution.selectors;
+    sites.push({kind:'appearance',...(selectors[0]?{selector:selectors[0],selectors}:{}),unknown:!!resolution.unknown||!selectors.length,unbounded:!!resolution.unbounded,reason});
+  };
+  walk(ast,node=>{
+    if(node.type==='AssignmentExpression'&&isNode(node.left)&&node.left.type==='MemberExpression'){
+      const left=node.left,name=propertyName(left),owner=left.object;
+      if(['style','className'].includes(name??''))add(owner,'assignment to '+name);
+      else if(isNode(owner)&&owner.type==='MemberExpression'&&['style','classList'].includes(propertyName(owner)??''))add(owner.object,'assignment to '+propertyName(owner));
+      else if(aliases.has(identifierName(owner)??''))add(aliases.get(identifierName(owner)!), 'aliased appearance assignment');
+    }
+    if(node.type==='CallExpression'&&isNode(node.callee)&&node.callee.type==='MemberExpression'){
+      const method=propertyName(node.callee),owner=node.callee.object;
+      if(['setAttribute','setAttributeNS','removeAttribute','toggleAttribute','animate'].includes(method??''))add(owner,'attribute mutation');
+      else if(isNode(owner)&&owner.type==='MemberExpression'&&['style','classList'].includes(propertyName(owner)??'')&&['add','remove','toggle','replace','setProperty','removeProperty'].includes(method??''))add(owner.object,'appearance method '+method);
+      else if(aliases.has(identifierName(owner)??'')&&['add','remove','toggle','replace','setProperty','removeProperty'].includes(method??''))add(aliases.get(identifierName(owner)!), 'aliased appearance method');
+      else if(['insertRule','deleteRule','replaceSync'].includes(method??''))add(undefined,'stylesheet mutation');
+      // Indirect bulk writes cannot silently be treated as safe.
+      else if(method==='assign'&&identifierName(owner)==='Object'){
+        const args=Array.isArray(node.arguments)?node.arguments:[],destination=args[0];
+        if(isNode(destination)&&destination.type==='MemberExpression'&&propertyName(destination)==='style')add(destination.object,'bulk style assignment');else if(aliases.has(identifierName(destination)??''))add(aliases.get(identifierName(destination)!), 'aliased bulk style assignment');
+      }
+    }
+  });
+  const relations=sites.map(site=>siteRelation(site,target)),unknown=sites.some(site=>site.unknown||site.unbounded)||relations.includes('unknown'),affected=relations.some(relation=>relation!=='disjoint');
+  return {safe:!affected&&!unknown,affected,unknown,sites:[...text.sites,...sites]};
+}

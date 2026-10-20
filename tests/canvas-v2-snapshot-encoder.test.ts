@@ -7,6 +7,7 @@ import { encodeSnapshot } from '../lib/canvas-v2/sessions/snapshot';
 import { assertSnapshotSize, DEFAULT_SNAPSHOT_MAX_BYTES } from '../lib/canvas-v2/sessions/snapshot-size';
 import { snapshotBlobUrls } from '../lib/canvas-v2/sessions/snapshot-blob-urls';
 import { encodeSnapshotText } from '../lib/canvas-v2/sessions/snapshot-codec';
+import * as snapshotTransport from '../lib/canvas-v2/sessions/snapshot-transport';
 import type { NorthstarSnapshot } from '../lib/canvas-v2/sessions/types';
 
 test('snapshot encoding uses the caller storage limit and rejects oversized data with its size', async () => {
@@ -27,6 +28,7 @@ test('worker honors the caller limit and exports the snapshot rather than its tr
     if (id === './snapshot-size') return { assertSnapshotSize };
     if (id === './snapshot-blob-urls') return { snapshotBlobUrls };
     if (id === './snapshot-codec') return { encodeSnapshotText };
+    if (id === './snapshot-transport') return snapshotTransport;
     throw new Error(`Unexpected worker dependency ${id}`);
   } });
   const snapshot = { draft: 'retained source and camera', viewport: { x: 200, y: -500, scale: .3 } };

@@ -2,6 +2,9 @@ import { CreativeAssetScenario } from './creative-asset-scenario';
 import { CreativeScreenScenario } from './creative-screen-scenario';
 import { ScreenScenario } from './screen-scenario';
 import { DirectAssetScenario } from './direct-asset-scenario';
+import { ThreeFamilyScenario } from './three-family-scenario';
+import { SelectedLayerFeedbackScenario } from './selected-layer-feedback-scenario';
+import { DesignerStudioScenario } from '../designer-studio/scenario';
 import { AppsScenario } from './apps-scenario';
 import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -17,6 +20,9 @@ export class FixtureCodex implements CodexTransport {
   private creativeScreenScenario?: CreativeScreenScenario;
   private screenScenario?: ScreenScenario;
   private directAssetScenario?: DirectAssetScenario;
+  private threeFamilyScenario?: ThreeFamilyScenario;
+  private selectedLayerFeedbackScenario?: SelectedLayerFeedbackScenario;
+  private designerStudioScenario?: DesignerStudioScenario;
   private pendingScreenPlan?: JsonObject;
   private pendingScreenTool='canvas_screen';
   private screenDirectory = new Map<string, JsonObject>();
@@ -61,6 +67,10 @@ export class FixtureCodex implements CodexTransport {
       this.screenScenario = /screen parity|screen revision/i.test(message) ? new ScreenScenario(this, /screen revision/i.test(message)) : undefined;
       const adding=message.match(/Add a new section (above|below) the tagged section/)?.[1] as 'above'|'below'|undefined;
       this.directAssetScenario = /screen direct asset/i.test(message)||adding ? new DirectAssetScenario(this, /background/i.test(message), /followup/i.test(message), /dependent/i.test(message), /gradient/i.test(message),adding,/ordered/i.test(message),/styled/i.test(message)) : undefined;
+      const editingFamily=message.match(/editing workspace (app|poster|svg)/i)?.[1]?.toLowerCase() as 'app'|'poster'|'svg'|undefined;
+      this.threeFamilyScenario=editingFamily?new ThreeFamilyScenario(this,editingFamily):undefined;
+      this.selectedLayerFeedbackScenario=/editing workspace feedback/i.test(message)?new SelectedLayerFeedbackScenario(this):undefined;
+      this.designerStudioScenario=message.trim().toLowerCase()==='designer studio fixture'?new DesignerStudioScenario(this):undefined;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
       this.readableChat = /chat readable parity/i.test(message);
       if (this.readableChat) {
@@ -81,6 +91,9 @@ export class FixtureCodex implements CodexTransport {
       if (this.creativeScreenScenario) { this.creativeScreenScenario.start(); return { turn: { id: this.turn } }; }
       if (this.screenScenario) { this.screenScenario.start(); return { turn: { id: this.turn } }; }
       if (this.directAssetScenario) { this.directAssetScenario.start(); return { turn: { id: this.turn } }; }
+      if (this.threeFamilyScenario) { this.threeFamilyScenario.start(); return { turn: { id: this.turn } }; }
+      if (this.selectedLayerFeedbackScenario) { this.selectedLayerFeedbackScenario.start(); return { turn: { id: this.turn } }; }
+      if (this.designerStudioScenario) { this.designerStudioScenario.start(); return { turn: { id: this.turn } }; }
       if (this.appsScenario) { this.appsScenario.start(); return { turn: { id: this.turn } }; }
       if (this.mediaParity) this.tool('read_source', {url: this.sourcePhoto ? 'https://www.abrielle.ca/menus' : this.origin + '/canvas-v2-e2e/codex/media/article', focus: this.sourcePhoto ? 'breakfast restaurant' : 'reference'});
       else if (/canvas|composition parity|oversize parity|overlap parity|selection parity|repair parity/i.test(message)) this.tool('canvas_read', {});
@@ -103,6 +116,9 @@ export class FixtureCodex implements CodexTransport {
     if (this.readableChat) { this.finish('The comparison is ready. Your approved visual direction stays intact. [Reference](https://example.com/evidence).'); return; }
     if (this.creativeScreenScenario) { this.creativeScreenScenario.reply(r); return; }
     if (this.directAssetScenario) { this.directAssetScenario.reply(r); return; }
+    if (this.threeFamilyScenario) { this.threeFamilyScenario.reply(r); return; }
+    if (this.selectedLayerFeedbackScenario) { this.selectedLayerFeedbackScenario.reply(r); return; }
+    if (this.designerStudioScenario) { this.designerStudioScenario.reply(r); return; }
     if (this.creativeAssetScenario) { this.creativeAssetScenario.reply(r); return; }
     if (this.screenScenario) { this.screenScenario.reply(r); return; }
     if (this.appsScenario) { this.appsScenario.reply(r); return; }

@@ -2,6 +2,10 @@
 
 @import "tailwindcss";
 
+/* Generated canvases and media archives are data, not application classes.
+   Scanning a large saved canvas can otherwise block the dev server. */
+@source not "../outputs";
+
 @variant dark (&:where(.dark, .dark *));
 
 @theme {

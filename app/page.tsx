@@ -1,3 +1,4 @@
+import { PendingCanvasInvitation } from '@/components/canvas-v2/canvas-invitation';
 // app/page.tsx
 import Link from "next/link";
 import Image from "next/image";
@@ -58,6 +59,7 @@ export default async function PortfolioPage() {
 
   return (
     <div data-northstar-home-shell className="relative min-h-screen bg-[#EEF0F8] dark:bg-[#09090b] flex flex-col overflow-hidden font-sans">
+      <PendingCanvasInvitation />
       <AuthUrlCleaner />
 
       <style

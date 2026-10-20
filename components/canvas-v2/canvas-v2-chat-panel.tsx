@@ -1,9 +1,10 @@
 "use client";
+import {visualFeedbackCovers as feedbackCovers} from '@/lib/canvas-v2/visual-feedback';
 import type { NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { CanvasV2ScreenIdentities } from "./interactive-screen";
 import { CreativeArtifacts } from "./creative-artifacts";
 import { ModelThinkingPicker } from "./model-thinking-picker";
-import { chronologicalManagedTurns, steeringReceiptLabel } from '@/lib/canvas-v2/managed-agent/chat-timeline';
+import { createManagedTurnTimelineReader, steeringReceiptLabel } from '@/lib/canvas-v2/managed-agent/chat-timeline';
 import { CanvasV2MarkdownMessage } from "./canvas-v2-markdown-message";
 import type { CanvasV2ChatEvidenceReference } from '@/lib/canvas-v2/chat-evidence';
 
@@ -24,7 +25,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { useContext, useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import * as TextDialog from "@radix-ui/react-dialog";
 
@@ -37,6 +38,7 @@ import {
   CANVAS_V2_MAX_CHAT_ATTACHMENTS,
   type CanvasV2ChatImageAttachment,
   type CanvasV2ChatTextAttachment,
+  type CanvasV2ChatAttachment,
 } from "@/lib/canvas-v2/chat-attachments";
 import { canvasV2ElapsedLabel } from "@/lib/canvas-v2/chat-lifecycle";
 import { canvasV2VisibleProgressSteps } from "@/lib/canvas-v2/design-loop";
@@ -49,6 +51,26 @@ import {
   canvasV2ModelLabel,
   parseCanvasV2ModelSelection,
 } from "@/lib/canvas-v2/model-catalog";
+
+function withoutFeedbackSheets(items:readonly CanvasV2ChatAttachment[]){const sheets=new Set(items.flatMap(item=>item.kind==='text'&&item.visualFeedback?[item.visualFeedback.imageId]:[]));return items.filter(item=>!sheets.has(item.id))}
+
+function FeedbackRegionCards({attachment,attachments,onRemove}:{attachment:CanvasV2ChatTextAttachment;attachments:readonly CanvasV2ChatAttachment[];onRemove?:()=>void}){
+ const [open,setOpen]=useState(false);
+ const collection=attachment.visualFeedback!,image=attachments.find(item=>item.id===collection.imageId&&item.kind==='image') as CanvasV2ChatImageAttachment|undefined,rows=Math.ceil(collection.items.length/collection.columns);
+ const detailsId='comments-'+attachment.id;
+ return <div data-testid="canvas-feedback-comments" data-canvas-v2-direct-editing className="w-full min-w-[200px] shrink-0 overflow-hidden rounded-xl border border-[#ded8eb] bg-[#f7f5fb] text-[#51465f] dark:border-white/[.08] dark:bg-white/[.035] dark:text-[#e3d9ef]" onKeyDown={event=>event.stopPropagation()}>
+  <div className="flex items-center gap-1 px-1.5">
+   <button type="button" aria-label={'Review '+collection.items.length+' comments'} aria-expanded={open} aria-controls={detailsId} onClick={()=>setOpen(value=>!value)} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2.5 text-left text-[11px] hover:bg-black/[.025] dark:hover:bg-white/[.025]">
+    <MousePointer2 size={13} className="shrink-0 text-[#9981c6]"/><span className="flex-1 font-medium">{collection.items.length} comment{collection.items.length===1?'':'s'}</span><span className="text-[10px] text-[#9e91ab]">{open?'Close':'Review'}</span><ChevronDown size={12} className={open?'rotate-180':''}/>
+   </button>
+   {onRemove&&<button type="button" aria-label="Remove canvas feedback" onClick={onRemove} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-[#968aa3] hover:bg-black/5 dark:hover:bg-white/5"><X size={12}/></button>}
+  </div>
+  {open&&<div id={detailsId} className="max-h-56 space-y-3 overflow-y-auto border-t border-black/[.04] px-3 py-3 [scrollbar-width:thin] dark:border-white/[.06]">{collection.items.map((note,index)=><div key={note.id} className="flex items-start gap-2.5">
+   {image&&<div role="img" aria-label={'Marked region '+(index+1)} className="h-[39px] w-[48px] shrink-0 overflow-hidden rounded-md bg-[#15121e] bg-no-repeat" style={{backgroundImage:'url('+image.dataUrl+')',backgroundSize:(collection.columns*48)+'px '+(rows*39)+'px',backgroundPosition:(-(index%collection.columns)*48)+'px '+(-Math.floor(index/collection.columns)*39)+'px'}}/>}
+   <div className="min-w-0 flex-1"><span className="mb-1 block text-[9px] font-medium text-[#9e91ab]">Comment {index+1}</span><p className="whitespace-pre-wrap text-[11px] leading-[1.5] [overflow-wrap:anywhere]">{note.comment}</p></div>
+  </div>)}</div>}
+ </div>;
+}
 
 function SourceIcon({ href }: { href: string }) {
   const [failed, setFailed] = useState(false);
@@ -194,7 +216,9 @@ function PendingDots({ reconnecting }: { reconnecting?: boolean }) {
   </div>;
 }
 
-function ChatTurn({
+// Camera, tool and composer changes do not change historical messages. Keep
+// their markdown, attachment DOM and work details out of those input commits.
+const ChatTurn = memo(function ChatTurn({
   artifacts,
   turn,
   receipt,
@@ -223,7 +247,7 @@ function ChatTurn({
     <div className="ml-10 min-w-0 text-[13px] leading-[1.55] text-[#37314f] dark:text-[#e2ddfb]">
       {(turn.screenFeedbackTargets?.length || turn.screenFeedback || turn.objectFeedbackTargets?.length) && <div className="mb-2 flex flex-wrap gap-1.5">{(turn.screenFeedbackTargets ?? (turn.screenFeedback ? [turn.screenFeedback] : [])).map(target => <span key={target.nodeId+target.selector} title={target.title} className="inline-flex max-w-full items-center gap-1 rounded-full bg-[#f0edf5] px-2 py-1 text-[10px] text-[#8d7d9e] dark:bg-white/[.05] dark:text-[#b3a3c4]"><MousePointer2 size={10}/><span className="max-w-[220px] truncate">{target.label}</span></span>)}{turn.objectFeedbackTargets?.map(target => <span key={target.nodeId} className="max-w-[220px] truncate rounded-full bg-[#f0edf5] px-2 py-1 text-[10px] text-[#8d7d9e] dark:bg-white/[.05] dark:text-[#b3a3c4]">{target.label}</span>)}</div>}
       {turn.attachments?.length ? <div className="mb-2 flex min-w-0 max-w-full snap-x snap-mandatory items-start gap-1.5 overflow-x-auto [scrollbar-width:thin]" data-testid="canvas-v2-sent-images" aria-label={`${turn.attachments.length} sent attachments`}>
-        {turn.attachments.map((attachment) => attachment.kind === "image"
+        {withoutFeedbackSheets(turn.attachments).map((attachment) => attachment.kind === "text"&&attachment.visualFeedback?<FeedbackRegionCards key={attachment.id} attachment={attachment} attachments={turn.attachments!}/>:attachment.kind === "image"
           ? <button key={attachment.id} type="button" onClick={() => onOpenImage(attachment)} className="group block h-auto w-auto shrink-0 snap-start overflow-hidden rounded-[12px] focus:outline-none focus:ring-2 focus:ring-[#7561ed]" aria-label={`Expand ${attachment.name}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={attachment.dataUrl} alt={attachment.name} width={attachment.width} height={attachment.height} style={{ display: "block", width: "auto", height: "auto", maxWidth: 220, maxHeight: 128 }} className="block h-auto max-h-32 w-auto max-w-[220px] object-contain transition duration-200 group-hover:scale-[1.01]" />
@@ -269,19 +293,21 @@ function ChatTurn({
       </div>
     </div>}
   </article>;
-}
+});
 
 export function CanvasV2ChatPanel({
   chat,
   engine,
   selection,
   selections,
+  elementSelection,
   flowPlacement, feedbackPicking, onPickFeedback, onFinishFeedback, onTagSelection,
 }: {
   chat: ReturnType<typeof useCanvasV2Chat>;
   engine: ReturnType<typeof useCanvasV2DesignLoop>;
   selection?: CanvasV2InspectableElement;
   selections?: readonly CanvasV2InspectableElement[];
+  elementSelection?: readonly import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[];
   flowPlacement?: { message: string; error?: boolean };
   feedbackPicking?: boolean; onPickFeedback?: () => void; onFinishFeedback?: () => void; onTagSelection?: () => void;
 }) {
@@ -297,10 +323,14 @@ export function CanvasV2ChatPanel({
   const [expandedImage, setExpandedImage] = useState<{ name: string; dataUrl: string }>();
   const [expandedText, setExpandedText] = useState<CanvasV2ChatTextAttachment>();
   const textPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const openText = (attachment: CanvasV2ChatTextAttachment, trigger: HTMLButtonElement) => {
+  const openText = useCallback((attachment: CanvasV2ChatTextAttachment, trigger: HTMLButtonElement) => {
     textPreviewTriggerRef.current = trigger;
     setExpandedText(attachment);
-  };
+  }, []);
+  const continueTurnRef = useRef(chat.continueTurn);
+  continueTurnRef.current = chat.continueTurn;
+  const continueTurn = useCallback((turnId: string) => continueTurnRef.current(turnId), []);
+  const openEvidence = useCallback((screen: Extract<CanvasV2ChatEvidenceReference, { kind: 'asset' }>) => setExpandedImage({ name: screen.label, dataUrl: screen.url }), []);
   const selectedEvidence = canvasV2EvidenceSourceForSelection(engine.committed, selection);
 
 
@@ -316,7 +346,12 @@ export function CanvasV2ChatPanel({
     setShowLatest(false);
     area?.scrollTo({ top: area.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
-  const displayedTurns = chronologicalManagedTurns(chat.turns);
+  const [readTimeline] = useState(() => createManagedTurnTimelineReader());
+  const displayedTurns = useMemo(() => readTimeline(chat.turns), [chat.turns, readTimeline]);
+  const nextArtifacts = useMemo(() => chat.turns.flatMap(turn => turn.artifacts ?? []).reverse(), [chat.turns]);
+  const artifactsRef = useRef(nextArtifacts);
+  if (artifactsRef.current.length !== nextArtifacts.length || nextArtifacts.some((artifact, index) => artifact !== artifactsRef.current[index])) artifactsRef.current = nextArtifacts;
+  const turnArtifacts = artifactsRef.current;
   useEffect(() => {
     const area = scrollAreaRef.current;
     if (!area) return;
@@ -417,6 +452,8 @@ export function CanvasV2ChatPanel({
     }
   };
 
+  const visibleScreenFeedback=chat.screenFeedbackTargets.filter(target=>!feedbackCovers(chat.attachments,target.nodeId,target.selector));
+  const visibleObjectFeedback=chat.objectFeedbackTargets.filter(target=>!feedbackCovers(chat.attachments,target.nodeId));
   return <>
     <div className="relative min-h-0 flex-1">
     <div
@@ -436,7 +473,7 @@ export function CanvasV2ChatPanel({
         <Sparkles aria-hidden="true" className="mb-5 h-7 w-7 text-[#aaa5b6] dark:text-[#66616f]" />
         <h2 className="text-xl font-medium tracking-tight text-[#302d38] dark:text-[#ece9f1]">What would you like to explore?</h2>
       </div>}
-      <div className="space-y-7">{displayedTurns.map((turn) => <ChatTurn key={turn.id} artifacts={chat.turns.flatMap(t => t.artifacts ?? []).reverse()} turn={turn} receipt={steeringReceiptLabel(displayedTurns, turn)} busy={chat.busy} onContinue={chat.continueTurn} onOpenImage={setExpandedImage} onOpenText={openText} onOpenEvidence={screen => setExpandedImage({ name: screen.label, dataUrl: screen.url })} />)}</div>
+      <div className="space-y-7">{displayedTurns.map((turn) => <ChatTurn key={turn.id} artifacts={turnArtifacts} turn={turn} receipt={steeringReceiptLabel(displayedTurns, turn)} busy={chat.busy} onContinue={continueTurn} onOpenImage={setExpandedImage} onOpenText={openText} onOpenEvidence={openEvidence} />)}</div>
       {flowPlacement && <p role='status' className="mt-4 px-1 text-xs text-[#6254bd] dark:text-[#c5baff]">{flowPlacement.error ? 'Try adding this flow again.' : canvasV2ReadableAgentText(flowPlacement.message)}</p>}
       {engine.applyingManualEdit && <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-[#6754df]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Updating the canvas…</div>}
 
@@ -447,17 +484,17 @@ export function CanvasV2ChatPanel({
     </div>
 
     <div className="relative m-3 mt-1 rounded-[20px] border border-[#dedde7] bg-white p-2.5 shadow-[0_12px_34px_rgba(42,39,70,.10)] transition focus-within:border-[#b8aff5] focus-within:shadow-[0_16px_42px_rgba(83,67,177,.15)] dark:border-white/[.1] dark:bg-[#211f28] dark:shadow-[0_16px_42px_rgba(0,0,0,.28)] dark:focus-within:border-[#7668bd]">
-      {(chat.screenFeedbackTargets.length > 0 || chat.objectFeedbackTargets.length > 0 || feedbackPicking) && <div className="mb-3 px-1" data-testid="feedback-collection">
-        <div className="mb-2 flex items-center justify-between"><span className="text-[10px] font-medium text-[#8c8496] dark:text-[#a89cb5]">Feedback · {chat.screenFeedbackTargets.length + chat.objectFeedbackTargets.length} item{chat.screenFeedbackTargets.length + chat.objectFeedbackTargets.length === 1 ? '' : 's'}</span><button onClick={feedbackPicking ? onFinishFeedback : onPickFeedback} className="rounded-full px-2 py-1 text-[10px] font-semibold text-[#8671be] hover:bg-[#f3eff8] dark:text-[#c1addf] dark:hover:bg-white/5">{feedbackPicking ? 'Done selecting' : '+ Add items'}</button></div>
+      {(visibleScreenFeedback.length > 0 || visibleObjectFeedback.length > 0 || feedbackPicking) && <div className="mb-3 px-1" data-testid="feedback-collection">
+        <div className="mb-2 flex items-center justify-between"><span className="text-[10px] font-medium text-[#8c8496] dark:text-[#a89cb5]">Feedback · {visibleScreenFeedback.length + visibleObjectFeedback.length} item{visibleScreenFeedback.length + visibleObjectFeedback.length === 1 ? '' : 's'}</span><button onClick={feedbackPicking ? onFinishFeedback : onPickFeedback} className="rounded-full px-2 py-1 text-[10px] font-semibold text-[#8671be] hover:bg-[#f3eff8] dark:text-[#c1addf] dark:hover:bg-white/5">{feedbackPicking ? 'Done selecting' : '+ Add items'}</button></div>
         <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
-          {chat.screenFeedbackTargets.map((target,index) => <span key={target.nodeId+target.selector} title={`${target.title} · ${target.label}`} data-testid="screen-feedback-target" className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#e0d8eb] bg-[#f5f1f8] py-1 pl-2 pr-1 text-[11px] text-[#746182] dark:border-[#51425e] dark:bg-[#332a3d] dark:text-[#d5c0e8]"><span className="text-[9px] opacity-50">{index+1}</span><span className="max-w-[240px] truncate">{target.label}</span><button aria-label={`Remove feedback on ${target.label}`} onClick={() => chat.removeFeedbackTarget(target.nodeId,target.selector)} className="rounded-full p-1 opacity-60 hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"><X size={11}/></button></span>)}
-          {chat.objectFeedbackTargets.map((target,index) => <span key={target.nodeId} title={target.label} data-testid="object-feedback-target" className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#e0d8eb] bg-[#f5f1f8] py-1 pl-2 pr-1 text-[11px] text-[#746182] dark:border-[#51425e] dark:bg-[#332a3d] dark:text-[#d5c0e8]"><span className="text-[9px] opacity-50">{chat.screenFeedbackTargets.length+index+1}</span><span className="max-w-[240px] truncate">{target.label}</span><button aria-label={`Remove feedback on ${target.label}`} onClick={() => chat.removeFeedbackTarget(target.nodeId)} className="rounded-full p-1 opacity-60 hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"><X size={11}/></button></span>)}
+          {visibleScreenFeedback.map((target,index) => <span key={target.nodeId+target.selector} title={`${target.title} · ${target.label}`} data-testid="screen-feedback-target" className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#e0d8eb] bg-[#f5f1f8] py-1 pl-2 pr-1 text-[11px] text-[#746182] dark:border-[#51425e] dark:bg-[#332a3d] dark:text-[#d5c0e8]"><span className="text-[9px] opacity-50">{index+1}</span><span className="max-w-[240px] truncate">{target.label}</span><button aria-label={`Remove feedback on ${target.label}`} onClick={() => chat.removeFeedbackTarget(target.nodeId,target.selector)} className="rounded-full p-1 opacity-60 hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"><X size={11}/></button></span>)}
+          {visibleObjectFeedback.map((target,index) => <span key={target.nodeId} title={target.label} data-testid="object-feedback-target" className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#e0d8eb] bg-[#f5f1f8] py-1 pl-2 pr-1 text-[11px] text-[#746182] dark:border-[#51425e] dark:bg-[#332a3d] dark:text-[#d5c0e8]"><span className="text-[9px] opacity-50">{visibleScreenFeedback.length+index+1}</span><span className="max-w-[240px] truncate">{target.label}</span><button aria-label={`Remove feedback on ${target.label}`} onClick={() => chat.removeFeedbackTarget(target.nodeId)} className="rounded-full p-1 opacity-60 hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"><X size={11}/></button></span>)}
         </div>
       </div>}
-      {selection && !chat.screenFeedbackTargets.length && !chat.objectFeedbackTargets.length && <div className="mb-2 flex items-center gap-2 px-1 text-[10px] text-[#aaa2b4]"><MousePointer2 size={12}/><span>{(selections?.length ?? 0)>1 ? `${selections!.length} items selected` : 'Selected on canvas'}</span><button onClick={onTagSelection} className="ml-auto font-medium text-[#8d77bf] dark:text-[#bea8df]">Add to feedback</button></div>}
+      {selection && !chat.screenFeedbackTargets.length && !chat.objectFeedbackTargets.length && <div className="mb-2 flex items-center gap-2 px-1 text-[10px] text-[#aaa2b4]"><MousePointer2 size={12}/><span>{elementSelection?.length?elementSelection.length===1?elementSelection[0].label:elementSelection.length+' layers selected':(selections?.length??0)>1?`${selections!.length} items selected`:'Selected on canvas'}</span><button onClick={onTagSelection} className="ml-auto font-medium text-[#8d77bf] dark:text-[#bea8df]">Add to feedback</button></div>}
       {selectedEvidence?.source.sourceUrl && <a href={selectedEvidence.source.sourceUrl} target="_blank" rel="noreferrer" className="mb-2 inline-flex items-center gap-1.5 px-1 text-[10px] text-[#9a8ba9]"><Globe2 size={11}/>Original source</a>}
       {chat.attachments.length > 0 && <div className="mb-2.5 flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 [scrollbar-width:thin]" data-testid="canvas-v2-pending-images" aria-label={`${chat.attachments.length} of ${CANVAS_V2_MAX_CHAT_ATTACHMENTS} attachments`}>
-        {chat.attachments.map((attachment) => <div key={attachment.id} className={`${attachment.kind === "image" ? "w-auto border-transparent bg-transparent shadow-none dark:border-transparent dark:bg-transparent" : "w-[156px] border-[#ded9f7] bg-[#f4f2fb] shadow-sm dark:border-white/[.12] dark:bg-black/20"} group relative h-[76px] shrink-0 snap-start overflow-hidden rounded-[14px] border`}>
+        {withoutFeedbackSheets(chat.attachments).map((attachment) => attachment.kind==='text'&&attachment.visualFeedback?<FeedbackRegionCards key={attachment.id} attachment={attachment} attachments={chat.attachments} onRemove={()=>{const other=chat.attachments.filter(item=>item.id!==attachment.id);for(const note of attachment.visualFeedback!.items)for(const anchor of note.anchors)if(!feedbackCovers(other,anchor.nodeId,anchor.selector))chat.removeFeedbackTarget(anchor.nodeId,anchor.selector);chat.removeAttachment(attachment.id)}}/>:<div key={attachment.id} className={`${attachment.kind === "image" ? "w-auto border-transparent bg-transparent shadow-none dark:border-transparent dark:bg-transparent" : "w-[156px] border-[#ded9f7] bg-[#f4f2fb] shadow-sm dark:border-white/[.12] dark:bg-black/20"} group relative h-[76px] shrink-0 snap-start overflow-hidden rounded-[14px] border`}>
           {attachment.kind === "image" ? <>
             <button type="button" onClick={() => setExpandedImage(attachment)} aria-label={`Expand ${attachment.name}`} className="block h-full overflow-hidden rounded-[12px] focus:outline-none focus:ring-2 focus:ring-[#7561ed]">
               {/* eslint-disable-next-line @next/next/no-img-element */}

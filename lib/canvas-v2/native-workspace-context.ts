@@ -34,7 +34,7 @@ export function readCanvasV2NativeWorkspaceContext(scene: CanvasV2NativeSceneDoc
     const x = Math.min(...corners.map(p=>p.x)), y = Math.min(...corners.map(p=>p.y));
     const label = node.attributes['aria-label'] || node.directText || node.content.filter(part=>part.kind==='text').map(part=>part.value).join(' ');
     const relationship = 'data-canvas-v2-relationship-source' in node.attributes || 'data-canvas-v2-relationship-target' in node.attributes || node.attributes['data-canvas-v2-primitive'] === 'connector';
-    return [{nodeId:node.sourceNodeId,parentNodeId:parentSource(node.parentId),kind:node.kind,label:label.slice(0,240),hidden:position.hidden,locked:node.locked,canonicalEvidence:node.canonicalEvidence,selectable:node.selectable,relationship,bounds:{x,y,width:Math.max(...corners.map(p=>p.x))-x,height:Math.max(...corners.map(p=>p.y))-y}}];
+    return [{nodeId:node.sourceNodeId,parentNodeId:parentSource(node.parentId),kind:node.kind,label:label.slice(0,240),hidden:position.hidden,locked:node.locked,canonicalEvidence:node.canonicalEvidence,selectable:node.selectable,userEdited:node.userEdited,lastAuthor:node.lastAuthor,editVersion:node.editVersion,relationship,bounds:{x,y,width:Math.max(...corners.map(p=>p.x))-x,height:Math.max(...corners.map(p=>p.y))-y}}];
   });
   function parentSource(id?: string) { return id ? byId.get(id)?.sourceNodeId : undefined; }
   return {revisionId,coordinateSpace:'native world coordinates',inspection:'Source and geometry only. Inspect relevant rendered components before drawing visual or motion conclusions.',objects,placementBounds:objects.filter(node=>node.selectable&&!node.hidden&&node.kind!=='root'&&!node.relationship).map(node=>node.bounds)};

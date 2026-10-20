@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
 
 import { normalizeCanvasV2NodeId, canvasV2ConnectorTargetAtPoint, type CanvasV2InspectableElement } from "../lib/canvas-v2/element-inspection";
 
@@ -37,7 +38,15 @@ test("selection geometry feeds the single manual candidate pipeline", () => {
   assert.match(workspace, /canvasSceneRef\.current\?\.applyTransientGeometry/);
   assert.doesNotMatch(workspace, /transientGeometry=\{transientGeometry\}/);
   assert.match(preview, /forwardRef<CanvasV2CanvasSceneHandle/);
-  assert.match(workspace, /layersOpen && <aside aria-label="Layers panel"/);
+  const tree = ts.createSourceFile("workspace.tsx", workspace, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const layers: ts.JsxSelfClosingElement[] = [];
+  const visit = (node: ts.Node) => { if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(tree) === "CanvasV2ObjectLayers") layers.push(node); ts.forEachChild(node, visit); };
+  visit(tree);
+  assert.equal(layers.length, 1, "Design and Preview must share the same object-layers component");
+  const nodes = layers[0].attributes.properties.find(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(tree) === "nodes") as ts.JsxAttribute;
+  assert.equal((nodes.initializer as ts.JsxExpression).expression?.getText(tree), "sourceNodes");
+  assert.match(workspace, /export function CanvasV2ObjectLayers[\s\S]*return <aside[^>]*aria-label=\{docked\?"Object layers":"Layers panel"\}/);
+  assert.match(workspace, /onSelect=\{[\s\S]*setLayersOpen\(false\)/);
   assert.doesNotMatch(workspace, /max-h-\[calc\(100vh-190px\)\]/);
   assert.doesNotMatch(workspace, /Manual changes become candidate source revisions/);
   assert.match(workspace, /RESIZE_HANDLES/);

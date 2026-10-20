@@ -1,10 +1,10 @@
 "use client";
 /* Native GIF bytes must bypass image optimization to preserve animation and local blob sources. */
 /* eslint-disable @next/next/no-img-element */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GripVertical, Pause, Play } from "lucide-react";
 import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, canvasV2VideoEmbedUrl, type CanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
-import { releaseCanvasV2VideoSource, rememberCanvasV2MediaTime, restoreCanvasV2MediaTime, type CanvasV2RetainedMediaPlayback } from "@/lib/canvas-v2/media-playback-store";
+import { canvasV2WarmMediaRetention, releaseCanvasV2VideoSource, rememberCanvasV2MediaTime, restoreCanvasV2MediaTime, type CanvasV2RetainedMediaPlayback } from "@/lib/canvas-v2/media-playback-store";
 
 /** Media is a native canvas object. Playback never writes a revision or calls a model. */
 export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }: { media: CanvasV2PlayableMedia; nodeId: string; retainedPlayback?: CanvasV2RetainedMediaPlayback }) {
@@ -20,7 +20,8 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
   const [interacting, setInteracting] = useState(false);
   const [error, setError] = useState(false);
   const [nearby, setNearby] = useState(false);
-  const [loadedVideoSource, setLoadedVideoSource] = useState<string>();
+  const [pageVisible, setPageVisible] = useState(() => typeof document === 'undefined' || !document.hidden);
+  const [loadedMediaSource, setLoadedMediaSource] = useState<string>();
   const [reducedMotion, setReducedMotion] = useState(() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [pausedByUser, setPausedByUser] = useState(playback.userPaused ?? false);
   const userPaused = useRef(playback.userPaused ?? false);
@@ -30,15 +31,39 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
   const autoStarted = useRef(false);
   const reportedPlayback = useRef<{ nodeId: string; playing: boolean } | undefined>(undefined);
   const embedUrl = media.type === "video" ? canvasV2VideoEmbedUrl(media.src) : undefined;
-  const videoSource = nearby || loadedVideoSource === media.src ? media.src : undefined;
+  const warmOwner = useMemo(() => ({ source: media.src, type: media.type }), [media.src, media.type]);
+  const warmLease = useRef<{ owner: object; visible: () => void } | undefined>(undefined);
+  const sourceIdentity = media.type + '\n' + media.src;
+  const currentSourceIdentity = useRef(sourceIdentity); currentSourceIdentity.current = sourceIdentity;
+  const previousSourceIdentity = useRef(sourceIdentity);
+  const videoSource = nearby && pageVisible || loadedMediaSource === media.src ? media.src : undefined;
+  const attachGif = useCallback((element: HTMLImageElement | null) => {
+    if (!element && gifImage.current) gifImage.current.removeAttribute('src');
+    // A ref can detach and reattach the same node during development replay.
+    // React's unchanged src prop will not restore the resource we released.
+    if (element && element.getAttribute('src') !== media.src) element.setAttribute('src', media.src);
+    gifImage.current = element;
+  }, [media.src]);
   useLayoutEffect(() => {
     const element = video.current;
     return () => {
-      if (element) rememberCanvasV2MediaTime(playback, element);
+      if (element) {
+        rememberCanvasV2MediaTime(playback, element);
+        element.pause(); element.removeAttribute('src'); releaseCanvasV2VideoSource(playback, element);
+      }
       playback.userPaused = userPaused.current;
-      // Culling removes the DOM decoder; NativeNode keeps only this metadata.
+      // Eviction/unmount keeps metadata, while explicitly releasing its decoder.
     };
-  }, [playback]);
+  }, [media.type, playback]);
+  useLayoutEffect(() => {
+    if (previousSourceIdentity.current === sourceIdentity) return;
+    previousSourceIdentity.current = sourceIdentity;
+    delete playback.currentTime; delete playback.userPaused;
+    userPaused.current = false; autoStarted.current = false; programmaticPause.current = 0;
+    gifPosterSource.current = undefined;
+    setLoadedMediaSource(undefined); setPausedByUser(false); setPlaying(false); setInteracting(false); setError(false);
+    if (poster.current) { poster.current.width = 0; poster.current.height = 0; }
+  }, [playback, sourceIdentity]);
   const pauseMedia = useCallback((explicit = true) => {
     if (media.type === "gif" && poster.current && gifImage.current?.complete && gifImage.current.naturalWidth) poster.current.getContext("2d")?.drawImage(gifImage.current, 0, 0);
     if (video.current) rememberCanvasV2MediaTime(playback, video.current);
@@ -70,7 +95,11 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
       playbackPolicy.current.nearby = entry.isIntersecting;
       setNearby(entry.isIntersecting);
       if (!entry.isIntersecting) { autoStarted.current = false; playbackPolicy.current.pauseMedia(false); }
-    }, { root: node.closest('[data-canvas-v2-native-wheel-capture]'), rootMargin: "100px" });
+      if (warmLease.current) {
+        if (entry.isIntersecting && !document.hidden) warmLease.current.visible();
+        else canvasV2WarmMediaRetention.offscreen(warmLease.current.owner);
+      }
+    }, { root: node.closest('[data-canvas-v2-native-wheel-capture]'), rootMargin: "0px" });
     // Observe the actual video surface. An authored wrapper can extend beyond
     // its pixels and otherwise keep an offscreen decoder marked nearby.
     observer.observe(video.current ?? node);
@@ -78,22 +107,32 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
     node.addEventListener(CANVAS_V2_MEDIA_TOGGLE_EVENT, toggle);
     const pauseWhenHidden = () => {
       const policy = playbackPolicy.current;
-      if (document.hidden) { autoStarted.current = false; policy.pauseMedia(false); }
-      else if (policy.nearby && !policy.reducedMotion && !userPaused.current && !autoStarted.current && !policy.embedUrl) { autoStarted.current = true; void policy.play(true); }
+      setPageVisible(!document.hidden);
+      if (document.hidden) { autoStarted.current = false; policy.pauseMedia(false); if (warmLease.current) canvasV2WarmMediaRetention.offscreen(warmLease.current.owner); }
+      else {
+        if (policy.nearby) warmLease.current?.visible();
+      }
     };
     const escape = (e: KeyboardEvent) => { if (e.key === "Escape") playbackPolicy.current.pauseMedia(); };
     document.addEventListener("visibilitychange", pauseWhenHidden); window.addEventListener("keydown", escape);
     return () => { node.removeEventListener(CANVAS_V2_MEDIA_TOGGLE_EVENT, toggle); observer.disconnect(); document.removeEventListener("visibilitychange", pauseWhenHidden); window.removeEventListener("keydown", escape); };
   }, []);
   useEffect(() => {
-    if (media.type !== "video" || embedUrl) return;
-    if (nearby) { setLoadedVideoSource(media.src); return; }
-    if (loadedVideoSource !== media.src) return;
-    // A quick reverse pan keeps its decoder and exact clip time. Distant
-    // reference videos release the source after a bounded grace period.
-    const timer = window.setTimeout(() => setLoadedVideoSource(undefined), 1500);
-    return () => window.clearTimeout(timer);
-  }, [embedUrl, loadedVideoSource, media.src, media.type, nearby]);
+    if (!embedUrl && nearby && pageVisible && (media.type === 'video' || playing)) setLoadedMediaSource(media.src);
+  }, [embedUrl, media.src, media.type, nearby, pageVisible, playing]);
+  useEffect(() => {
+    if (embedUrl || loadedMediaSource !== media.src) return;
+    const evict = () => {
+      if (currentSourceIdentity.current !== sourceIdentity) return;
+      if (playbackPolicy.current.nearby && !document.hidden) { visible(); return; }
+      setLoadedMediaSource(current => current === media.src ? undefined : current);
+    };
+    const visible = () => canvasV2WarmMediaRetention.visible(warmOwner, evict);
+    warmLease.current = { owner: warmOwner, visible };
+    visible();
+    if (!playbackPolicy.current.nearby || document.hidden) canvasV2WarmMediaRetention.offscreen(warmOwner);
+    return () => { canvasV2WarmMediaRetention.remove(warmOwner); if (warmLease.current?.owner === warmOwner) warmLease.current = undefined; };
+  }, [embedUrl, loadedMediaSource, media.src, sourceIdentity, warmOwner]);
   useEffect(() => {
     // React has now removed src. Empty the selected resource as well so distant
     // reference videos retain only playback metadata, not a loaded decoder.
@@ -106,10 +145,10 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
       if (!cancelled && poster.current) { poster.current.width = image.naturalWidth; poster.current.height = image.naturalHeight; poster.current.getContext("2d")?.drawImage(image, 0, 0); gifPosterSource.current = media.src; }
       // The visible GIF owns animation; this temporary first-frame decoder is
       // unnecessary after its full-resolution poster has been painted.
-      image.onload = null; image.onerror = null; image.src = "";
+      image.onload = null; image.onerror = null; image.removeAttribute('src');
     };
     image.onerror = () => { if (!cancelled) setError(true); }; image.src = media.src;
-    return () => { cancelled = true; image.onload = null; image.onerror = null; image.src = ""; };
+    return () => { cancelled = true; image.onload = null; image.onerror = null; image.removeAttribute('src'); };
   }, [media.src, media.type, nearby]);
   useEffect(() => {
     if (reportedPlayback.current?.nodeId === nodeId && reportedPlayback.current.playing === playing) return;
@@ -124,10 +163,10 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
   }, [pauseMedia]);
   useEffect(() => { autoStarted.current = false; userPaused.current = playback.userPaused ?? false; setPausedByUser(userPaused.current); }, [media.src, media.type, playback]);
   useEffect(() => {
-    if (nearby && !reducedMotion && !userPaused.current && !autoStarted.current && !embedUrl) {
+    if (nearby && pageVisible && !reducedMotion && !userPaused.current && !autoStarted.current && !embedUrl) {
       autoStarted.current = true; void play(true);
     }
-  }, [nearby, reducedMotion, embedUrl, play]);
+  }, [nearby, pageVisible, reducedMotion, embedUrl, play]);
   togglePlayback.current = () => {
     if (embedUrl ? playing : media.type === "video" ? video.current && !video.current.paused : playing) pauseMedia(); else void play();
   };
@@ -138,7 +177,7 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
     </> : media.type === "video" ? <video
       ref={video}
       src={videoSource}
-      autoPlay={nearby && !reducedMotion && !pausedByUser} muted loop playsInline preload="metadata" controls={interacting}
+      autoPlay={nearby && pageVisible && !reducedMotion && !pausedByUser} muted loop playsInline preload="metadata" controls={interacting}
       data-canvas-v2-media-control={interacting ? "true" : undefined}
       style={{ width:"100%",height:"100%",objectFit:"contain",pointerEvents:interacting ? "auto" : "none" }}
       onLoadedMetadata={event => restoreCanvasV2MediaTime(playback, event.currentTarget)}
@@ -159,7 +198,7 @@ export function CanvasV2PlayableMediaObject({ media, nodeId, retainedPlayback }:
       onEnded={() => { setPlaying(false); setInteracting(false); }} onError={() => setError(true)}
     /> : <>
       <canvas ref={poster} aria-label={`Paused GIF: ${media.description}`} className="h-full w-full object-contain" style={{ display: playing ? "none" : "block" }}/>
-      {playing && nearby && <img ref={gifImage} src={media.src} alt={media.description} draggable={false} className="pointer-events-none absolute inset-0 h-full w-full object-contain" onError={() => setError(true)}/>}
+      {(loadedMediaSource === media.src || playing && nearby && pageVisible) && <img ref={attachGif} src={media.src} alt={media.description} draggable={false} className="pointer-events-none absolute inset-0 h-full w-full object-contain" style={{visibility:playing && nearby && pageVisible?'visible':'hidden'}} onError={() => setError(true)}/>}
     </>}
     {error ? <div className="absolute inset-0 grid place-content-center gap-2 bg-[#15151a]/95 p-5 text-center text-xs text-white"><span>This media could not be played.</span><small className="max-w-[260px] opacity-55">Check the file format or source. Local files are available for this browser session.</small><button data-canvas-v2-media-control aria-label="Retry media" onClick={() => { video.current?.load(); void play(); }} className="mx-auto rounded-md bg-white/10 px-3 py-1.5">Retry</button></div> : <>
       {!playing && !interacting && <button data-canvas-v2-media-control aria-label={media.type === "video" ? "Play video" : "Play GIF"} onClick={() => void play()} className="absolute left-1/2 top-1/2 grid h-11 w-11 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/20 bg-black/60 text-white shadow-lg"><Play size={18} fill="currentColor"/></button>}

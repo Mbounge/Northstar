@@ -169,3 +169,11 @@ test('native screen copy and export keep full quality while whole-board clone ex
   } finally { dispose(); }
   assert.equal(await canvasV2ScreenCaptureForClone(node, true), undefined);
 });
+
+
+test('capture layout pins never reintroduce skipping or mutate already-materialized live frame layout',()=>{
+ let value='visible',priority='',writes=0;
+ const host={style:{getPropertyValue:()=>value,getPropertyPriority:()=>priority,setProperty:(_name:string,next:string,rank:string)=>{writes++;value=next;priority=rank;}}} as unknown as HTMLElement;
+ const first=pinCanvasV2ScreenCaptureLayout(host),second=pinCanvasV2ScreenCaptureLayout(host);first();second();
+ assert.equal(value,'visible');assert.equal(priority,'');assert.equal(writes,0,'Materialized live frames need no temporary layout override.');
+});

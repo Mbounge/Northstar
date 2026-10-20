@@ -37,11 +37,12 @@ export const screenExperiencePlanSchema = recordSchema({
 const record = (value: unknown, fields: string[], label: string) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Supply an experience ${label} object.`);
   const raw = object(value);
-  if (Object.keys(raw).some(key => !fields.includes(key))) throw new Error(`Unknown experience ${label} field.`);
+  const unexpected=Object.keys(raw).filter(key=>!fields.includes(key));
+  if(unexpected.length)throw new Error(`Unknown ${label.startsWith('experiencePlan')?label:'experience '+label} field(s): ${unexpected.slice(0,10).map(key=>JSON.stringify(key.slice(0,80))).join(', ')}. Allowed fields: ${fields.join(', ')}. Resubmit using these exact keys.`);
   return raw;
 };
 const text = (value: unknown, label: string, max = 500) => {
-  if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`Supply a concise experience ${label} (1–${max} characters).`);
+  if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`Supply a concise ${label.startsWith('experiencePlan')?label:'experience '+label} (1–${max} characters).`);
   return value.trim();
 };
 const id = (value: unknown, label: string) => {
@@ -59,9 +60,10 @@ const distinct = (values: string[], label: string) => {
 
 export function screenExperiencePlan(value: unknown, knownReferenceAssetIds: ReadonlySet<string>): ScreenExperiencePlan {
   const raw = record(value, ['brief', 'states', 'transitions', 'subjects', 'assetStrategy', 'referenceObservations', 'comparison'], 'plan');
-  const states = list(raw.states, 'states', 16, 1).map(value => {
-    const state = record(value, ['id', 'description', 'settledExpectation'], 'state');
-    return { id: id(state.id, 'state id'), description: text(state.description, 'state description'), settledExpectation: text(state.settledExpectation, 'settled state expectation') };
+  const states = list(raw.states, 'states', 16, 1).map((value,index) => {
+    const path=`experiencePlan.states[${index}]`;
+    const state = record(value, ['id', 'description', 'settledExpectation'], path);
+    return { id: id(state.id, path+'.id'), description: text(state.description, path+'.description'), settledExpectation: text(state.settledExpectation, path+'.settledExpectation') };
   });
   distinct(states.map(state => state.id), 'state ids');
   const stateIds = new Set(states.map(state => state.id));
@@ -75,15 +77,16 @@ export function screenExperiencePlan(value: unknown, knownReferenceAssetIds: Rea
     if (!knownReferenceAssetIds.has(result)) throw new Error(`Inspect or retain experience reference asset "${result}" before planning from it.`);
     return result;
   };
-  const transitions = list(raw.transitions, 'transitions', 32).map(value => {
-    const edge = record(value, ['id', 'trigger', 'from', 'to', 'visualResponse', 'timing', 'interruption', 'settledExpectation', 'verification'], 'transition');
+  const transitions = list(raw.transitions, 'transitions', 32).map((value,index) => {
+    const path=`experiencePlan.transitions[${index}]`;
+    const edge = record(value, ['id', 'trigger', 'from', 'to', 'visualResponse', 'timing', 'interruption', 'settledExpectation', 'verification'], path);
     let verification: ScreenTransitionVerification | undefined;
     if (edge.verification !== undefined) {
-      const check = record(edge.verification, ['action', 'selector', 'viewSelector', 'expectedText'], 'transition verification');
+      const check = record(edge.verification, ['action', 'selector', 'viewSelector', 'expectedText'], path+'.verification');
       if (!['click', 'fill', 'drag'].includes(String(check.action))) throw new Error('Transition verification needs a click, fill or drag action.');
       verification = { action: check.action as ScreenTransitionVerification['action'], selector: text(check.selector, 'transition control selector', 240), viewSelector: text(check.viewSelector, 'transition view selector', 240), expectedText: text(check.expectedText, 'transition destination text') };
     }
-    return { id: id(edge.id, 'transition id'), trigger: text(edge.trigger, 'transition trigger'), from: stateId(edge.from), to: stateId(edge.to), visualResponse: text(edge.visualResponse, 'visual response'), timing: text(edge.timing, 'transition timing'), interruption: text(edge.interruption, 'interruption handling'), settledExpectation: text(edge.settledExpectation, 'settled transition expectation'), ...(verification ? { verification } : {}) };
+    return { id: id(edge.id, 'transition id'), trigger: text(edge.trigger, 'transition trigger'), from: stateId(edge.from), to: stateId(edge.to), visualResponse: text(edge.visualResponse, 'visual response'), timing: text(edge.timing, 'transition timing'), interruption: text(edge.interruption, 'interruption handling'), settledExpectation: text(edge.settledExpectation, path+'.settledExpectation'), ...(verification ? { verification } : {}) };
   });
   distinct(transitions.map(edge => edge.id), 'transition ids');
   const result: ScreenExperiencePlan = { brief: text(raw.brief, 'resolved user brief', 1600), states, transitions };

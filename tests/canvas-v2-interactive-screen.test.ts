@@ -7,7 +7,8 @@ import { buildCanvasV2ScreenRuntime, fixedScreenMediaQuery } from '../lib/canvas
 import { canvasV2ScreenRuntimeIdentity, canvasV2ScreenRuntimeStateCompatible, clearCanvasV2ScreenRuntimeState, rememberCanvasV2ScreenRuntimeState, restoreCanvasV2ScreenRuntimeState } from '../lib/canvas-v2/screen-mock-state';
 import { validateCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from '../lib/canvas-v2/artifact-safety';
 import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange } from '../lib/canvas-v2/source-patch';
-import { applyCanvasV2NativeSceneMutation, copyCanvasV2NativeSelection, pasteCanvasV2NativeClipboard, serializeCanvasV2NativeScene, type CanvasV2NativeSceneDocument } from '../lib/canvas-v2/native-scene';
+import { applyCanvasV2NativeSceneMutation, copyCanvasV2NativeSelection, pasteCanvasV2NativeClipboard, serializeCanvasV2NativeScene, patchCanvasV2NativeDocument, type CanvasV2NativeSceneDocument } from '../lib/canvas-v2/native-scene';
+import { compileCanvasV2SceneTransaction } from '../lib/canvas-v2/scene-transaction';
 import { NORTHSTAR_THREE_HELPER_SOURCE } from '../lib/canvas-v2/screen-trusted-runtime';
 import { runCanvasV2ScreenCommandWithControllerRetry } from '../lib/canvas-v2/screen-controller-retry';
 
@@ -206,6 +207,42 @@ test('read-only screen anchors place one or two new screens without changing pro
   assert.throws(() => arrangeCanvasV2Screens(blocked, { nodeIds: ['a'], anchorNodeId: 'anchor' }), /cover/);
   const edge = structuredClone(scene); edge.nodes[0].geometry.x = 11500;
   assert.throws(() => arrangeCanvasV2Screens(edge, { nodeIds: ['a'], anchorNodeId: 'anchor' }), /bounds/);
+});
+
+test('screen arrangement preserves raw protected neighbor source instead of normalizing the whole board', () => {
+  const empty: CanvasV2NativeSceneDocument = { schema: 'canvas-v2.native-scene.v1', revisionId: 'live', width: 12000, height: 8000, nodes: [], rootIds: [], css: '' };
+  const scene = applyCanvasV2NativeSceneMutation(empty, { kind: 'batch', label: 'Existing board', mutations: ['anchor','new-ad','hidden-connector','locked-note','human-note'].map((nodeId, i) => ({ kind: 'create' as const, primitive: 'shape' as const, nodeId, x: 100 + i * 2000, y: i < 2 ? 100 : 3000, width: 390, height: 844 })) });
+  for (const node of scene.nodes.slice(0, 2)) { node.attributes[SCREEN_ATTRIBUTE] = encodeCanvasV2Screen(screen); node.userEdited = false; node.lastAuthor = 'northstar'; delete node.attributes['data-canvas-v2-user-edited']; node.attributes['data-canvas-v2-origin'] = 'northstar'; node.attributes['data-canvas-v2-last-author'] = 'northstar'; }
+  scene.nodes[0].locked = true;
+  scene.nodes[2].hidden = true;
+  scene.nodes[2].attributes.hidden = '';
+  scene.nodes[3].locked = true;
+  const serialized = serializeCanvasV2NativeScene(scene);
+  const range = findCanvasV2SourceNodeRange(serialized.html, 'hidden-connector')!;
+  // Historical source need not be byte-identical to today's serializer. In
+  // particular, hidden SVG/viewBox/path and hand-written attributes must stay.
+  const rawHidden = `<svg hidden="" data-canvas-v2-node-id="hidden-connector" data-canvas-v2-user-edited="visibility" viewBox="0 0 390 844" style="--canvas-v2-scene-x:4100px;--canvas-v2-scene-y:3000px"><path d="M0 0 L390 844" /></svg>`;
+  const before = { ...serialized, html: serialized.html.slice(0, range.start) + rawHidden + serialized.html.slice(range.end) };
+  const originalScene = structuredClone(scene);
+  const next = arrangeCanvasV2Screens(scene, { nodeIds: ['new-ad'], anchorNodeId: 'anchor' });
+  assert.strictEqual(next.nodes[0], scene.nodes[0], 'read-only anchor keeps immutable identity');
+  for (const i of [2,3,4]) assert.strictEqual(next.nodes[i], scene.nodes[i], 'unrelated native node keeps immutable identity');
+  const after = patchCanvasV2NativeDocument(before, scene, next)!;
+  assert.ok(after);
+  assert.equal(after.css, before.css);
+  for (const id of ['anchor','hidden-connector','locked-note','human-note']) {
+    const a = findCanvasV2SourceNodeRange(before.html, id)!;
+    const b = findCanvasV2SourceNodeRange(after.html, id)!;
+    assert.equal(after.html.slice(b.start, b.end), before.html.slice(a.start, a.end), id);
+  }
+  assert.deepEqual(readCanvasV2Screens(after.html), readCanvasV2Screens(before.html));
+  assert.equal(next.nodes[1].geometry.x, 586);
+  assert.deepEqual(scene, originalScene, 'arrangement does not mutate its input');
+  const transaction = compileCanvasV2SceneTransaction({ origin: 'northstar', baseRevisionId: 'live', previous: before, next: after });
+  assert.deepEqual(transaction.mutations.filter(mutation => mutation.kind !== 'preserve').map(mutation => mutation.nodeId), ['new-ad'], 'the real AI source transaction changes only the mover');
+  assert.throws(() => compileCanvasV2SceneTransaction({ origin: 'northstar', baseRevisionId: 'live', previous: before, next: serializeCanvasV2NativeScene(next) }), /Hidden canvas object hidden-connector/);
+  for (const protection of ['hidden', 'locked', 'userEdited'] as const) { const blocked = structuredClone(scene); blocked.nodes[1][protection] = true; assert.throws(() => arrangeCanvasV2Screens(blocked, { nodeIds: ['new-ad'], anchorNodeId: 'anchor' }), /unavailable|human-owned|locked/); }
+  assert.equal(patchCanvasV2NativeDocument({ ...before, html: before.html.replace('data-canvas-v2-node-id=\"new-ad\"', 'data-canvas-v2-node-id=\"removed-ad\"') }, scene, next), undefined, 'missing mover source fails closed');
 });
 
 test('native screen source revision preserves geometry and every neighboring object', () => {

@@ -1,4 +1,9 @@
 "use client";
+import { CanvasCollaborationOverlay, CanvasCollaborationToolbar } from './canvas-collaboration';
+import { collaboratorColor, type CanvasCollaborationClient, type CollaborationStatus } from '@/lib/canvas-v2/sessions/collaboration-client';
+import {CanvasFeedbackSession} from './canvas-feedback-session';
+import {VISUAL_FEEDBACK_START} from '@/lib/canvas-v2/visual-feedback';
+import {applyScreenDesignOperation} from '@/lib/canvas-v2/screen-design-edit';
 
 import { useFilmCamera } from "./use-film-camera";
 import type { FilmCameraController } from "@/lib/canvas-v2/film-camera";
@@ -11,15 +16,16 @@ import { CanvasV2MediaInsert } from "./media-insert";
 import { CANVAS_V2_MEDIA_TOGGLE_EVENT, CANVAS_V2_MEDIA_STATE_EVENT, MEDIA_ATTRIBUTE, canvasV2SuppliedMediaAsset, parseCanvasV2PlayableMedia, measureCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
 import { ScreenVersionHistory } from './screen-version-history';
 import { reviseCanvasV2NativeScreen, validateCanvasV2ScreenJavaScript } from '@/lib/canvas-v2/interactive-screen-patch';
-import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
-import { CANVAS_V2_FEEDBACK_PICKING, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking } from '@/lib/canvas-v2/screen-feedback';
-import { SCREEN_ATTRIBUTE, parseCanvasV2Screen, validateCanvasV2ScreenAssets, readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
+import { CANVAS_V2_FEEDBACK_PICKING, setCanvasV2FeedbackPicking } from '@/lib/canvas-v2/screen-feedback';
+import { SCREEN_ATTRIBUTE, encodeCanvasV2Screen, parseCanvasV2Screen, validateCanvasV2ScreenAssets, readCanvasV2Screens } from '@/lib/canvas-v2/interactive-screen';
 import { MODEL_ATTRIBUTE } from '@/lib/canvas-v2/model-object';
 import { prepareCanvasModelImport, MAX_MODEL_IMPORT_BYTES } from '@/lib/canvas-v2/model-import';
 import { findCanvasV2OpenPlacement } from '@/lib/canvas-v2/multiplayer-placement';
-import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenAssets, CanvasV2ScreenIdentities } from './interactive-screen';
+import { BoardDesignInspector } from './board-design-inspector';
+import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenEditing, CanvasV2ScreenAssets, CanvasV2ScreenIdentities, interruptCanvasV2ScreenPresentation } from './interactive-screen';
 import { SCREEN_ASSET_DROP_EVENT, SCREEN_ASSET_DRAG_TYPE, projectImageAssets, uploadedProjectImage, uploadedProjectModel, replaceScreenAsset, type ScreenAssetDrop } from '@/lib/canvas-v2/screen-asset-edit';
-import { SCREEN_DIRECT_EDIT_EVENT, SCREEN_DIRECT_PROMPT_EVENT, editScreenText, editScreenAppearance, removeScreenSection, moveScreenSection, screenSectionNeedsAgent, type ScreenDirectRequest } from '@/lib/canvas-v2/screen-direct-edit';
+import { CANVAS_V2_EDIT_SELECTION_FEEDBACK } from '@/lib/canvas-v2/screen-feedback';
+import { SCREEN_DIRECT_EDIT_EVENT, SCREEN_DIRECT_PROMPT_EVENT, SCREEN_DIRECT_SAVE_FAILURE_EVENT, flushScreenDirectEdits, editScreenText, editScreenRichText, editScreenAppearance, editScreenAttributes, removeScreenSection, moveScreenSection, screenSectionNeedsAgent, type ScreenDirectRequest } from '@/lib/canvas-v2/screen-direct-edit';
 import { ProjectAssets } from './project-assets';
 import { createCanvasV2MediaPlaybackStore } from "@/lib/canvas-v2/media-playback-store";
 import { CanvasV2MediaPlaybackButton } from "./media-playback-button";
@@ -45,6 +51,7 @@ import {
   Check,
   Diamond,
   EyeOff,
+  PenTool,
   Grid3X3,
   Hand,
   Group,
@@ -74,7 +81,25 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type ProfilerOnRenderCallback } from "react";
+import { canvasV2LayerWindow } from "@/lib/canvas-v2/native-viewport-reuse";
+
+/** Fixed for each mounted diagnostic boundary; ordinary product routes do not profile. */
+export function canvasV2RenderProfilingEnabled() {
+  return process.env.NODE_ENV === 'development' && typeof window !== 'undefined'
+    && window.location.pathname.startsWith('/canvas-v2-e2e/')
+    && new URLSearchParams(window.location.search).get('hardening') === '1';
+}
+export function emitCanvasV2RenderTiming(id:string,phase:string,actualDuration:number,commitTime:number|null) {
+  if (!canvasV2RenderProfilingEnabled() || !['Workspace','WorkspaceBody','NativeScene','ChatPanel','Layers'].includes(id)
+    || !['mount','update','nested-update','render-body'].includes(phase) || !Number.isFinite(actualDuration) || actualDuration < 0
+    || (commitTime !== null && !Number.isFinite(commitTime))) return;
+  window.dispatchEvent(new CustomEvent('northstar:e2e:react-render-timing', {detail:{id,phase,actualDuration,commitTime}}));
+}
+const recordCanvasV2RenderTiming:ProfilerOnRenderCallback=(id,phase,actualDuration,_baseDuration,_startTime,commitTime)=>emitCanvasV2RenderTiming(id,phase,actualDuration,commitTime);
+export function CanvasV2RenderProfiler({id,enabled,children}:{id:string;enabled:boolean;children:ReactNode}) {
+  return enabled && process.env.NODE_ENV === 'development' ? <Profiler id={id} onRender={recordCanvasV2RenderTiming}>{children}</Profiler> : children;
+}
 
 import {
   CanvasV2CanvasScene,
@@ -108,7 +133,7 @@ import { CANVAS_V2_MIN_CANVAS, type CanvasV2CanvasGeometry } from "@/lib/canvas-
 import { canvasV2ConnectorTargetAtPoint, type CanvasV2InspectableElement, type CanvasV2SelectionIntent } from "@/lib/canvas-v2/element-inspection";
 import { buildCanvasV2ConnectorGeometry, canvasV2ConnectorRelativeAnchor, canvasV2ConnectorCapAttributes, canvasV2ConnectorLabelPoint, canvasV2ConnectorNearestLabelPosition, canvasV2MoveConnectorSegment, type CanvasV2ConnectorCap, type CanvasV2ConnectorPoint, type CanvasV2ConnectorVariant } from "@/lib/canvas-v2/connector-geometry";
 import { canvasV2OpaquePaintColor, canvasV2PaintMode, canvasV2PaintValue, type CanvasV2PaintMode } from "@/lib/canvas-v2/paint-style";
-import { readCanvasV2BoardObjectGraph, type CanvasV2BoardObject } from "@/lib/canvas-v2/board-object-graph";
+import { readCanvasV2BoardObjectGraph, readCanvasV2NativeBoardObjectGraph, type CanvasV2BoardObject } from "@/lib/canvas-v2/board-object-graph";
 import { resolveCanvasV2ContextToolbarPosition } from "@/lib/canvas-v2/context-toolbar-placement";
 import {
   applyCanvasV2ManualMutation,
@@ -127,12 +152,12 @@ import {
   canvasV2NativeTableRows,
   type CanvasV2NativeClipboard,
   canvasV2NativeSceneSelectionContainsTarget,
-  serializeCanvasV2NativeScene,
   canvasV2NativeSceneAbsoluteBounds,
   canvasV2NativeObservationDocument,
   patchCanvasV2NativeDocument,
   type CanvasV2NativeSceneDocument,
 } from "@/lib/canvas-v2/native-scene";
+import { serializeCanvasV2NativeSceneChanges } from "@/lib/canvas-v2/native-scene-source";
 import {
   canvasV2BoundsIntersect,
   constrainCanvasV2ResizeAspectRatio,
@@ -637,13 +662,88 @@ function showCanvasClickPulse(clientX: number, clientY: number, theme: "dark" | 
 
 // Parent persistence/status changes must not reconcile the whole board. Normal
 // shallow comparison still propagates every changed session/source callback.
+export function CanvasV2ObjectLayers({nodes,selectedNodeIds,onSelect,onVisibility,onLock,onHover,onChat,docked=false,covered=false}:{
+  docked?:boolean;covered?:boolean;onHover?:(nodeId?:string)=>void;onChat?:()=>void;nodes:readonly CanvasV2BoardObject[];selectedNodeIds:readonly string[];
+  onSelect:(nodeId:string,intent:{additive:boolean;range:boolean})=>void;
+  onVisibility:(node:CanvasV2BoardObject)=>void;onLock:(node:CanvasV2BoardObject)=>void;
+}) {
+  const area=useRef<HTMLDivElement>(null),pendingFocus=useRef<{id:string;control:number}|undefined>(undefined);
+  const [offset,setOffset]=useState(()=>Math.max(0,nodes.findIndex(node=>selectedNodeIds.includes(node.nodeId))-4)),[height,setHeight]=useState(350);
+  const initialOffset=useRef(offset);
+  const [focused,setFocused]=useState<{id:string;control:number}>();
+  const window=canvasV2LayerWindow(nodes.length,offset*32,height);
+  const indices=Array.from({length:window.end-window.start},(_,i)=>i+window.start);
+  const focusedIndex=focused?nodes.findIndex(node=>node.nodeId===focused.id):-1;
+  if(focusedIndex>=0&&!indices.includes(focusedIndex))indices.push(focusedIndex);
+  indices.sort((a,b)=>a-b);
+  useLayoutEffect(()=>{if(area.current)area.current.scrollTop=initialOffset.current*32;},[]);
+  useLayoutEffect(()=>{
+    const element=area.current;if(!element)return;
+    const update=()=>setHeight(element.clientHeight);
+    update();const observer=new ResizeObserver(update);observer.observe(element);return()=>observer.disconnect();
+  },[]);
+  useLayoutEffect(()=>{
+    const element=area.current;if(!element)return;
+    const maximum=Math.max(0,nodes.length*32+16-element.clientHeight);
+    if(element.scrollTop>maximum){element.scrollTop=maximum;setOffset(Math.floor(maximum/32));}
+    const request=pendingFocus.current;if(!request)return;
+    const button=element.querySelector<HTMLButtonElement>(`[data-layer-row-id="${CSS.escape(request.id)}"] [data-layer-control="${request.control}"]`);
+    if(button&&!button.disabled){pendingFocus.current=undefined;button.focus({preventScroll:true});}
+  },[nodes,offset,focused,height]);
+  const enabled=(row:number,control:number)=>row>=0&&row<nodes.length&&!(control===0&&nodes[row].hidden)&&!(control>0&&nodes[row].nodeId==='canvas');
+  const reveal=(row:number,control:number)=>{
+    const element=area.current;if(!element)return;
+    const top=row*32,bottom=top+32,visibleTop=element.scrollTop,visibleBottom=visibleTop+element.clientHeight-16;
+    if(top<visibleTop)element.scrollTop=top;else if(bottom>visibleBottom)element.scrollTop=bottom-element.clientHeight+16;
+    pendingFocus.current={id:nodes[row].nodeId,control};setFocused(pendingFocus.current);setOffset(Math.floor(element.scrollTop/32));
+  };
+  return <aside inert={covered?true:undefined} aria-hidden={covered?true:undefined} aria-label={docked?"Object layers":"Layers panel"} data-canvas-v2-direct-editing="true" style={docked?{position:"fixed",left:16,top:90,bottom:16,width:232,maxHeight:"none",right:"auto",display:"flex",flexDirection:"column",zIndex:1001}:undefined} className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]">
+    <div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]"/>{docked?'Layers':'Objects'}</div><span className="text-[10px] font-bold text-[#9999a8]">{nodes.length}</span></div>
+    <div ref={area} aria-label="Canvas objects" className="overflow-y-auto p-2" style={docked?{flex:1,minHeight:0}: {height:Math.min(350,nodes.length*32+16)}} onPointerLeave={()=>onHover?.()} onScroll={event=>setOffset(Math.floor(event.currentTarget.scrollTop/32))}
+      onFocusCapture={event=>{const button=(event.target as Element).closest<HTMLElement>('[data-layer-control]'),row=button?.closest<HTMLElement>('[data-layer-row-id]');if(row&&button)setFocused({id:row.dataset.layerRowId!,control:Number(button.dataset.layerControl)});}}
+      onBlurCapture={event=>{if(!(event.relatedTarget instanceof Node)||!event.currentTarget.contains(event.relatedTarget))setFocused(undefined);}}
+      onKeyDownCapture={event=>{
+        const button=(event.target as Element).closest<HTMLElement>('[data-layer-control]'),row=button?.closest<HTMLElement>('[data-layer-row-id]');if(!button||!row)return;
+        const index=nodes.findIndex(node=>node.nodeId===row.dataset.layerRowId);if(index<0)return;
+        let nextRow=index,control=Number(button.dataset.layerControl);
+        if(event.key==='Tab'){
+          const direction=event.shiftKey?-1:1;let position=index*3+control+direction;
+          while(position>=0&&position<nodes.length*3&&!enabled(Math.floor(position/3),position%3))position+=direction;
+          if(position<0||position>=nodes.length*3)return;nextRow=Math.floor(position/3);control=position%3;
+        }else{
+          const direction=event.key==='ArrowUp'||event.key==='PageUp'||event.key==='Home'?-1:1;
+          if(event.key==='ArrowUp'||event.key==='ArrowDown')nextRow+=direction;
+          else if(event.key==='PageUp'||event.key==='PageDown')nextRow+=direction*Math.max(1,Math.floor(height/32));
+          else if(event.key==='Home')nextRow=0;else if(event.key==='End')nextRow=nodes.length-1;else return;
+          const searchDirection=event.key==='Home'?1:event.key==='End'?-1:direction;
+          nextRow=Math.max(0,Math.min(nodes.length-1,nextRow));while(nextRow>=0&&nextRow<nodes.length&&!enabled(nextRow,control))nextRow+=searchDirection;
+          if(nextRow<0||nextRow>=nodes.length)return;
+        }
+        event.preventDefault();reveal(nextRow,control);
+      }}>
+      <div style={{height:window.height,position:'relative'}}>{indices.map(index=>{const node=nodes[index];return <div key={node.nodeId} data-layer-row-id={node.nodeId} onPointerEnter={()=>onHover?.(node.nodeId)} style={{position:'absolute',top:index*32,left:0,right:0,height:32,paddingLeft:8+Math.min(4,node.depth)*14}} className={`flex items-center gap-2 rounded-xl pr-2 text-xs ${selectedNodeIds.includes(node.nodeId)?'bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]':'hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]'}`}>
+        <button data-layer-control="0" title={node.label||node.nodeId} onClick={event=>onSelect(node.nodeId,{additive:event.shiftKey||event.metaKey||event.ctrlKey,range:event.shiftKey})} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.label || node.nodeId}</button>
+        <button data-layer-control="1" aria-label={`${node.hidden?'Show':'Hide'} ${node.nodeId}`} onClick={()=>onVisibility(node)} disabled={node.nodeId==='canvas'} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden?'Show':<EyeOff className="h-3.5 w-3.5"/>}</button>
+        <button data-layer-control="2" aria-label={`${node.locked?'Unlock':'Lock'} ${node.nodeId}`} onClick={()=>onLock(node)} disabled={node.nodeId==='canvas'} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked?<Lock className="h-3.5 w-3.5"/>:<Unlock className="h-3.5 w-3.5"/>}</button>
+      </div>})}</div>
+    </div>
+    {docked&&onChat&&<div className="border-t border-current/[.08] p-3"><button onClick={onChat} className="flex h-8 w-full items-center justify-center gap-2 rounded-lg bg-[#8b73f8]/10 text-[11px] text-[#8068b5] dark:text-[#c4b4f7]"><MessageSquare size={13}/>Chat with Northstar</button></div>}
+  </aside>;
+}
+
+const EMPTY_COLLABORATION_STATUS:CollaborationStatus={phase:'off',role:'owner',pending:0,members:[],busyObjects:[]};
+const emptyCollaborationStatus=()=>EMPTY_COLLABORATION_STATUS;
+const emptyCollaborationSubscribe=()=>()=>{};
+
 export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   designEndpoint = "/api/canvas-v2/design",
   researchEndpoint = "/api/canvas-v2/research",
   accountEndpoint = "/api/canvas-v2/account",
   routerEndpoint = "/api/canvas-v2/route",
-  agentEndpoint, initialSnapshot, onSnapshot, sessionTitle, onSessionMenu, liveReplica, sendSessionCommand, registerSessionController, registerFilmCamera,
+  agentEndpoint, initialSnapshot, onSnapshot, sessionTitle, onSessionMenu, liveReplica, sendSessionCommand, registerSessionController, registerFilmCamera, collaboration, onEnableCollaboration,
 }: {
+  collaboration?: CanvasCollaborationClient;
+  onEnableCollaboration?:(revision:import('@/lib/canvas-v2/types').CanvasV2ArtifactRevision)=>Promise<void>;
   designEndpoint?: string;
   researchEndpoint?: string;
   accountEndpoint?: string;
@@ -658,6 +758,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   registerFilmCamera?: (controller: FilmCameraController | null) => void;
   registerSessionController?: (execute:(command:import('@/lib/canvas-v2/sessions/types').SessionCommand)=>Promise<void>)=>void;
 } = {}) {
+  const [renderProfiling] = useState(canvasV2RenderProfilingEnabled);
+  const renderBodyStarted = renderProfiling ? performance.now() : undefined;
   const [gatewayHandoff, setGatewayHandoff] = useState<CanvasV2GatewayHandoff>();
   const [gatewayEntry, setGatewayEntry] = useState(false);
   const gatewayConsumedRef = useRef(false);
@@ -696,7 +798,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     };
   }, []);
 
-  const engine = useCanvasV2DesignLoop(designEndpoint, initialSnapshot?.revision);
+  const collaborationStatus=useSyncExternalStore(collaboration?.subscribe??emptyCollaborationSubscribe,collaboration?.getStatus??emptyCollaborationStatus,collaboration?.getStatus??emptyCollaborationStatus);
+  const collaborationEnabled=Boolean(collaboration&&collaborationStatus.phase!=='off');
+  const collaborationReadOnly=Boolean(collaboration?.enabled&&!collaboration.writable);
+  const engine = useCanvasV2DesignLoop(designEndpoint, initialSnapshot?.revision,()=>collaboration?.enabled?(!collaboration.writable?'This canvas is view-only.':collaboration.getStatus().busyObjects.length?'A teammate is editing this element. Select another object.':undefined):undefined);
+  const personalSelectCursor=useMemo(()=>collaborationEnabled&&collaboration?CANVAS_V2_SELECT_CURSOR.replaceAll(encodeURIComponent('#65a8ff'),encodeURIComponent(collaboratorColor(collaboration.userId))).replaceAll(encodeURIComponent('stroke="#fff"'),encodeURIComponent(`stroke="${collaboratorColor(collaboration.userId)}"`)):CANVAS_V2_SELECT_CURSOR,[collaboration,collaborationEnabled]);
   const [observationMountRevisionId, setObservationMountRevisionId] = useState<string>();
   const [candidateMountRevisionId, setCandidateMountRevisionId] = useState<string>();
   useEffect(() => {
@@ -727,6 +833,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     if (process.env.NODE_ENV === "production" || !window.location.pathname.startsWith("/canvas-v2-e2e/")) return;
     const observe = () => { void engine.ensureObservation().then((result) => {
       document.body.dataset.canvasObservationResult = JSON.stringify({ revisionId: result.revisionId, bytes: result.screenshotDataUrl.length, spatial: Boolean(result.spatial) });
+      // Opt-in local harness preview of the observation already produced by
+      // the engine. Never expose generated-frame implementation or app state.
+      if (new URLSearchParams(window.location.search).get('hardening') === '1' && result.screenshotDataUrl.length <= 2_000_000 && /^data:image\/(?:jpeg|png);base64,/.test(result.screenshotDataUrl)) {
+        window.dispatchEvent(new CustomEvent('northstar:e2e:observation-preview', { detail: { revisionId: result.revisionId, image: result.screenshotDataUrl } }));
+      }
     }).catch((error) => { document.body.dataset.canvasObservationResult = String(error); }); };
     window.addEventListener("northstar:e2e:observe", observe);
     return () => window.removeEventListener("northstar:e2e:observe", observe);
@@ -761,6 +872,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const [zoomDraft, setZoomDraft] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string>();
+  const [screenEditNodeId,setScreenEditNodeId]=useState<string>();
+  const [canvasView,setCanvasView]=useState<'design'|'preview'>('preview');
+  const previewSelection=useRef<{ids:string[];screenId?:string}>({ids:[]});
+  const [screenElementNodeId,setScreenElementNodeId]=useState<string>();
+  const [editChatOpen,setEditChatOpen]=useState(false),editModeNodeRef=useRef(screenEditNodeId);editModeNodeRef.current=screenEditNodeId;
+  const [screenElementTargets,setScreenElementTargets]=useState<import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]>([]);
+  const selectScreenParts=useCallback((nodeId?:string,targets:import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]=[])=>{setScreenElementNodeId(nodeId);setScreenElementTargets(targets)},[]);
+  const screenEditing=useMemo(()=>({mode:canvasView,readOnly:collaborationReadOnly,previewFocus:(nodeId:string)=>{previewSelection.current={ids:[nodeId],screenId:nodeId}},nodeId:screenEditNodeId,exit:()=>{setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined)},enter:(nodeId:string)=>{const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(!element||element.locked||collaborationReadOnly)return;setCanvasView('design');setSelectedElements([element]);setSelectionTarget(nodeId);setScreenEditNodeId(nodeId)},select:selectScreenParts,chatOpen:editChatOpen,openChat:()=>{setPanel('chat');setEditChatOpen(true)}}),[canvasView,screenEditNodeId,editChatOpen,selectScreenParts,collaborationReadOnly]);
   // Conversation and run lifecycle belong to the workspace, not to the
   // collapsible presentation panel. Closing the panel or visiting Apps must
   // never discard a routing request, transcript, selected model, or the turn
@@ -768,6 +887,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [selectionTarget, setSelectionTarget] = useState<string>();
   const [versionHistoryNode, setVersionHistoryNode] = useState<string>();
   const [feedbackPicking, setFeedbackPicking] = useState(false);
+  const [visualFeedbackActive,setVisualFeedbackActive]=useState(false);
+  const [feedbackCaptureNodeIds,setFeedbackCaptureNodeIds]=useState<string[]>([]);
   const feedbackPickingRef = useRef(false);
   useEffect(() => { const receive = (event: Event) => { const active = Boolean((event as CustomEvent).detail); feedbackPickingRef.current = active; setFeedbackPicking(active); }; window.addEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); return () => window.removeEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); }, []);
   const [historySelectionRestore, setHistorySelectionRestore] = useState<{ revisionId: string; nodeIds: string[] }>();
@@ -784,6 +905,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const steeringDiscoveryAttemptsRef = useRef(new Map<string, number>());
   const [marquee, setMarquee] = useState<MarqueeGesture>();
   const [mutationError, setMutationError] = useState<string>();
+  const compareScreen=useCallback((nodeId:string)=>{void flushScreenDirectEdits().then(()=>setVersionHistoryNode(nodeId)).catch(error=>setMutationError(String(error)))},[]);
+  const screenEditingContext=useMemo(()=>({...screenEditing,compare:compareScreen,
+    presence:collaborationEnabled&&collaboration?{pointer:(clientX:number,clientY:number)=>{
+      const rect=workspaceOriginRef.current,current=viewportRef.current;
+      collaboration.pointer({x:(clientX-rect.left-current.x)/current.scale,y:(clientY-rect.top-current.y)/current.scale});
+    },leave:()=>collaboration.pointer(null)}:undefined,
+  }),[screenEditing,compareScreen,collaboration,collaborationEnabled]);
   const [layersOpen, setLayersOpen] = useState(false);
   const [objectMenu, setObjectMenu] = useState<CanvasV2ObjectMenu>();
   const [toolbarMenu, setToolbarMenu] = useState<"shape" | "color" | "line" | "font" | "size" | "image" | "arrange">();
@@ -823,6 +951,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const statusPillRef = useRef<HTMLDivElement>(null);
   const chatPanelRef = useRef<HTMLElement>(null);
   const contextualToolbarRef = useRef<HTMLElement>(null);
+  const toolbarPreviewGeometry = useRef<Pick<Parameters<typeof resolveCanvasV2ContextToolbarPosition>[0], 'toolbar'|'viewport'|'chrome'>|undefined>(undefined);
   useCanvasV2PopoverViewport(contextualToolbarRef, toolbarMenu);
   const activeSelectionBoundsRef = useRef<CanvasV2InspectableElement["bounds"] | undefined>(undefined);
   const objectMenuRef = useRef<HTMLDivElement>(null);
@@ -870,6 +999,23 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const workspacePasteHandlerRef = useRef<(event: ClipboardEvent) => void>(() => undefined);
   const workspaceWheelHandlerRef = useRef<(event: globalThis.WheelEvent) => void>(() => undefined);
   const sceneElementsRef = useRef<CanvasV2InspectableElement[]>([]);
+  const remoteTransientRef=useRef<Record<string,CanvasV2TransientGeometry>|undefined>(undefined);
+  const remoteRevisionRef=useRef<import('@/lib/canvas-v2/types').CanvasV2ArtifactRevision|undefined>(undefined);
+  const receiveCollaborativeRevision=useRef<(revision:import('@/lib/canvas-v2/types').CanvasV2ArtifactRevision)=>void>(()=>{});
+  receiveCollaborativeRevision.current=revision=>{
+    if(directGestureRef.current||drawingGestureRef.current||editingNodeId||engine.applyingManualEdit){remoteRevisionRef.current=revision;return;}
+    const current=engine.readCommittedRevision();
+    if(current.document.html===revision.document.html&&current.document.css===revision.document.css&&current.document.javascript===revision.document.javascript&&JSON.stringify(current.evidence)===JSON.stringify(revision.evidence))return;
+    engine.receiveSharedRevision(revision);
+  };
+  useEffect(()=>{
+    if(!collaboration)return;
+    const stop=collaboration.subscribeRevision(revision=>receiveCollaborativeRevision.current(revision));
+    const timer=setInterval(()=>{if(remoteRevisionRef.current){const revision=collaboration.getRevision()??remoteRevisionRef.current;remoteRevisionRef.current=undefined;receiveCollaborativeRevision.current(revision)}},100);
+    return()=>{stop();clearInterval(timer)};
+  },[collaboration]);
+  useEffect(()=>{if(collaboration?.enabled)void collaboration.observe(engine.committed,engine.committed.summary||'Edited canvas')},[collaboration,engine.committed,collaborationStatus.phase]);
+  useEffect(()=>{if(collaboration?.enabled)collaboration.selection(selectedElements.map(item=>({nodeId:item.nodeId,...item.bounds})),canvasView,engine.running?'thinking':canvasView==='design'&&selectedElements.length?'editing':'viewing')},[collaboration,canvasView,engine.running,selectedElements,collaborationStatus.phase]);
   const pendingFlowRevealRef = useRef<string | undefined>(undefined);
   const internalClipboardRef = useRef<{ snapshot?: CanvasV2NativeClipboard; pasteCount: number }>({ pasteCount: 0 });
   const renderCountRef = useRef(0);
@@ -1074,6 +1220,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const contentInsets = useCallback((): CanvasV2WorkspaceInsets => {
     const workspace = workspaceRef.current?.getBoundingClientRect();
+    if(canvasView==='design')return {left:(workspace?.width??1440)<=900?216:264,right:312,top:120,bottom:96};
     if (!workspace) return { left: chatOpen ? 430 : 32, top: 116, right: 32, bottom: 92 };
     const chat = chatOpen ? chatPanelRef.current?.getBoundingClientRect() : undefined;
     const menu = canvasMenuRef.current?.getBoundingClientRect();
@@ -1086,7 +1233,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return canvasV2PanelAwareInsets({ width: workspace.width, height: workspace.height }, base,
       chatOpen ? floatingPanel.rect ?? (chat ? { x: chat.left - workspace.left, y: chat.top - workspace.top, width: chat.width, height: chat.height } : undefined) : undefined);
 
-  }, [chatOpen, floatingPanel.rect]);
+  }, [canvasView,chatOpen, floatingPanel.rect]);
 
   const legacyChat = useCanvasV2Chat({
     initial: initialSnapshot,
@@ -1110,7 +1257,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     viewport: viewportRef.current, selectionPolicy,
   }) });
   useEffect(() => {
-    const feedback = () => { setPanel('chat'); setChatOpen(true); };
+    const feedback = () => {setPanel('chat');if(editModeNodeRef.current)setEditChatOpen(true);else setChatOpen(true);};
     window.addEventListener('northstar-screen-feedback', feedback);
     return () => window.removeEventListener('northstar-screen-feedback', feedback);
   }, []);
@@ -1121,6 +1268,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const chat = liveReplica && sendSessionCommand ? {...localChat,screenVersions:liveReplica.snapshot.memory?.screenVersions ?? localChat.screenVersions,turns:liveReplica.snapshot.turns,busy:liveReplica.busy,
     submit:async (override?:string)=>{
       const message=(override ?? localChat.draft).trim();if(!message && !localChat.attachments.length)return;
+      try{await flushScreenDirectEdits()}catch(error){localChat.setAttachmentError(error instanceof Error?error.message:'Save your changes before sending.');return;}
       const screens = readCanvasV2Screens(liveReplica.snapshot.revision.document.html);
       const feedbacks = localChat.screenFeedbackTargets.flatMap(target => { const screen = screens.find(screen => screen.nodeId === target.nodeId); return screen ? [{target,encoded:screen.encoded}] : []; });
       const sent=await sendSessionCommand({kind:'submit',...(feedbacks.length ? {screenFeedbacks:feedbacks} : {}), objectFeedbacks:localChat.objectFeedbackTargets,message:message || 'Review the attached material.',attachments:localChat.attachments,model:localChat.modelSelection,effort:localChat.reasoningEffort}).then(()=>true,()=>false);
@@ -1131,7 +1279,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       localChat.setRunConfiguration(model,effort);void sendSessionCommand({kind:'settings',model,effort}).catch(()=>{});
     },
   } : localChat;
-  directPromptRef.current=(message)=>{setPanel('chat');setChatOpen(true);chat.setDraft(chat.draft.trim()?chat.draft+'\n\n'+message:message)};
+  directPromptRef.current=(message)=>{setPanel('chat');if(editModeNodeRef.current)setEditChatOpen(true);else setChatOpen(true);chat.setDraft(chat.draft.trim()?chat.draft+'\n\n'+message:message)};
   useEffect(()=>{
     const prepare=(event:Event)=>{const message=(event as CustomEvent).detail;if(typeof message==='string'&&message.length<1000)directPromptRef.current(message)};
     window.addEventListener(SCREEN_DIRECT_PROMPT_EVENT,prepare);
@@ -1170,10 +1318,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   },[replicaModel,replicaEffort]);
   const managedMemory = useRef(managedChat.memory); managedMemory.current = managedChat.memory;
   const snapshotListener = useRef(onSnapshot); snapshotListener.current = onSnapshot;
+  // Panning changes the camera, never personal conversation memory. Preserve
+  // its identity so private autosave does no cloning/encoding for navigation.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Conversation keys invalidate ref-owned memory; camera changes must not rebuild it.
+  const snapshotMemory=useMemo(()=>managedMemory.current(),[chat.turns,chat.attachments,managedChat.screenVersions]);
   useEffect(() => {
     snapshotListener.current?.({ schema: 1, revision: engine.committed, turns: chat.turns, draft: chat.draft, attachments: chat.attachments,
-      model: chat.modelSelection, effort: chat.reasoningEffort, viewport, memory: managedMemory.current() }, chat.busy);
-  }, [engine.committed, chat.turns, chat.draft, chat.attachments, chat.modelSelection, chat.reasoningEffort, viewport, chat.busy, managedChat.screenVersions]);
+      model: chat.modelSelection, effort: chat.reasoningEffort, viewport, memory: snapshotMemory }, chat.busy);
+  }, [engine.committed, chat.turns, chat.draft, chat.attachments, chat.modelSelection, chat.reasoningEffort, viewport, chat.busy, snapshotMemory]);
 
   useEffect(() => {
     if (!gatewayHandoff || gatewayHandoff.autoSubmit || !engine.interactionReady) return;
@@ -1203,22 +1355,16 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const toolbar = contextualToolbarRef.current;
     const selection = activeSelectionBoundsRef.current;
     if (toolbar && selection) {
-      const rendered = renderedViewportRef.current;
-      const placement = toolbar.dataset.placement;
-      if (placement === "dock") toolbar.style.transform = "";
-      else {
-        const anchorX = selection.x + selection.width / 2;
-        const anchorY = placement === "above" ? selection.y
-          : placement === "below" ? selection.y + selection.height
-            : selection.y + selection.height / 2;
-        const deltaX = next.x + anchorX * next.scale - (rendered.x + anchorX * rendered.scale);
-        const deltaY = next.y + anchorY * next.scale - (rendered.y + anchorY * rendered.scale);
-        // Tailwind's -translate-x-1/2 owns the CSS `translate` longhand used to
-        // center this inspector. A separate transform preserves that centering
-        // while following the selected object on every camera preview frame.
-        toolbar.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0)`;
+      const geometry=toolbarPreviewGeometry.current;
+      if(geometry){
+        const rect={left:next.x+selection.x*next.scale,top:next.y+selection.y*next.scale,right:next.x+(selection.x+selection.width)*next.scale,bottom:next.y+(selection.y+selection.height)*next.scale};
+        const visible=rect.right>geometry.viewport.left&&rect.left<geometry.viewport.right&&rect.bottom>geometry.viewport.top&&rect.top<geometry.viewport.bottom;
+        if(visible){
+          const position=resolveCanvasV2ContextToolbarPosition({...geometry,selection:rect,obstacles:[]});
+          toolbar.style.left=`${position.center}px`;toolbar.style.top=`${position.top}px`;toolbar.style.transform='';
+        }
+        toolbar.style.visibility=visible?'':'hidden';
       }
-      toolbar.style.visibility = "";
     }
     const atmosphereLayer = atmosphereLayerRef.current;
     if (atmosphereLayer && !cameraPreviewActiveRef.current) {
@@ -1276,6 +1422,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, [applyViewportVisual]);
 
   const beginCameraPreview = useCallback(() => {
+    interruptCanvasV2ScreenPresentation();
     cameraPreviewActiveRef.current = true;
     const workspace = workspaceRef.current;
     if (workspace && workspace.dataset.canvasV2CameraPreview !== "active") workspace.dataset.canvasV2CameraPreview = "active";
@@ -1374,6 +1521,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       authoredBounds ? 96 : 48,
     ));
   }, [cameraSize, commitViewport, contentInsets]);
+
+  useEffect(()=>{
+    setEditChatOpen(false);
+    if(!screenEditNodeId)return;
+    setTool('select');setLayersOpen(false);setObjectMenu(undefined);
+    // Changing editing scope must not move the person's camera. Zoom to
+    // selection remains an explicit canvas navigation action.
+  },[screenEditNodeId]);
 
   const { referenceRailFlowIds, rememberReferenceRail } = managedChat;
 
@@ -1595,7 +1750,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       return;
     }
     const target = event.target as HTMLElement;
-    const panning = tool === "pan" || spacePan || event.button === 1;
+    const panning = canvasView === 'preview' || tool === "pan" || spacePan || event.button === 1;
     if (!panning) {
       if (tool === "select" && target.closest("[data-canvas-v2-workspace-content]")) return;
       if (tool === "select") {
@@ -1616,8 +1771,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const forwardedWorkspacePointer = useCallback((event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => {
+    if(collaboration?.enabled)collaboration.pointer(workspacePoint(event.clientX,event.clientY));
     const activeDrawing = drawingGestureRef.current?.pointerId === event.pointerId;
-    if (tool === "draw" && !spacePan && (event.button === 0 || activeDrawing)) {
+    if (canvasView === "design" && tool === "draw" && !spacePan && (event.button === 0 || activeDrawing)) {
       if (event.phase === "down") startDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
       else if (event.phase === "move") updateDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
       else finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
@@ -1627,7 +1783,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     // primary button remains held. Once a select gesture owns the pointer,
     // route the complete sequence through marquee handling by pointer id.
     const activeMarquee = marqueeRef.current?.pointerId === event.pointerId;
-    if (tool === "select" && (event.button === 0 || activeMarquee)) {
+    if (canvasView === "design" && tool === "select" && !spacePan && (event.button === 0 || activeMarquee)) {
       const point = workspacePoint(event.clientX, event.clientY);
       if (event.phase === "down") {
         const screen = { x: event.clientX, y: event.clientY };
@@ -1658,7 +1814,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       return;
     }
     previewViewport((current) => constrainViewport({ ...current, x: pan.originX + event.clientX - pan.x, y: pan.originY + event.clientY - pan.y }));
-  }, [beginCameraPreview, constrainViewport, finishCameraPreview, previewViewport, selectElement, spacePan, tool, workspacePoint]);
+  }, [beginCameraPreview, canvasView, collaboration, constrainViewport, finishCameraPreview, previewViewport, selectElement, spacePan, tool, workspacePoint]);
 
   const finishMarquee = (gesture: MarqueeGesture) => {
     if (marqueePreviewFrameRef.current !== undefined) cancelAnimationFrame(marqueePreviewFrameRef.current);
@@ -1719,7 +1875,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const paintSelectionPreview = (gesture: DirectGesture, preview: DirectGesturePreview) => {
-    canvasSceneRef.current?.applyTransientGeometry(transientGeometryForDirectGesture(gesture, preview));
+    canvasSceneRef.current?.applyTransientGeometry({...remoteTransientRef.current,...transientGeometryForDirectGesture(gesture, preview)});
+    collaboration?.motion(Object.entries(preview.elementBounds).map(([nodeId,bounds])=>({nodeId,...bounds})));
     const selection = selectionOverlayRef.current;
     if (selection) {
       selection.style.left = `${preview.bounds.x}px`;
@@ -1816,6 +1973,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     if (gesturePreviewFrameRef.current !== undefined) cancelAnimationFrame(gesturePreviewFrameRef.current);
     gesturePreviewFrameRef.current = undefined;
     pendingGesturePreviewRef.current = undefined;
+    collaboration?.motion(undefined);
   };
 
   const flushDirectGesturePreview = (gesture: DirectGesture) => {
@@ -2005,7 +2163,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   updateDirectGestureHandlerRef.current = updateDirectGesture;
   finishDirectGestureHandlerRef.current = finishDirectGesture;
 
-  const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const pointerMove = (event: ReactPointerEvent<HTMLElement>) => {
     lastCanvasPointerRef.current = workspacePoint(event.clientX, event.clientY);
     if (placementRef.current?.pointerId === event.pointerId) {
       placementRef.current = { ...placementRef.current, end: workspacePoint(event.clientX, event.clientY) };
@@ -2097,7 +2255,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     cancelDirectGesturePreview();
     const mutable = elements.filter((item) => item.nodeId !== "canvas" && !item.locked);
     const selectionBounds = unionCanvasV2ObjectBounds(mutable.map((item) => item.bounds));
-    if (!mutable.length || !selectionBounds || engine.applyingManualEdit) return false;
+    if (!mutable.length || !selectionBounds || engine.applyingManualEdit || collaborationReadOnly) return false;
+    if (mutable.some(item => collaboration?.getStatus().busyObjects.includes(item.nodeId))) { setMutationError("A teammate is editing this element. Select another object."); return false; }
     engine.beginHumanEdit();
     const elementBounds = Object.fromEntries(mutable.map((item) => [item.nodeId, item.bounds]));
     const selectedIds = new Set(mutable.map((item) => item.nodeId));
@@ -2119,12 +2278,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const tagCanvasElement = (element: CanvasV2InspectableElement) => {
-    const revision = engine.readCommittedRevision(), range = findCanvasV2SourceNodeRange(revision.document.html, element.nodeId);
-    if (!range || element.hidden) return;
-    const screen = readCanvasV2Screens(revision.document.html).find(screen => screen.nodeId === element.nodeId);
-    const label = screen?.screen.title || element.altText || element.textPreview || element.label || (element.kind === 'evidence' ? 'Reference screen' : element.kind || 'Canvas object');
-    window.dispatchEvent(new CustomEvent(CANVAS_V2_OBJECT_FEEDBACK, { detail: { nodeId: element.nodeId, label: label.slice(0,180), kind: element.kind || 'object', fingerprint: canvasV2FeedbackFingerprint(revision.document.html.slice(range.start, range.end)) } }));
-    setPanel('chat'); setChatOpen(true);
+    if(!element.hidden)window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:[element.nodeId]}}));
   };
   const forwardedElementPointer = (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => {
     if (feedbackPickingRef.current && !spacePan && tool !== "pan" && event.button === 0) { if (event.phase === 'down') tagCanvasElement(event.element); return; }
@@ -2257,7 +2411,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     deletionChromeSnapshotsRef.current = [];
   };
 
+  const serializeManualNativeScene = useCallback((next: CanvasV2NativeSceneDocument) => {
+    const previous = engine.readNativeScene();
+    if (!previous) throw new Error("Read the latest canvas before editing it.");
+    return serializeCanvasV2NativeSceneChanges(engine.readCommittedRevision().document, previous, next);
+  }, [engine]);
+
   const submitMutation = (mutation: CanvasV2ManualMutation) => {
+    if(collaborationReadOnly){setMutationError("This canvas is view-only.");return false;}
     const atomicMutations = mutation.kind === "batch" ? mutation.mutations : [mutation];
     const deletedNodeIds = atomicMutations.flatMap((item) => item.kind === "delete" ? [item.nodeId] : []);
     if (deletedNodeIds.length) previewDeletion(deletedNodeIds);
@@ -2272,7 +2433,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const document = nextNativeScene
         ? (geometryOnly && sourceScene
           ? patchCanvasV2NativeDocument(engine.readCommittedRevision().document, sourceScene, nextNativeScene)
-          : undefined) ?? serializeCanvasV2NativeScene(nextNativeScene)
+          : undefined) ?? serializeManualNativeScene(nextNativeScene)
         : applyCanvasV2ManualMutation(engine.committed.document, mutation);
       const createdSelection = atomicMutations.flatMap((item) => item.kind === "create"
         ? [item.nodeId]
@@ -2811,7 +2972,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         if (existing && existing.url !== asset.url) throw new Error("Copied evidence conflicts with an existing source. Paste it into a separate board.");
         if (!existing) evidence.push(asset);
       }
-      if (engine.applyManualDocument(serializeCanvasV2NativeScene(positioned), `Pasted ${pasted.nodeIds.length} objects.`, evidence, positioned, { selectionNodeIds: pasted.nodeIds })) {
+      if (engine.applyManualDocument(serializeManualNativeScene(positioned), `Pasted ${pasted.nodeIds.length} objects.`, evidence, positioned, { selectionNodeIds: pasted.nodeIds })) {
         clipboard.pasteCount += 1;
         setSelectedElements([]);
         setSelectionTarget(pasted.nodeIds[0]);
@@ -2839,7 +3000,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       editable.innerHTML = sanitizeCanvasV2RichTextHtml(html);
       const created = applyCanvasV2NativeSceneMutation(source, { kind: "create", primitive: "text", nodeId, x: origin.x, y: origin.y, width: 360, height: 80, textMode: "area" });
       const native = applyCanvasV2NativeSceneMutation(created, { kind: "text", nodeId, text, nativeContent: readCanvasV2RichText(editable) });
-      if (engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Pasted formatted text.", undefined, native, { selectionNodeIds: [nodeId] })) { setSelectedElements([]); setSelectionTarget(nodeId); }
+      if (engine.applyManualDocument(serializeManualNativeScene(native), "Pasted formatted text.", undefined, native, { selectionNodeIds: [nodeId] })) { setSelectedElements([]); setSelectionTarget(nodeId); }
     } else createPrimitive("text", { text, origin, size: { width: 360, height: 48 }, textMode: "area" });
   };
 
@@ -2935,7 +3096,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const snapshot = copyCanvasV2NativeSelection(source, [element.nodeId]);
       if (!snapshot) return;
       const pasted = pasteCanvasV2NativeClipboard(source, snapshot, Date.now().toString(36));
-      if (!engine.applyManualDocument(serializeCanvasV2NativeScene(pasted.scene), "Created a crop copy of the source.", undefined, pasted.scene, { selectionNodeIds: pasted.nodeIds })) return;
+      if (!engine.applyManualDocument(serializeManualNativeScene(pasted.scene), "Created a crop copy of the source.", undefined, pasted.scene, { selectionNodeIds: pasted.nodeIds })) return;
       source = pasted.scene; node = source.nodes.find((item) => item.sourceNodeId === pasted.nodeIds[0])!;
       setSelectedElements([]); setSelectionTarget(node.sourceNodeId);
     }
@@ -3021,6 +3182,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const activatePrimitive = (primitive: CanvasV2ManualPrimitive, options: { shapeVariant?: CanvasV2ShapeVariant; connectorVariant?: CanvasV2ConnectorVariant } = {}) => {
     if (canvasSceneRef.current?.finishTextEditing() === false) return;
+    setCanvasView("design");setScreenEditNodeId(undefined);
     if (primitive !== "connector") selectElement(undefined);
     setPlacementTool({ primitive, ...options });
     setTool("place");
@@ -3139,14 +3301,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       while (rows[0].length < requiredColumns) { native = applyCanvasV2NativeSceneMutation(native, { kind: "table-edit", nodeId: tableId, action: "add-column" }); rows = canvasV2NativeTableRows(native, tableId); }
       const mutations = values.flatMap((items, r) => items.map((value, c) => ({ kind: "text" as const, nodeId: rows[row + r][column + c].sourceNodeId!, text: value })));
       native = applyCanvasV2NativeSceneMutation(native, { kind: "batch", label: "Pasted spreadsheet cells.", mutations });
-      engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Pasted spreadsheet cells.", undefined, native, { selectionNodeIds: [cellId] });
+      engine.applyManualDocument(serializeManualNativeScene(native), "Pasted spreadsheet cells.", undefined, native, { selectionNodeIds: [cellId] });
     } else {
       const index = row * rows[0].length + column + (action === "previous" ? -1 : 1);
       if (index < 0) return;
       if (index >= rows.flat().length) {
         if (rows.length >= 200) return;
         native = applyCanvasV2NativeSceneMutation(native, { kind: "table-edit", nodeId: tableId, action: "add-row" });
-        if (!engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Added a table row.", undefined, native)) return;
+        if (!engine.applyManualDocument(serializeManualNativeScene(native), "Added a table row.", undefined, native)) return;
         rows = canvasV2NativeTableRows(native, tableId);
       }
       const nextId = rows.flat()[index]?.sourceNodeId;
@@ -3155,6 +3317,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const chooseLocalImage = (replaceNodeId?: string, includePlayableMedia = false, projectLibrary = false) => {
+    if(!projectLibrary)setCanvasView("design");
     projectModelUploadRef.current = false;
     projectImageUploadRef.current = projectLibrary;
     imageReplaceTargetRef.current = replaceNodeId;
@@ -3187,24 +3350,29 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         if(!owned||owned.hidden)throw new Error('This item changed. Select it again.');
         const parser=new DOMParser();
         if(request.action==='remove'&&screenSectionNeedsAgent(current.screen,request.target,parser)){request.resolve({ok:false,needsAgent:true});return;}
-        if(!['text','appearance','remove','move-up','move-down'].includes(request.action)){request.resolve({ok:false});return;}
-        const encoded=request.action==='appearance'?editScreenAppearance(current.screen,request.target,request.styles!,parser):request.action==='text'?editScreenText(current.screen,request.target,request.text!,parser):request.action==='remove'?removeScreenSection(current.screen,request.target,parser):moveScreenSection(current.screen,request.target,request.action==='move-up'?'up':'down',parser);
-        if(encoded===current.encoded){request.resolve({ok:true});return;}
+        if(!['design','text','rich-text','appearance','element','remove','move-up','move-down'].includes(request.action)){request.resolve({ok:false});return;}
+        const design=request.action==='design'&&request.operation?applyScreenDesignOperation(current.screen,request.targets??[request.target],request.operation,parser):undefined;
+        const encoded=design?.encoded??(request.action==='rich-text'?editScreenRichText(current.screen,request.target,request.html!,parser):request.action==='element'?(()=>{let value=current.screen;if(request.attributes&&Object.keys(request.attributes).length)value=parseCanvasV2Screen(editScreenAttributes(value,request.target,request.attributes,parser));if(request.text!==undefined)value=parseCanvasV2Screen(editScreenText(value,request.target,request.text,parser));if(request.styles&&Object.keys(request.styles).length)value=parseCanvasV2Screen(editScreenAppearance(value,request.target,request.styles,parser));return encodeCanvasV2Screen(value)})():request.action==='appearance'?editScreenAppearance(current.screen,request.target,request.styles!,parser):request.action==='text'?editScreenText(current.screen,request.target,request.text!,parser):request.action==='remove'?removeScreenSection(current.screen,request.target,parser):moveScreenSection(current.screen,request.target,request.action==='move-up'?'up':'down',parser));
+        if(encoded===current.encoded){request.resolve({ok:true,encoded});return;}
         validateCanvasV2ScreenAssets(parseCanvasV2Screen(encoded),revision.evidence);
         const next=reviseCanvasV2NativeScreen(scene,request.nodeId,encoded),node=next.nodes.find(item=>(item.sourceNodeId??item.id)===request.nodeId)!;
         node.userEdited=true;node.lastAuthor='user';node.attributes['data-canvas-v2-user-edited']='content';node.attributes['data-canvas-v2-last-author']='user';
-        const summary=request.action==='appearance'?'Changed screen appearance':request.action==='text'?'Edited screen text':request.action==='remove'?`Removed ${request.target.label||'section'}`:`Moved ${request.target.label||'section'} ${request.action==='move-up'?'up':'down'}`;
-        if(!engine.applyManualDocument(serializeCanvasV2NativeScene(next),summary,revision.evidence,next,{origin:'user',selectionNodeIds:[request.nodeId]}))throw new Error('This item changed. Select it again.');
+        const summary=design?.label??(request.action==='element'?'Edited screen element':request.action==='appearance'?'Changed screen appearance':['text','rich-text'].includes(request.action)?'Edited screen text':request.action==='remove'?`Removed ${request.target.label||'section'}`:`Moved ${request.target.label||'section'} ${request.action==='move-up'?'up':'down'}`);
+        if(!engine.applyManualDocument(serializeManualNativeScene(next),summary,revision.evidence,next,{origin:'user',selectionNodeIds:[request.nodeId]}))throw new Error('This item changed. Select it again.');
         // A direct edit is a deliberate interaction with this phone. Retain
         // that exact owner as the scope for subsequent chat edits and history.
-        setSelectedElements([]);
-        setSelectionTarget(request.nodeId);
-        request.resolve({ok:true});
+        if(!['element','rich-text'].includes(request.action)){
+          setSelectedElements(current=>current.length===1&&current[0].nodeId===request.nodeId?current:[]);
+          setSelectionTarget(request.nodeId);
+        }
+        request.resolve({ok:true,encoded,...(design?{selectors:design.selectors}:{})});
       }catch(error){request.resolve({ok:false,error:error instanceof Error?error.message:'This item changed. Select it again.'})}
     };
+    const failed=(event:Event)=>{const message=(event as CustomEvent).detail;if(typeof message==='string')setMutationError(message.slice(0,300))};
     window.addEventListener(SCREEN_DIRECT_EDIT_EVENT,edit);
-    return()=>window.removeEventListener(SCREEN_DIRECT_EDIT_EVENT,edit);
-  },[engine]);
+    window.addEventListener(SCREEN_DIRECT_SAVE_FAILURE_EVENT,failed);
+    return()=>{window.removeEventListener(SCREEN_DIRECT_EDIT_EVENT,edit);window.removeEventListener(SCREEN_DIRECT_SAVE_FAILURE_EVENT,failed)};
+  },[engine,serializeManualNativeScene]);
 
   useEffect(() => {
     const replaceImage = async (event: Event) => {
@@ -3229,14 +3397,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         const node = next.nodes.find(item => (item.sourceNodeId ?? item.id) === request.nodeId)!;
         node.userEdited = true; node.lastAuthor = 'user';
         node.attributes['data-canvas-v2-user-edited'] = 'asset'; node.attributes['data-canvas-v2-last-author'] = 'user';
-        if (!engine.applyManualDocument(serializeCanvasV2NativeScene(next), `Replaced ${request.target.label || 'image'}`, evidence, next, {origin:'user'})) throw new Error('The canvas changed.');
+        if (!engine.applyManualDocument(serializeManualNativeScene(next), `Replaced ${request.target.label || 'image'}`, evidence, next, {origin:'user'})) throw new Error('The canvas changed.');
       } catch {
         setMutationError('The image could not be replaced. Drop it onto the current image again.');
       }
     };
     window.addEventListener(SCREEN_ASSET_DROP_EVENT, replaceImage);
     return () => window.removeEventListener(SCREEN_ASSET_DROP_EVENT, replaceImage);
-  }, [engine]);
+  }, [engine,serializeManualNativeScene]);
 
   const addPreparedCanvasImages = (images: readonly CanvasV2ChatImageAttachment[], origin?: { x: number; y: number }, replaceNodeId?: string) => {
     if (!images.length) return false;
@@ -3325,7 +3493,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       ]);
       const native = applyCanvasV2NativeSceneMutation(scene, { kind: "batch", label: "Added playable media.", mutations });
       const evidence = entries.map(item => canvasV2SuppliedMediaAsset(item.media, item.mimeType));
-      if (!engine.applyManualDocument(serializeCanvasV2NativeScene(native), "Added playable media.", [...engine.readCommittedRevision().evidence, ...evidence], native, { selectionNodeIds: entries.map(item => item.nodeId) })) throw new Error(engine.readManualFailure() || "The media could not be added.");
+      if (!engine.applyManualDocument(serializeManualNativeScene(native), "Added playable media.", [...engine.readCommittedRevision().evidence, ...evidence], native, { selectionNodeIds: entries.map(item => item.nodeId) })) throw new Error(engine.readManualFailure() || "The media could not be added.");
       mediaUrls.current.push(...items.filter(item => item.src.startsWith("blob:")).map(item => item.src));
       cancelDrawingGesture(); setTool("select"); setSelectedElements([]); setSelectionTarget(entries.at(-1)?.nodeId); setMutationError(undefined); return true;
     } catch (error) { setMutationError(error instanceof Error ? error.message : "The media could not be added."); return false; }
@@ -3353,7 +3521,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     }
     try {
       const prepared = await prepareCanvasV2CanvasImages(replaceNodeId ? images.slice(0, 1) : images);
-      if (!engine.interactionReady || engine.applyingManualEdit) return false;
+      if (!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly) return false;
       return addPreparedCanvasImages(prepared, origin, replaceNodeId);
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : "The image could not be prepared.");
@@ -3374,7 +3542,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         const revision = engine.readCommittedRevision(), scene = engine.readNativeScene();
         if (!scene) throw new Error('Wait for the canvas to be ready.');
         const model = uploadedProjectModel({ id: `model-${crypto.randomUUID()}`, name: imported.name, mimeType: 'model/gltf-binary', dataUrl: imported.dataUrl, createdAt: new Date().toISOString() });
-        if (!engine.applyManualDocument(serializeCanvasV2NativeScene(scene), 'Added 3D model', [...revision.evidence, model], scene, { origin: 'user' })) throw new Error('The canvas changed.');
+        if (!engine.applyManualDocument(serializeManualNativeScene(scene), 'Added 3D model', [...revision.evidence, model], scene, { origin: 'user' })) throw new Error('The canvas changed.');
       })().catch(error => setMutationError(error instanceof Error ? error.message : 'The model could not be added.'));
       return;
     }
@@ -3383,7 +3551,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       void (async()=>{
         const images=await prepareCanvasV2CanvasImages(files), revision=engine.readCommittedRevision(),scene=engine.readNativeScene();
         if(!scene||scene.revisionId!==revision.id)return;
-        if(!engine.applyManualDocument(serializeCanvasV2NativeScene(scene),'Added project images',[...revision.evidence,...images.map(uploadedProjectImage)],scene,{origin:'user'}))throw new Error('The canvas changed.');
+        if(!engine.applyManualDocument(serializeManualNativeScene(scene),'Added project images',[...revision.evidence,...images.map(uploadedProjectImage)],scene,{origin:'user'}))throw new Error('The canvas changed.');
       })().catch(()=>setMutationError('The images could not be added. Try again.'));
       return;
     }
@@ -3391,6 +3559,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const beginPrimitiveDrag = (event: ReactDragEvent<HTMLElement>, primitive: CanvasV2ManualPrimitive, shapeVariant?: CanvasV2ShapeVariant, connectorVariant?: CanvasV2ConnectorVariant) => {
+    setCanvasView("design");setScreenEditNodeId(undefined);
     const payload = { primitive, ...(shapeVariant ? { shapeVariant } : {}), ...(connectorVariant ? { connectorVariant } : {}) };
     primitiveDragRef.current = payload;
     setPrimitiveDrag(payload);
@@ -3424,6 +3593,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const dropOnCanvas = (event: ReactDragEvent<HTMLElement>) => {
     event.preventDefault();
+    if(canvasView === "preview")return;
     event.stopPropagation();
     if (!engine.interactionReady || engine.applyingManualEdit) return;
     const origin = workspacePoint(event.clientX, event.clientY);
@@ -3513,26 +3683,32 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const undoCanvas = () => {
+    if(collaboration?.enabled){void flushScreenDirectEdits().then(()=>collaboration.undo());return;}
     const restored = engine.undo();
+    const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
+    const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
     setEditingNodeId(undefined);
     setSelectedElements([]);
     setSelectionTarget(undefined);
     setToolbarMenu(undefined);
-    setHistorySelectionRestore(restored?.selectionNodeIds.length ? {
+    setHistorySelectionRestore(restored&&restoredIds.length ? {
       revisionId: restored.revisionId,
-      nodeIds: restored.selectionNodeIds,
+      nodeIds: restoredIds,
     } : undefined);
   };
 
   const redoCanvas = () => {
+    if(collaboration?.enabled){void flushScreenDirectEdits().then(()=>collaboration.redo());return;}
     const restored = engine.redo();
+    const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
+    const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
     setEditingNodeId(undefined);
     setSelectedElements([]);
     setSelectionTarget(undefined);
     setToolbarMenu(undefined);
-    setHistorySelectionRestore(restored?.selectionNodeIds.length ? {
+    setHistorySelectionRestore(restored&&restoredIds.length ? {
       revisionId: restored.revisionId,
-      nodeIds: restored.selectionNodeIds,
+      nodeIds: restoredIds,
     } : undefined);
   };
 
@@ -3544,8 +3720,16 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   workspaceKeydownHandlerRef.current = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-screen-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+      if (target?.closest('button, a[href], [role="button"], [role="menuitem"]') && ['Enter',' '].includes(event.key)) return;
+      if (visualFeedbackActive) return;
       const command = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
+      if(canvasView==='preview'){
+        if(event.code==='Space'){event.preventDefault();setSpacePan(true)}
+        else if(event.key==='Escape'){setObjectMenu(undefined);setZoomMenuOpen(false)}
+        else if(!command&&event.shiftKey&&event.code==='Digit1'){event.preventDefault();fitContent()}
+        return;
+      }
       if (!command && event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
         event.preventDefault(); if (event.code === "Digit1") fitContent(); else focusSelection();
       } else if (!command && event.shiftKey && key === "s") { event.preventDefault(); sectionSelection();
@@ -3617,6 +3801,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   workspaceCopyHandlerRef.current = (event: ClipboardEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest('input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"]') || !selectedElements.length || !event.clipboardData) return;
+    if (visualFeedbackActive) { event.preventDefault(); return; }
     const scene = engine.readNativeScene();
     const snapshot = scene && copyCanvasV2NativeSelection(scene, selectedElements.map(item => item.nodeId), engine.committed.evidence);
     if (!snapshot) return;
@@ -3636,11 +3821,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         setMutationError("Image clipboard access is unavailable in this browser.");
       }
     }
-    if (event.type === "cut") batchForSelection("Cut selected objects.", item => item.locked ? undefined : { kind: "delete", nodeId: item.nodeId });
+    if (canvasView === "design" && event.type === "cut") batchForSelection("Cut selected objects.", item => item.locked ? undefined : { kind: "delete", nodeId: item.nodeId });
   };
   workspacePasteHandlerRef.current = (event: ClipboardEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-screen-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+    if (visualFeedbackActive) { event.preventDefault(); return; }
+    if(canvasView==='preview')return;
     if (!engine.interactionReady || engine.applyingManualEdit) return;
     const snapshot = decodeCanvasV2Clipboard(event.clipboardData?.getData("text/html") ?? "");
     if (snapshot) { event.preventDefault(); internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); return; }
@@ -3797,6 +3984,38 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const selectionIsImage = selectedElements.length === 1 && selectedElement?.kind === "image";
   const selectionHasStroke = selectedElements.length === 1 && (selectedElement?.kind === "line" || selectedElement?.kind === "connector" || selectedElement?.kind === "drawing");
   const selectedScreen = selectedElements.length === 1 && engine.nativeScene?.nodes.find(node => node.sourceNodeId === selectedElement?.nodeId)?.attributes[SCREEN_ATTRIBUTE];
+  const selectedScreenDescriptor=useMemo(()=>selectedScreen?parseCanvasV2Screen(selectedScreen):undefined,[selectedScreen]);
+  useEffect(()=>{
+    if(canvasView!=='design')return;
+    const focus=!collaborationReadOnly&&selectedElements.length===1&&!selectedElement?.locked&&selectedScreenDescriptor&&!selectedScreenDescriptor.simulation?selectedElement?.nodeId:undefined;
+    setScreenEditNodeId(focus);
+  },[canvasView,collaborationReadOnly,selectedElements.length,selectedElement?.nodeId,selectedElement?.locked,selectedScreenDescriptor]);
+  const changeCanvasView = async (next:'design'|'preview') => {
+    if(next===canvasView)return;
+    try {
+      await flushScreenDirectEdits();
+      setCanvasV2FeedbackPicking(false);setToolbarMenu(undefined);setObjectMenu(undefined);setLayersOpen(false);setEditingNodeId(undefined);setTool('select');
+      if(next==='preview'){
+        previewSelection.current={ids:selectedElements.map(item=>item.nodeId),screenId:screenEditNodeId};
+        setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined);setHoveredElement(undefined);
+      }else{
+        const remembered=previewSelection.current;
+        const elements=remembered.ids.flatMap(id=>{const element=sceneElementsRef.current.find(item=>item.nodeId===id&&!item.hidden);return element?[element]:[]});
+        setSelectedElements(elements);setSelectionTarget(elements.at(-1)?.nodeId);
+        const candidate=elements.length===1?elements[0]:undefined;
+        const encoded=candidate&&!candidate.locked?engine.readNativeScene()?.nodes.find(node=>(node.sourceNodeId??node.id)===candidate.nodeId)?.attributes[SCREEN_ATTRIBUTE]:undefined;
+        setScreenEditNodeId(encoded&&!parseCanvasV2Screen(encoded).simulation?candidate?.nodeId:undefined);
+      }
+      setCanvasView(next);
+    }catch(error){setMutationError(error instanceof Error?error.message:'Finish saving your changes before switching views.');}
+  };
+  const editSelectedDesign = async () => {
+    try {
+      await flushScreenDirectEdits();
+      setCanvasView('design');setTool('select');setObjectMenu(undefined);
+      if(selectedElement&&!selectedElement.locked&&selectedScreen&&!selectedScreenDescriptor?.simulation)screenEditing.enter(selectedElement.nodeId);
+    }catch(error){setMutationError(error instanceof Error?error.message:'Your last edit could not be saved.');}
+  };
   const selectionCanFill = selectedElements.length === 1 && !selectionIsText && !selectionIsImage && !selectionHasStroke && !selectionPermanent;
   const selectedVisualStyle = selectedElement?.visualStyle;
   activeSelectionBoundsRef.current = activeSelectionBounds;
@@ -3812,10 +4031,19 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const selectedLineStyle = selectedVisualStyle?.borderStyle === "dashed" ? "dashed" : selectedVisualStyle?.borderStyle === "none" || Number.parseFloat(selectedVisualStyle?.borderWidth || "0") <= 0 ? "none" : "solid";
   const fillTriggerPaintMode = canvasV2PaintMode(selectedVisualStyle?.backgroundColor);
   const sourceNodes = useMemo(() => {
-    if (!layersOpen) return [];
+    if (!layersOpen && canvasView!=="design") return [];
     const selectableIds = new Set(sceneElements.map((element) => element.nodeId));
-    const sourceGraph = readCanvasV2BoardObjectGraph(engine.committed.document);
+    const sourceGraph = engine.nativeScene?.revisionId === engine.committed.id
+      ? readCanvasV2NativeBoardObjectGraph(engine.nativeScene)
+      : readCanvasV2BoardObjectGraph(engine.committed.document);
     const sourceById = new Map(sourceGraph.map((node) => [node.nodeId, node]));
+    const displayNames=new Map<string,string>();
+    for(const node of engine.nativeScene?.nodes??[]){
+      let label=node.attributes['aria-label']||node.attributes.alt||node.directText;
+      const screen=node.attributes[SCREEN_ATTRIBUTE];
+      if(screen){try{label=parseCanvasV2Screen(screen).title}catch{/* Keep the retained node label if this source is being replaced. */}}
+      if(label?.trim())displayNames.set(node.sourceNodeId??node.id,label.trim().slice(0,100));
+    }
     // Layers mirrors the objects a person can actually select on the board.
     // Generated section/flow/island wrappers remain internal layout structure
     // and must not reintroduce implicit groups through an alternate UI path.
@@ -3823,7 +4051,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     // Compiler-materialized painted lines are selectable as well. They can
     // exist in native truth before the first manual edit serializes them into
     // source, so merge those honest scene objects into Layers immediately.
-    const authored = sourceGraph.filter((node) => node.kind !== "root" && selectableIds.has(node.nodeId));
+    const authored = sourceGraph.filter((node) => node.kind !== "root" && selectableIds.has(node.nodeId)).map(node=>({...node,label:displayNames.get(node.nodeId)||node.label}));
     const authoredIds = new Set(authored.map((node) => node.nodeId));
     const nativeOnly = sceneElements.flatMap<CanvasV2BoardObject>((element) => {
       if (authoredIds.has(element.nodeId) || element.kind === "root") return [];
@@ -3835,7 +4063,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         depth: sourceParent ? sourceParent.depth + 1 : 0,
         tagName: element.tagName,
         kind: element.kind ?? "object",
-        label: element.label,
+        label: displayNames.get(element.nodeId)||element.label,
         hidden: element.hidden,
         locked: element.locked,
         userEdited: Boolean(element.userEdited),
@@ -3845,7 +4073,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       }];
     });
     return [...authored, ...nativeOnly];
-  }, [engine.committed, layersOpen, sceneElements]);
+  }, [canvasView, engine.committed, engine.nativeScene, layersOpen, sceneElements]);
   const contextualToolbarPosition = useMemo(() => {
     if (!activeSelectionBounds) return undefined;
     const availableWidth = workspaceRef.current?.clientWidth ?? 1_440;
@@ -3857,9 +4085,17 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const selectionRight = viewport.x + (toolbarBounds.x + toolbarBounds.width) * viewport.scale;
     const selectionTop = viewport.y + toolbarBounds.y * viewport.scale;
     const selectionBottom = viewport.y + (toolbarBounds.y + toolbarBounds.height) * viewport.scale;
+    const usable = {left:canvasView==='design'?(editChatOpen?388:264):(chatOpen?442:28),top:96,right:availableWidth-(canvasView==='design'?312:16),bottom:availableHeight-bottomChrome};
+    if(selectionRight<=usable.left||selectionLeft>=usable.right||selectionBottom<=usable.top||selectionTop>=usable.bottom)return undefined;
     const selectedIds = new Set(selectedElements.map((item) => item.nodeId));
+    const byId = new Map(sceneElements.map(item=>[item.nodeId,item]));
+    const relatedToSelection = (item:(typeof sceneElements)[number]) => {
+      let parent=item.parentNodeId;
+      while(parent){if(selectedIds.has(parent))return true;parent=byId.get(parent)?.parentNodeId}
+      return selectedElements.some(selected=>{let parent=selected.parentNodeId;while(parent){if(parent===item.nodeId)return true;parent=byId.get(parent)?.parentNodeId}return false});
+    };
     const occupied = sceneElements
-      .filter((item) => !selectedIds.has(item.nodeId) && !item.hidden)
+      .filter((item) => !selectedIds.has(item.nodeId) && !item.hidden && !relatedToSelection(item))
       .map((item) => ({
         left: viewport.x + item.bounds.x * viewport.scale - 8,
         top: viewport.y + item.bounds.y * viewport.scale - 8,
@@ -3872,6 +4108,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         const bounds = element.getBoundingClientRect();
         return [{ left: bounds.left - 8, top: bounds.top - 8, right: bounds.right + 8, bottom: bounds.bottom + 8 }];
       });
+    toolbarPreviewGeometry.current={toolbar:{width:resolvedToolbarWidth,height:toolbarSize.height},viewport:usable,chrome};
     const chosen = resolveCanvasV2ContextToolbarPosition({
       selection: {
         left: selectionLeft,
@@ -3880,12 +4117,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         bottom: selectionBottom,
       },
       toolbar: { width: resolvedToolbarWidth, height: toolbarSize.height },
-      viewport: {
-        left: (chatOpen ? 430 : 16) + 12,
-        top: 18,
-        right: availableWidth - 16,
-        bottom: availableHeight - bottomChrome,
-      },
+      viewport: usable,
       obstacles: occupied,
       chrome,
     });
@@ -3893,7 +4125,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       placement: chosen.placement,
       style: { left: chosen.center, top: chosen.top },
     };
-  }, [activeSelectionBounds, chatOpen, cropDraft, sceneElements, selectedElements, selectedTable, toolbarSize, viewport]);
+  }, [activeSelectionBounds, canvasView, chatOpen, editChatOpen, cropDraft, sceneElements, selectedElements, selectedTable, toolbarSize, viewport]);
 
   useEffect(() => {
     const toolbar = contextualToolbarRef.current;
@@ -3908,8 +4140,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return () => observer?.disconnect();
   }, [selectedElement, selectedElements.length, toolbarMenu]);
 
+  if (renderBodyStarted !== undefined) emitCanvasV2RenderTiming('WorkspaceBody','render-body',performance.now()-renderBodyStarted,null);
   return (
-    <CanvasV2ScreenIdentities.Provider value={liveReplica?.snapshot.memory?.productIdentities ?? managedChat.productIdentities}><main data-northstar-canvas-entry={gatewayEntry ? "true" : undefined} className="relative h-screen min-h-[680px] overflow-hidden bg-[#fafbff] text-[#181824] transition-colors duration-300 dark:bg-[#0d0e16] dark:text-[#f4f3f8]">
+    <CanvasV2ScreenEditing.Provider value={screenEditingContext}><CanvasV2ScreenIdentities.Provider value={liveReplica?.snapshot.memory?.productIdentities ?? managedChat.productIdentities}><main data-northstar-canvas-view={canvasView} data-northstar-edit-view={screenEditNodeId?"true":undefined} data-northstar-visual-feedback={visualFeedbackActive?"true":undefined} data-northstar-canvas-entry={gatewayEntry ? "true" : undefined} className="relative h-screen min-h-[680px] overflow-hidden bg-[#fafbff] text-[#181824] transition-colors duration-300 dark:bg-[#0d0e16] dark:text-[#f4f3f8]">
       <style>{`
         @keyframes northstarCanvasReveal {
           0% { opacity: 1; transform: scale(1.018); }
@@ -3955,7 +4188,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           <span><span className="block text-[10px] font-black uppercase tracking-[.16em] text-[#8c8c9a] dark:text-[#8e8b99]">North Star</span><span className="block text-sm font-bold tracking-[-.01em]">{sessionTitle || "Untitled canvas"}</span></span>
           <ChevronDown className="h-4 w-4 text-[#7c7c8a] dark:text-[#9995a5]" />
         </button>
-        {!chatOpen && <button aria-label="Open North Star panel" onClick={() => setChatOpen(true)} className="grid h-14 w-12 place-items-center border-l border-[#e8e8ef] text-[#6653e8] hover:bg-[#f2efff] dark:border-white/[.08] dark:text-[#b4a9ff] dark:hover:bg-white/[.06]"><MessageSquare className="h-4 w-4" /></button>}
+        {!(canvasView==="design"?editChatOpen:chatOpen) && <button aria-label="Open North Star panel" onClick={() => {if(canvasView==="design")setEditChatOpen(true);else setChatOpen(true)}} className="grid h-14 w-12 place-items-center border-l border-[#e8e8ef] text-[#6653e8] hover:bg-[#f2efff] dark:border-white/[.08] dark:text-[#b4a9ff] dark:hover:bg-white/[.06]"><MessageSquare className="h-4 w-4" /></button>}
+        {collaboration&&<CanvasCollaborationToolbar client={collaboration} onEnable={onEnableCollaboration?async()=>{await flushScreenDirectEdits();await onEnableCollaboration(engine.readCommittedRevision())}:undefined}/>}
       </div>
 
       {northStarMenuOpen && (
@@ -4008,24 +4242,25 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       <div ref={statusPillRef} className="absolute right-5 top-5 z-50 flex h-14 items-center gap-3 rounded-2xl border border-[#dedfea] bg-white px-2.5 shadow-[0_10px_32px_rgba(51,45,95,.13)] dark:border-white/[.1] dark:bg-[#1d1c24] dark:shadow-[0_14px_40px_rgba(0,0,0,.32)]">
         <span hidden aria-hidden="true" data-testid="canvas-v2-loop-status">{chat.routing ? "understanding request" : engine.running ? "working" : engine.loop?.status.replaceAll("-", " ") ?? (chat.busy ? "working" : "ready")}</span>
         <span hidden aria-hidden="true" data-testid="canvas-v2-committed-revision">{engine.committed.id}</span>
-        {engine.committed.sceneTransaction?.origin === "northstar" && <button type="button" onClick={showLatestComposition} className="rounded-lg px-2 py-1 text-xs font-semibold text-[#6653e8] hover:bg-[#f0edff] dark:text-[#b9aeff] dark:hover:bg-white/[.07]">Show on canvas</button>}
+        {<button type="button" onClick={showLatestComposition} className="rounded-lg px-2 py-1 text-xs font-semibold text-[#6653e8] hover:bg-[#f0edff] dark:text-[#b9aeff] dark:hover:bg-white/[.07]" aria-label="Show latest work on canvas" title="Show latest work on canvas"><Layers3 className="h-4 w-4" /></button>}
+        <button type="button" aria-label="Design view" title={canvasView==='design'?'Switch to Preview view':'Switch to Design view'} aria-pressed={canvasView==='design'} onClick={()=>void changeCanvasView(canvasView==='design'?'preview':'design')} className="grid h-9 w-9 place-items-center rounded-[10px] text-[#81798d] transition-colors hover:bg-black/5 aria-pressed:bg-white aria-pressed:text-[#7057da] aria-pressed:shadow-sm dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:aria-pressed:bg-white/[.09] dark:aria-pressed:text-[#c4b4ff]"><PenTool className="h-4 w-4" strokeWidth={1.7}/></button>
         <button type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title="Toggle theme" className="grid h-9 w-9 place-items-center rounded-[11px] text-[#676573] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#aaa6b4] dark:hover:bg-white/[.07] dark:hover:text-[#c1b8ff]">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
       </div>
 
-      {chatOpen && <aside ref={chatPanelRef} style={floatingPanel.rect ? { left: floatingPanel.rect.x, top: floatingPanel.rect.y, width: floatingPanel.rect.width, height: floatingPanel.rect.height, bottom: "auto", ...(floatingPanel.active ? { userSelect: "none" as const } : {}) } : undefined} data-testid="canvas-v2-floating-panel" className="@container absolute bottom-24 left-5 top-[90px] z-40 flex w-[390px] flex-col overflow-hidden rounded-[24px] border border-[#dedee8] bg-white shadow-[0_24px_80px_rgba(46,42,88,.14)] dark:border-white/[.1] dark:bg-[#191820] dark:shadow-[0_28px_85px_rgba(0,0,0,.38)] 2xl:bottom-5">
-        {(["n", "ne", "e", "se", "s", "sw", "w", "nw"] as const).map(handle => <button key={handle} aria-label={`Resize North Star panel ${{n:"top",ne:"top right",e:"right",se:"bottom right",s:"bottom",sw:"bottom left",w:"left",nw:"top left"}[handle]}`} title="Drag to resize; arrow keys for precision" onPointerDown={floatingPanel.pointerDown(handle)} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown(handle)} className="group absolute z-50 touch-none rounded text-[#aaa4bb] hover:text-[#7560e8] focus-visible:text-[#7560e8] focus-visible:outline-none dark:text-[#777180] dark:hover:text-[#b9aeff] dark:focus-visible:text-[#b9aeff]" style={{ cursor: `${handle === 'n' || handle === 's' ? 'ns' : handle === 'e' || handle === 'w' ? 'ew' : handle === 'ne' || handle === 'sw' ? 'nesw' : 'nwse'}-resize`, ...(handle.includes('n') ? { top: 0 } : handle.includes('s') ? { bottom: 0 } : { top: 20, bottom: 20 }), ...(handle.includes('w') ? { left: 0 } : handle.includes('e') ? { right: 0 } : { left: 20, right: 20 }), width: handle === 'n' || handle === 's' ? undefined : handle.length === 2 ? 22 : 9, height: handle === 'e' || handle === 'w' ? undefined : handle.length === 2 ? 22 : 9 }}><span aria-hidden="true" className="pointer-events-none absolute rounded-sm bg-current opacity-0 transition-opacity duration-150 group-hover:opacity-70 group-focus-visible:opacity-70" style={handle.length === 2 ? { background: 'transparent', width: 10, height: 10, top: handle.includes('n') ? 7 : undefined, bottom: handle.includes('s') ? 7 : undefined, left: handle.includes('w') ? 7 : undefined, right: handle.includes('e') ? 7 : undefined, borderTop: handle.includes('n') ? '2px solid currentColor' : undefined, borderBottom: handle.includes('s') ? '2px solid currentColor' : undefined, borderLeft: handle.includes('w') ? '2px solid currentColor' : undefined, borderRight: handle.includes('e') ? '2px solid currentColor' : undefined } : handle === 'n' || handle === 's' ? { width: 28, height: 3, left: '50%', top: 3, transform:'translateX(-50%)' } : { width: 3, height: 28, top:'50%', left:3, transform:'translateY(-50%)' }} /></button>)}
+      {(canvasView==="design"?editChatOpen:chatOpen) && <aside ref={chatPanelRef} style={canvasView==="design"?{position:"fixed",left:16,top:90,bottom:16,width:360,zIndex:1003}:floatingPanel.rect ? { left: floatingPanel.rect.x, top: floatingPanel.rect.y, width: floatingPanel.rect.width, height: floatingPanel.rect.height, bottom: "auto", ...(floatingPanel.active ? { userSelect: "none" as const } : {}) } : undefined} data-testid="canvas-v2-floating-panel" className="@container absolute bottom-24 left-5 top-[90px] z-40 flex w-[390px] flex-col overflow-hidden rounded-[24px] border border-[#dedee8] bg-white shadow-[0_24px_80px_rgba(46,42,88,.14)] dark:border-white/[.1] dark:bg-[#191820] dark:shadow-[0_28px_85px_rgba(0,0,0,.38)] 2xl:bottom-5">
+        {canvasView!=="design"&&(["n", "ne", "e", "se", "s", "sw", "w", "nw"] as const).map(handle => <button key={handle} aria-label={`Resize North Star panel ${{n:"top",ne:"top right",e:"right",se:"bottom right",s:"bottom",sw:"bottom left",w:"left",nw:"top left"}[handle]}`} title="Drag to resize; arrow keys for precision" onPointerDown={floatingPanel.pointerDown(handle)} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown(handle)} className="group absolute z-50 touch-none rounded text-[#aaa4bb] hover:text-[#7560e8] focus-visible:text-[#7560e8] focus-visible:outline-none dark:text-[#777180] dark:hover:text-[#b9aeff] dark:focus-visible:text-[#b9aeff]" style={{ cursor: `${handle === 'n' || handle === 's' ? 'ns' : handle === 'e' || handle === 'w' ? 'ew' : handle === 'ne' || handle === 'sw' ? 'nesw' : 'nwse'}-resize`, ...(handle.includes('n') ? { top: 0 } : handle.includes('s') ? { bottom: 0 } : { top: 20, bottom: 20 }), ...(handle.includes('w') ? { left: 0 } : handle.includes('e') ? { right: 0 } : { left: 20, right: 20 }), width: handle === 'n' || handle === 's' ? undefined : handle.length === 2 ? 22 : 9, height: handle === 'e' || handle === 'w' ? undefined : handle.length === 2 ? 22 : 9 }}><span aria-hidden="true" className="pointer-events-none absolute rounded-sm bg-current opacity-0 transition-opacity duration-150 group-hover:opacity-70 group-focus-visible:opacity-70" style={handle.length === 2 ? { background: 'transparent', width: 10, height: 10, top: handle.includes('n') ? 7 : undefined, bottom: handle.includes('s') ? 7 : undefined, left: handle.includes('w') ? 7 : undefined, right: handle.includes('e') ? 7 : undefined, borderTop: handle.includes('n') ? '2px solid currentColor' : undefined, borderBottom: handle.includes('s') ? '2px solid currentColor' : undefined, borderLeft: handle.includes('w') ? '2px solid currentColor' : undefined, borderRight: handle.includes('e') ? '2px solid currentColor' : undefined } : handle === 'n' || handle === 's' ? { width: 28, height: 3, left: '50%', top: 3, transform:'translateX(-50%)' } : { width: 3, height: 28, top:'50%', left:3, transform:'translateY(-50%)' }} /></button>)}
         <div className="flex h-[58px] shrink-0 items-center border-b border-[#ececf2] px-3 dark:border-white/[.08]">
-          <button aria-label="Move North Star panel" title="Drag to move; arrow keys for precision" onPointerDown={floatingPanel.pointerDown('move')} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown('move')} className="mr-1 grid h-9 w-5 shrink-0 touch-none cursor-grab place-items-center rounded text-[#898895] active:cursor-grabbing focus-visible:outline focus-visible:outline-[#8b79ff]"><span aria-hidden="true">⠿</span></button>
+          <button aria-label="Move North Star panel" disabled={canvasView==="design"} title={canvasView==="design"?"Northstar chat":"Drag to move; arrow keys for precision"} onPointerDown={floatingPanel.pointerDown('move')} onPointerMove={floatingPanel.pointerMove} onPointerUp={floatingPanel.pointerEnd} onPointerCancel={floatingPanel.pointerEnd} onLostPointerCapture={floatingPanel.pointerEnd} onKeyDown={floatingPanel.keyDown('move')} className="mr-1 grid h-9 w-5 shrink-0 touch-none cursor-grab place-items-center rounded text-[#898895] active:cursor-grabbing focus-visible:outline focus-visible:outline-[#8b79ff]"><span aria-hidden="true">⠿</span></button>
           <div className="grid min-w-0 flex-1 grid-cols-4 gap-0.5 rounded-[14px] bg-[#f6f6f9] p-1 dark:bg-white/[.045]">
             {(["chat", "shapes", "apps", "assets"] as Panel[]).map((item) => {
-              const Icon = item === "chat" ? MessageSquare : item === "shapes" ? Shapes : item === "assets" ? ImageIcon : AppWindow;
-              return <button key={item} onClick={() => setPanel(item)} className={`flex h-9 items-center justify-center gap-1 rounded-[10px] px-1 text-xs font-bold capitalize transition ${panel === item ? "bg-white text-[#272735] shadow-[0_2px_8px_rgba(43,40,72,.08)] dark:bg-white/[.1] dark:text-[#f3f1f7]" : "text-[#898895] hover:text-[#555461] dark:text-[#8f8b99] dark:hover:text-[#d7d4dd]"}`}><Icon className="hidden h-3.5 w-3.5 shrink-0 @[420px]:block" />{item}</button>;
+              const Icon = item === "chat" ? (collaborationEnabled ? Lock : MessageSquare) : item === "shapes" ? Shapes : item === "assets" ? ImageIcon : AppWindow;
+              return <button key={item} title={item === "chat" && collaborationEnabled ? "Only you can see this conversation" : undefined} data-chat-privacy={item === "chat" && collaborationEnabled ? "personal" : undefined} onClick={() => setPanel(item)} className={`flex h-9 items-center justify-center gap-1 rounded-[10px] px-1 text-xs font-bold capitalize transition ${panel === item ? "bg-white text-[#272735] shadow-[0_2px_8px_rgba(43,40,72,.08)] dark:bg-white/[.1] dark:text-[#f3f1f7]" : "text-[#898895] hover:text-[#555461] dark:text-[#8f8b99] dark:hover:text-[#d7d4dd]"}`}><Icon className="hidden h-3.5 w-3.5 shrink-0 @[420px]:block" />{item}</button>;
             })}
           </div>
-          <button aria-label="Collapse North Star panel" onClick={() => setChatOpen(false)} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
+          <button aria-label="Collapse North Star panel" onClick={() => {if(canvasView==="design"){setCanvasV2FeedbackPicking(false);setEditChatOpen(false)}else setChatOpen(false)}} className="ml-2 grid h-9 w-9 place-items-center rounded-[11px] text-[#858594] transition hover:bg-[#f0edff] hover:text-[#6653e8] dark:text-[#9692a0] dark:hover:bg-white/[.07] dark:hover:text-[#b9aeff]"><X className="h-4 w-4" /></button>
         </div>
 
-        {panel === "chat" ? <CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} flowPlacement={flowPlacement} feedbackPicking={feedbackPicking} onPickFeedback={() => setCanvasV2FeedbackPicking(true)} onFinishFeedback={() => setCanvasV2FeedbackPicking(false)} onTagSelection={() => selectedElements.forEach(tagCanvasElement)} /> : panel === "assets" ? <ProjectAssets assets={projectImageAssets(engine.readNativeScene(),[...engine.committed.evidence,...readProjectAssetsRef.current()])} onUpload={()=>chooseLocalImage(undefined,false,true)} onUploadModel={chooseLocalModel} onInsertModel={insertModelAsset}/> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+        {panel === "chat" ? <CanvasV2RenderProfiler id="ChatPanel" enabled={renderProfiling}><CanvasV2ChatPanel chat={chat} engine={engine} selection={selectedElement} selections={selectedElements} elementSelection={screenEditNodeId?screenElementTargets:undefined} flowPlacement={flowPlacement} feedbackPicking={feedbackPicking} onPickFeedback={() => window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START))} onFinishFeedback={() => setCanvasV2FeedbackPicking(false)} onTagSelection={() => {if(screenEditNodeId&&screenElementTargets.length)window.dispatchEvent(new CustomEvent(CANVAS_V2_EDIT_SELECTION_FEEDBACK,{detail:{nodeId:screenEditNodeId}}));else window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:selectedElements.map(element=>element.nodeId)}}))}} /></CanvasV2RenderProfiler> : panel === "assets" ? <ProjectAssets assets={projectImageAssets(engine.readNativeScene(),[...engine.committed.evidence,...readProjectAssetsRef.current()])} onUpload={()=>chooseLocalImage(undefined,false,true)} onUploadModel={chooseLocalModel} onInsertModel={insertModelAsset}/> : panel === "apps" ? <CanvasV2ResearchPanel endpoint={researchEndpoint} busy={engine.applyingManualEdit} onInsertFlow={insertResearchFlow} onInsertScreen={insertResearchScreen} /> : <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
           <div className="flex items-end justify-between px-1"><div><span className="text-[10px] font-black uppercase tracking-[.18em] text-[#735fef] dark:text-[#aa9cff]">Object library</span><h2 className="mt-1 text-base font-black tracking-[-.02em]">Add to canvas</h2></div><span className="pb-0.5 text-[10px] font-semibold text-[#92919e] dark:text-[#8f8b99]">Click or drag</span></div>
           <div role="tablist" aria-label="Object library categories" className="mt-4 grid grid-cols-5 gap-1 rounded-[14px] bg-[#f2f1f6] p-1 dark:bg-white/[.05]">
             {HUMAN_AUTHORING_TABS.map((item) => <button key={item.id} type="button" role="tab" aria-selected={authoringTab === item.id} onClick={() => setAuthoringTab(item.id)} className={`h-8 rounded-[10px] text-[10px] font-black transition ${authoringTab === item.id ? "bg-white text-[#5545c8] shadow-[0_2px_9px_rgba(45,41,78,.1)] dark:bg-white/[.12] dark:text-[#c8c0ff]" : "text-[#858391] hover:text-[#4e4d58] dark:text-[#928e9d] dark:hover:text-[#d4d1da]"}`}>{item.label}</button>)}
@@ -4035,11 +4270,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               const payload = { primitive, ...(shapeVariant ? { shapeVariant } : {}), ...(connectorVariant ? { connectorVariant } : {}) };
               const silhouette = primitiveSilhouette(payload);
               const relationship = primitive === "line" || primitive === "connector";
-              if (primitive === "drawing") return <button key={label} type="button" aria-label="Drawing" aria-pressed={tool === "draw"} onClick={() => { selectElement(undefined); setTool("draw"); setChatOpen(false); }} disabled={!engine.interactionReady || engine.applyingManualEdit} className={`group flex h-[108px] flex-col items-center justify-center bg-transparent text-center transition disabled:opacity-35 ${tool === "draw" ? "text-[#5d49da]" : ""}`}><span className="grid h-[78px] w-full place-items-center"><span className="block h-[54px] w-[96px] transition duration-200 group-hover:scale-110 group-active:scale-95"><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Drawing</span><span aria-hidden className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">Select, then paint</span></button>;
-              return <button key={label} type="button" draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, shapeVariant, connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, { shapeVariant, connectorVariant })} disabled={!engine.interactionReady || engine.applyingManualEdit} className={`group flex cursor-grab flex-col items-center justify-center bg-transparent text-center transition active:cursor-grabbing disabled:opacity-35 ${relationship ? "h-[132px]" : "h-[108px]"}`}><span className={`grid w-full place-items-center ${relationship ? "h-[92px]" : "h-[78px]"}`}><span className="block transition duration-200 group-hover:scale-110 group-active:scale-95" style={{ width: relationship ? 104 : Math.min(96, silhouette.width * 0.76), height: relationship ? 48 : Math.min(72, silhouette.height * 0.76) }}><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">{label}</span>{relationship && <span className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">{primitive === "connector" ? "2 attachable ends" : "Independent"}</span>}</button>;
+              if (primitive === "drawing") return <button key={label} type="button" aria-label="Drawing" aria-pressed={tool === "draw"} onClick={() => { setCanvasView("design");setScreenEditNodeId(undefined);selectElement(undefined); setTool("draw"); setChatOpen(false);setEditChatOpen(false); }} disabled={!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly} className={`group flex h-[108px] flex-col items-center justify-center bg-transparent text-center transition disabled:opacity-35 ${tool === "draw" ? "text-[#5d49da]" : ""}`}><span className="grid h-[78px] w-full place-items-center"><span className="block h-[54px] w-[96px] transition duration-200 group-hover:scale-110 group-active:scale-95"><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Drawing</span><span aria-hidden className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">Select, then paint</span></button>;
+              return <button key={label} type="button" draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, shapeVariant, connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, { shapeVariant, connectorVariant })} disabled={!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly} className={`group flex cursor-grab flex-col items-center justify-center bg-transparent text-center transition active:cursor-grabbing disabled:opacity-35 ${relationship ? "h-[132px]" : "h-[108px]"}`}><span className={`grid w-full place-items-center ${relationship ? "h-[92px]" : "h-[78px]"}`}><span className="block transition duration-200 group-hover:scale-110 group-active:scale-95" style={{ width: relationship ? 104 : Math.min(96, silhouette.width * 0.76), height: relationship ? 48 : Math.min(72, silhouette.height * 0.76) }}><CanvasV2PrimitiveThumbnail input={payload} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">{label}</span>{relationship && <span className="mt-1 text-[9px] font-semibold text-[#9996a3] dark:text-[#8f8b99]">{primitive === "connector" ? "2 attachable ends" : "Independent"}</span>}</button>;
             })}
-            {authoringTab === "media" && <button type="button" onClick={() => chooseLocalImage()} disabled={!engine.interactionReady || engine.applyingManualEdit} className="group flex h-[108px] flex-col items-center justify-center bg-transparent text-center disabled:opacity-35"><span className="grid h-[78px] w-full place-items-center"><span className="block h-[64px] w-[88px] transition duration-200 group-hover:scale-110"><CanvasV2PrimitiveThumbnail input={{ primitive: "image" }} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Image</span></button>}
-            {authoringTab === "media" && <CanvasV2MediaInsert disabled={!engine.interactionReady || engine.applyingManualEdit} onFiles={files => addPlayableFiles(files)} onUrl={(url, type) => addPlayableMedia(url, type === "gif" ? "Linked GIF" : "Linked video", type)}/>}
+            {authoringTab === "media" && <button type="button" onClick={() => chooseLocalImage()} disabled={!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly} className="group flex h-[108px] flex-col items-center justify-center bg-transparent text-center disabled:opacity-35"><span className="grid h-[78px] w-full place-items-center"><span className="block h-[64px] w-[88px] transition duration-200 group-hover:scale-110"><CanvasV2PrimitiveThumbnail input={{ primitive: "image" }} /></span></span><span className="text-[11px] font-black text-[#555362] transition group-hover:text-[#5d49da] dark:text-[#d5d1dc] dark:group-hover:text-[#b8adff]">Image</span></button>}
+            {authoringTab === "media" && <CanvasV2MediaInsert disabled={!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly} onFiles={files => addPlayableFiles(files)} onUrl={(url, type) => addPlayableMedia(url, type === "gif" ? "Linked GIF" : "Linked video", type)}/>}
           </div>
           <div className="flex items-center justify-center gap-2 pb-1 pt-2 text-[10px] text-[#94929f] dark:text-[#8f8b99]">{authoringTab === "media" ? <><Pencil className="h-3.5 w-3.5 text-[#7461ea]" />Select Drawing, then paint on canvas</> : <><MousePointer2 className="h-3.5 w-3.5 text-[#7461ea]" />Drag to preview and place precisely</>}</div>
         </div>}
@@ -4060,7 +4295,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           touchAction: "none",
           ...(!spacePan && tool === "draw"
             ? { cursor: CANVAS_V2_DRAWING_CURSOR }
-            : !spacePan && tool === "select" ? { cursor: CANVAS_V2_SELECT_CURSOR } : {}),
+            : !spacePan && tool === "select" ? { cursor: personalSelectCursor } : {}),
           boxShadow: theme === "dark"
             ? "inset 0 1px 0 rgba(203,198,255,.09)"
             : "inset 0 1px 0 rgba(112,91,237,.13)",
@@ -4073,7 +4308,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
             showCanvasClickPulse(event.clientX, event.clientY, theme);
           }
         }}
-        onPointerMove={pointerMove}
+        onPointerMove={event=>{if(collaboration?.enabled){const point=workspacePoint(event.clientX,event.clientY);collaboration.pointer(point)}pointerMove(event)}}
+        onPointerLeave={()=>collaboration?.pointer(null)}
         onPointerUp={pointerUp}
         onPointerCancel={pointerUp}
         onContextMenu={openObjectMenu}
@@ -4142,8 +4378,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
             className="relative overflow-visible"
             style={{ width: CANVAS_V2_WORKSPACE.width, height: CANVAS_V2_WORKSPACE.height }}
           >
-            <CanvasV2CanvasScene
+            <CanvasV2RenderProfiler id="NativeScene" enabled={renderProfiling}><CanvasV2CanvasScene
               ref={canvasSceneRef}
+              retainedNodeIds={feedbackCaptureNodeIds}
               revision={engine.displayed}
               theme={theme}
               onObservation={engine.receiveObservation}
@@ -4151,7 +4388,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
             onCaptureProgress={engine.receiveCaptureProgress}
               bare
               framePointerEvents={tool === "pan" || tool === "place" || spacePan ? "none" : "auto"}
-              inspectionEnabled={tool === "select" && !spacePan}
+              inspectionEnabled={canvasView === "design" && tool === "select" && !spacePan && !collaborationReadOnly}
               selectedNodeId={selectionTarget}
               selectedNodeIds={requestedSelectionNodeIds}
               onElementHover={hoverElement}
@@ -4161,9 +4398,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               onNativeScene={cropDraft || tidyDraft ? undefined : engine.receiveNativeScene}
               nativeSceneOverride={tidyPreviewScene ?? cropPreviewScene ?? engine.nativeScene}
               visibleBounds={renderedCanvasBounds}
+              viewportScale={viewport.scale}
               preferredPlacement={preferredAiPlacement}
               onElementDoubleClick={(element) => { if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
-              onBeforeUserEdit={engine.beginHumanEdit}
+              onBeforeUserEdit={(element) => {
+                if (collaborationReadOnly || (element && collaboration?.getStatus().busyObjects.includes(element.nodeId))) { setMutationError("A teammate is editing this element. Select another object."); return false; }
+                engine.beginHumanEdit(); return true;
+              }}
               onAfterUserEdit={engine.endHumanEdit}
               editTextRequest={editTextRequest}
               onTableAction={tableAction}
@@ -4174,7 +4415,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               onWorkspaceWheel={navigateWorkspaceWheel}
               onWorkspacePointer={forwardedWorkspacePointer}
               onElementPointer={forwardedElementPointer}
-            />
+            /></CanvasV2RenderProfiler>
             {tidyActive && !editingNodeId && (["x", "y"] as const).map(axis => {
               const columns = Math.ceil(Math.sqrt(tidyItems.length));
               if (axis === "y" && !tidyItems[columns]) return null;
@@ -4207,7 +4448,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               className="pointer-events-none absolute border border-[#8d7cff]/70"
               style={{ left: element.bounds.x, top: element.bounds.y, width: element.bounds.width, height: element.bounds.height, rotate: `${element.rotation ?? 0}deg` }}
             />)}
-            {!editingNodeId && !cropDraft && !connectorLabelDraft && selectedElement && activeSelectionBounds && <div ref={selectionOverlayRef} data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: selectedElements.length === 1 && selectedElement.kind === "connector" ? 0 : 1 / viewport.scale, rotate: selectedElements.length === 1 ? `${selectedElement.rotation ?? 0}deg` : undefined }}>
+            {canvasView === "design" && !screenEditNodeId && !editingNodeId && !cropDraft && !connectorLabelDraft && selectedElement && activeSelectionBounds && <div ref={selectionOverlayRef} data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: selectedElements.length === 1 && selectedElement.kind === "connector" ? 0 : 1 / viewport.scale, rotate: selectedElements.length === 1 ? `${selectedElement.rotation ?? 0}deg` : undefined }}>
               {selectedElements.length > 1 && !selectionPermanent && <button
                 type="button"
                 aria-label={`Move ${selectedElements.length} selected objects`}
@@ -4317,6 +4558,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
             }}
           />
         )}
+        <CanvasFeedbackSession workspace={workspaceRef} getViewport={()=>viewportRef.current} getDocument={()=>engine.readCommittedRevision().document} getElements={()=>sceneElementsRef.current} edit={Boolean(screenEditNodeId)} onRetain={ids=>setFeedbackCaptureNodeIds(current=>current.length===ids.length&&current.every((id,i)=>id===ids[i])?current:ids)} onActive={active=>{setVisualFeedbackActive(active);if(active){setCanvasV2FeedbackPicking(false);setChatOpen(false);setEditChatOpen(false);cancelDrawingGesture();}}} onDone={()=>{setPanel('chat');if(screenEditNodeId)setEditChatOpen(true);else setChatOpen(true)}} onPan={(dx,dy)=>{beginCameraPreview();previewViewport(current=>constrainViewport({...current,x:current.x+dx,y:current.y+dy}));scheduleWheelCommit();}}/>
       </section>
 
       {!engine.displayedObservation && (engine.observationRequested || engine.running) && observationMountRevisionId === engine.displayed.id && (
@@ -4362,7 +4604,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         </div>
       )}
 
-      {!editingNodeId && selectedElement && contextualToolbarPosition && !layersOpen && <aside
+      {canvasView === "design" && !screenEditNodeId && !editingNodeId && !(screenElementNodeId&&screenElementNodeId===screenEditNodeId) && selectedElement && contextualToolbarPosition && !layersOpen && <aside
         ref={contextualToolbarRef}
         aria-label="Element inspector"
         data-testid="canvas-v2-context-toolbar"
@@ -4377,14 +4619,16 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         style={contextualToolbarPosition.style}
       >
         {selectedScreen && <>
-          {!parseCanvasV2Screen(selectedScreen).simulation && <button aria-label="Give feedback on screen" onClick={() => { setCanvasV2FeedbackPicking(true); setPanel('chat'); setChatOpen(true); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
+
+
+          {!selectedScreenDescriptor?.simulation && <button aria-label="Give feedback on screen" onClick={() => window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:[selectedElement.nodeId]}}))} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
           <button aria-label="Screen version history" onClick={() => { setCanvasV2FeedbackPicking(false); setVersionHistoryNode(selectedElement.nodeId); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">History</button>
-          {!parseCanvasV2Screen(selectedScreen).simulation && <button aria-label="Reset screen to starting state" title="Reset app to its starting state" onClick={() => {
+          {!selectedScreenDescriptor?.simulation && <button aria-label="Reset screen to starting state" title="Reset app to its starting state" onClick={() => {
             setCanvasV2FeedbackPicking(false);
             workspaceRef.current?.querySelector<HTMLElement>(`[data-canvas-v2-interactive-screen="${CSS.escape(selectedElement.nodeId)}"]`)?.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND, { detail: 'restart' }));
           }} className="flex h-7 items-center gap-1 rounded-lg px-2 text-xs hover:bg-white/10"><RotateCcw className="h-3.5 w-3.5" />Reset</button>}
         </>}
-        {!selectedScreen && <button aria-label="Give feedback on selection" onClick={() => { selectedElements.forEach(tagCanvasElement); setCanvasV2FeedbackPicking(true); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
+        {!selectedScreen && <button aria-label="Give feedback on selection" onClick={() => window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:selectedElements.map(item=>item.nodeId)}}))} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
         {selectedElements.length > 1 && <>
           <span className="shrink-0 whitespace-nowrap px-2 text-[11px] font-medium text-white/60">{selectedElements.length} selected</span>
           <div className="mx-0.5 h-5 w-px shrink-0 bg-white/12" />
@@ -4527,11 +4771,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         </form>}
 
       </aside>}
+      {collaboration&&<CanvasCollaborationOverlay client={collaboration} viewport={viewportRef} elements={sceneElementsRef} onMotion={geometry=>{remoteTransientRef.current=geometry;if(!directGestureRef.current)canvasSceneRef.current?.applyTransientGeometry(geometry)}}/>}
       {mutationError && <div role="alert" className="absolute right-5 top-[90px] z-50 max-w-[340px] rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-xs leading-5 text-red-700 shadow-xl backdrop-blur dark:border-red-500/25 dark:bg-[#241d24]/95 dark:text-red-300">{mutationError}</div>}
 
       {objectMenu && <div ref={objectMenuRef} role="menu" aria-label="Canvas object menu" data-testid="canvas-v2-object-menu" className="absolute z-[70] w-[230px] rounded-[12px] border border-[#ddddea] bg-white/98 p-2 text-xs font-semibold shadow-[0_22px_70px_rgba(44,39,88,.22)] backdrop-blur-xl dark:border-white/[.11] dark:bg-[#1c1b23]/98 dark:shadow-[0_24px_75px_rgba(0,0,0,.48)]" style={{ left: objectMenu.x, top: objectMenu.y }}>
         {selectedElements.length ? <>
+          <button role="menuitem" disabled={selectedElements.every(item=>item.locked)} onClick={()=>void editSelectedDesign()} className="flex h-8 w-full items-center gap-2 rounded-lg px-3 text-left text-[#7960d0] hover:bg-[#f1eff9] disabled:opacity-35 dark:text-[#c4b4ff] dark:hover:bg-white/[.07]"><PenTool className="h-3.5 w-3.5"/>Edit design</button>
           <button role="menuitem" onClick={copySelection} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>{selectionIsImage ? "Copy image" : "Copy"}</span><kbd className="text-[10px] text-[#9694a2]">⌘C</kbd></button>
+          {canvasView === "design" && <>
           <button role="menuitem" onClick={cutSelection} disabled={selectedElements.every((item) => item.locked)} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Cut</span><kbd className="text-[10px] text-[#9694a2]">⌘X</kbd></button>
           <button role="menuitem" onClick={() => { duplicateSelection(); setObjectMenu(undefined); }} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Duplicate</span><kbd className="text-[10px] text-[#9694a2]">⌘D</kbd></button>
           {selectedElements.length > 1 ? <button role="menuitem" onClick={() => { groupSelection(); setObjectMenu(undefined); }} disabled={selectedElements.filter((item) => !item.locked).length < 2} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Group</span><kbd className="text-[10px] text-[#9694a2]">⌘G</kbd></button> : selectedElement?.kind === "group" ? <button role="menuitem" onClick={() => { submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId }); setObjectMenu(undefined); }} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><span>Ungroup</span><kbd className="text-[10px] text-[#9694a2]">⇧⌘G</kbd></button> : null}
@@ -4542,7 +4789,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           <button role="menuitem" onClick={() => { batchForSelection("Hid selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "visibility", nodeId: item.nodeId, hidden: true }); setObjectMenu(undefined); }} disabled={selectedElements.every((item) => item.locked)} className="h-7 w-full rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]">Hide</button>
           <div className="my-1 h-px bg-[#eceaf1] dark:bg-white/[.08]" />
           <button role="menuitem" onClick={() => { batchForSelection("Deleted selected objects.", (item) => item.nodeId === "canvas" || item.locked ? undefined : { kind: "delete", nodeId: item.nodeId }); setObjectMenu(undefined); }} disabled={selectedElements.every((item) => item.locked)} className="h-7 w-full rounded-lg px-3 text-left text-red-600 hover:bg-red-50 disabled:opacity-35 dark:text-red-300 dark:hover:bg-red-500/[.12]">Delete</button>
-        </> : <button role="menuitem" onClick={pasteClipboard} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Paste</span><kbd className="text-[10px] text-[#9694a2]">⌘V</kbd></button>}
+          </>}
+        </> : canvasView === "design" ? <button role="menuitem" onClick={pasteClipboard} className="flex h-7 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-[#f1eff9] disabled:opacity-35 dark:hover:bg-white/[.07]"><span>Paste</span><kbd className="text-[10px] text-[#9694a2]">⌘V</kbd></button> : <button role="menuitem" onClick={()=>{void changeCanvasView('design');setObjectMenu(undefined)}} className="flex h-8 w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-[#f1eff9] dark:hover:bg-white/[.07]"><PenTool className="h-3.5 w-3.5"/>Design view</button>}
       </div>}
 
       {versionHistoryNode && (() => {
@@ -4557,37 +4805,40 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           validateCanvasV2ScreenAssets(descriptor, revision.evidence); validateCanvasV2ScreenJavaScript(descriptor.javascript);
           if (current.encoded === version.encoded) { workspaceRef.current?.querySelector(`[data-canvas-v2-interactive-screen="${CSS.escape(version.nodeId)}"]`)?.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND,{detail:'restart'})); return; }
           const next = reviseCanvasV2NativeScreen(scene, version.nodeId, version.encoded);
-          if (!engine.applyManualDocument(serializeCanvasV2NativeScene(next), `Restored version ${chat.screenVersions.filter(entry => entry.nodeId === version.nodeId).findIndex(entry => entry.id === version.id)+1}`, revision.evidence, next, { origin:'user', selectionNodeIds:[version.nodeId] })) throw new Error(engine.readManualFailure() || 'The version could not be applied.');
+          if (!engine.applyManualDocument(serializeManualNativeScene(next), `Restored version ${chat.screenVersions.filter(entry => entry.nodeId === version.nodeId).findIndex(entry => entry.id === version.id)+1}`, revision.evidence, next, { origin:'user', selectionNodeIds:[version.nodeId] })) throw new Error(engine.readManualFailure() || 'The version could not be applied.');
           let restored = false;
           for (let i=0;i<40;i++) { const host = workspaceRef.current?.querySelector(`[data-canvas-v2-interactive-screen="${CSS.escape(version.nodeId)}"]`); if (host?.closest('[data-canvas-v2-screen]')?.getAttribute('data-canvas-v2-screen') === version.encoded) { await new Promise(resolve => setTimeout(resolve,25)); host.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_COMMAND,{detail:'restart'})); restored = true; break; } await new Promise(resolve => setTimeout(resolve,25)); }
           if (!restored) throw new Error('The version was saved; its preview is still updating. Close history and reopen this version.');
         }}/></CanvasV2ScreenAssets.Provider>;
       })()}
-      {layersOpen && <aside aria-label="Layers panel" className="absolute bottom-24 right-6 z-40 max-h-[420px] w-[300px] overflow-hidden rounded-[22px] border border-[#dedfec] bg-white/95 shadow-[0_18px_55px_rgba(50,45,100,.16)] backdrop-blur-xl dark:border-white/[.1] dark:bg-[#1b1a22]/95 dark:shadow-[0_20px_60px_rgba(0,0,0,.35)]"><div className="flex items-center justify-between border-b border-[#e8e8f0] px-4 py-3 dark:border-white/[.08]"><div className="flex items-center gap-2 text-sm font-black"><Layers3 className="h-4 w-4 text-[#6d59ed]" />Objects</div><span className="text-[10px] font-bold text-[#9999a8]">{sourceNodes.length} nodes</span></div><div className="max-h-[350px] overflow-y-auto p-2">{sourceNodes.map((node) => <div key={node.nodeId} style={{ paddingLeft: 8 + Math.min(4, node.depth) * 14 }} className={`flex items-center gap-2 rounded-xl py-2 pr-2 text-xs ${selectionNodeIds.includes(node.nodeId) ? "bg-[#eeeaff] text-[#5744d5] dark:bg-[#302b4a] dark:text-[#c6bdff]" : "hover:bg-[#f6f5fa] dark:hover:bg-white/[.05]"}`}><button onClick={(event) => { const element = sceneElements.find((item) => item.nodeId === node.nodeId); if (element) selectElement(element, { additive: event.shiftKey || event.metaKey, range: event.shiftKey, directEdit: false }, true); else { setSelectedElements([]); setSelectionTarget(node.nodeId); } setLayersOpen(false); }} disabled={node.hidden} className="min-w-0 flex-1 truncate text-left font-semibold disabled:opacity-40"><span className="mr-2 font-mono text-[9px] uppercase text-[#9999a8]">{node.kind}</span>{node.nodeId}</button><button aria-label={`${node.hidden ? "Show" : "Hide"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "visibility", nodeId: node.nodeId, hidden: !node.hidden })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.hidden ? "Show" : <EyeOff className="h-3.5 w-3.5" />}</button><button aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.nodeId}`} onClick={() => submitMutation({ kind: "lock", nodeId: node.nodeId, locked: !node.locked })} disabled={node.nodeId === "canvas"} className="text-[#777789] disabled:opacity-25 dark:text-[#a09ca9]">{node.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button></div>)}</div></aside>}
+      {((canvasView==='design'&&!screenEditNodeId)||(canvasView==='preview'&&layersOpen))&&<CanvasV2RenderProfiler id="Layers" enabled={renderProfiling}><CanvasV2ObjectLayers docked={canvasView==='design'} covered={canvasView==='design'&&editChatOpen} onChat={()=>{setPanel('chat');setEditChatOpen(true)}} nodes={sourceNodes} selectedNodeIds={selectionNodeIds} onHover={nodeId=>hoverElement(sceneElements.find(item=>item.nodeId===nodeId))} onSelect={(nodeId,intent)=>{const element=sceneElements.find(item=>item.nodeId===nodeId);if(element)selectElement(element,{...intent,directEdit:false},true);else{setSelectedElements([]);setSelectionTarget(nodeId);}setLayersOpen(false);}} onVisibility={node=>submitMutation({kind:'visibility',nodeId:node.nodeId,hidden:!node.hidden})} onLock={node=>submitMutation({kind:'lock',nodeId:node.nodeId,locked:!node.locked})}/></CanvasV2RenderProfiler>}
+      {canvasView==='design'&&!screenEditNodeId&&<BoardDesignInspector selected={selectedElements} onMutation={mutation=>{submitMutation(mutation)}} readOnly={collaborationReadOnly} onOpen={()=>{if(selectedElement?.textEditable)setEditingNodeId(selectedElement.nodeId)}}/>}
 
-      <div aria-label="Canvas tools" className="absolute bottom-[18px] left-1/2 z-40 flex -translate-x-1/2 items-center gap-0.5 rounded-[18px] border border-[#dedee8]/90 bg-white/92 p-1.5 shadow-[0_10px_34px_rgba(50,45,100,.15)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_14px_38px_rgba(0,0,0,.34)]">
-        <button onClick={undoCanvas} disabled={!engine.canUndo} title="Undo" aria-label="Undo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Undo2 className="h-[18px] w-[18px]" /></button>
-        <button onClick={redoCanvas} disabled={!engine.canRedo} title="Redo" aria-label="Redo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Redo2 className="h-[18px] w-[18px]" /></button>
+      <div aria-label="Canvas tools" style={canvasView==='design'?{left:"calc(50% - 24px)",maxWidth:"calc(100% - 576px)"}:{maxWidth:"calc(100% - 32px)"}} className="absolute bottom-[18px] left-1/2 z-[1002] flex overflow-x-auto [&>button]:shrink-0 [&>div]:shrink-0 -translate-x-1/2 items-center gap-0.5 rounded-[18px] border border-[#dedee8]/90 bg-white/92 p-1.5 shadow-[0_10px_34px_rgba(50,45,100,.15)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_14px_38px_rgba(0,0,0,.34)]">
+        <button onClick={undoCanvas} disabled={collaboration?.enabled?!collaboration.canUndo():!engine.canUndo} title="Undo" aria-label="Undo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Undo2 className="h-[18px] w-[18px]" /></button>
+        <button onClick={redoCanvas} disabled={collaboration?.enabled?!collaboration.canRedo():!engine.canRedo} title="Redo" aria-label="Redo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Redo2 className="h-[18px] w-[18px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
-        <button onClick={() => { cancelDrawingGesture(); setTool("select"); }} title="Select" aria-pressed={tool === "select"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "select" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><MousePointer2 className="h-[19px] w-[19px]" /></button>
+        <button onClick={() => { cancelDrawingGesture();setCanvasView("design");setTool("select"); }} title="Select" aria-pressed={tool === "select"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "select" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><MousePointer2 className="h-[19px] w-[19px]" /></button>
         <button onClick={() => { cancelDrawingGesture(); setTool("pan"); }} title="Pan" aria-pressed={tool === "pan"} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${tool === "pan" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Hand className="h-[19px] w-[19px]" /></button>
-        <button onClick={() => { selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.interactionReady || engine.applyingManualEdit} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
+        <>
+        <button onClick={() => {setCanvasView("design");setScreenEditNodeId(undefined);selectElement(undefined); setTool("draw"); }} title="Draw freehand" aria-label="Draw freehand" aria-pressed={tool === "draw"} disabled={!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly} className={`grid h-10 w-10 place-items-center rounded-[11px] transition disabled:opacity-35 ${tool === "draw" ? "bg-[#7257f5] text-white shadow-[0_4px_12px_rgba(93,70,220,.24)]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Pencil className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
-        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} aria-pressed={tool === "place" && placementTool?.primitive === primitive} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, options)} disabled={!engine.interactionReady || engine.applyingManualEdit} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
-        <button title="Upload image, GIF, or video · or drop a file on canvas" aria-label="Upload image, GIF, or video" onClick={() => chooseLocalImage(undefined, true)} disabled={!engine.interactionReady || engine.applyingManualEdit} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
-        <button title="More creation tools" onClick={() => { setPanel("shapes"); setChatOpen(true); }} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Plus className="h-[19px] w-[19px]" /></button>
+        {TOOL_ITEMS.map(({ label, icon: Icon, primitive, ...options }) => <button key={label} aria-pressed={tool === "place" && placementTool?.primitive === primitive} title={`Create ${label} · drag to place`} draggable onDragStart={(event) => beginPrimitiveDrag(event, primitive, options.shapeVariant, options.connectorVariant)} onDragEnd={clearPrimitiveDrag} onClick={() => activatePrimitive(primitive, options)} disabled={!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly} className="grid h-10 w-10 cursor-grab place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] active:cursor-grabbing disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Icon className="h-[19px] w-[19px]" /></button>)}
+        <button title="Upload image, GIF, or video · or drop a file on canvas" aria-label="Upload image, GIF, or video" onClick={() => chooseLocalImage(undefined, true)} disabled={!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] disabled:opacity-35 dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Upload className="h-[19px] w-[19px]" /></button>
+        <button title="More creation tools" onClick={() => {setCanvasView("design");setPanel("shapes");setEditChatOpen(true);}} className="grid h-10 w-10 place-items-center rounded-[11px] text-[#686879] transition hover:bg-[#f1effb] hover:text-[#6d59ed] dark:text-[#aaa6b4] dark:hover:bg-white/[.06] dark:hover:text-[#b3a7ff]"><Plus className="h-[19px] w-[19px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />
-        <button aria-label="Layers" title="Layers" onClick={() => setLayersOpen(open=>!open)} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>
+        <button aria-label="Layers" title="Layers" onClick={() => {if(canvasView==='preview')void changeCanvasView('design');else {setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined);}}} className={`grid h-10 w-10 place-items-center rounded-[11px] transition ${layersOpen ? "bg-[#ebe7ff] text-[#6650e4] dark:bg-[#302b4a] dark:text-[#b3a7ff]" : "text-[#646474] hover:bg-[#f3f2f8] dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"}`}><Layers3 className="h-[19px] w-[19px]" /></button>
+        </>
       </div>
 
-      {zoomMenuOpen && <div role="dialog" aria-label="Zoom options" className="absolute bottom-16 right-5 z-50 grid w-56 gap-1 rounded-2xl bg-[#202024] p-3 text-sm text-white shadow-2xl"><form onSubmit={(event) => { event.preventDefault(); const percent = Number(zoomDraft.replace("%", "")); if (Number.isFinite(percent) && percent > 0) { zoomAtCenter(percent / (viewportRef.current.scale * 100)); setZoomMenuOpen(false); } }}><label className="flex items-center gap-2">Zoom<input autoFocus aria-label="Zoom percentage" value={zoomDraft} onChange={(event) => setZoomDraft(event.target.value)} className="w-24 rounded bg-white/10 px-2 py-1" />%<button type="submit" aria-label="Apply zoom">↵</button></label><p className="mt-1 text-[11px] text-white/55">4%–800%</p></form><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { fitContent(); setZoomMenuOpen(false); }}>Fit all <span className="float-right">⇧1</span></button><button className="rounded p-2 text-left hover:bg-white/10" disabled={!selectedElements.length} onClick={() => { focusSelection(); setZoomMenuOpen(false); }}>Zoom to selection <span className="float-right">⇧2</span></button><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { zoomAtCenter(1 / viewportRef.current.scale); setZoomMenuOpen(false); }}>100%</button></div>}
-      <nav aria-label="Canvas navigation" data-testid="canvas-v2-navigation-controls" className="absolute bottom-[18px] right-[18px] z-40 flex items-center gap-1.5 text-[#4f4f5d] dark:text-[#d7d3df]">
+      {zoomMenuOpen && <div style={canvasView==='design'?{right:312,top:68,bottom:"auto"}:undefined} role="dialog" aria-label="Zoom options" className="absolute bottom-16 right-5 z-50 grid w-56 gap-1 rounded-2xl bg-[#202024] p-3 text-sm text-white shadow-2xl"><form onSubmit={(event) => { event.preventDefault(); const percent = Number(zoomDraft.replace("%", "")); if (Number.isFinite(percent) && percent > 0) { zoomAtCenter(percent / (viewportRef.current.scale * 100)); setZoomMenuOpen(false); } }}><label className="flex items-center gap-2">Zoom<input autoFocus aria-label="Zoom percentage" value={zoomDraft} onChange={(event) => setZoomDraft(event.target.value)} className="w-24 rounded bg-white/10 px-2 py-1" />%<button type="submit" aria-label="Apply zoom">↵</button></label><p className="mt-1 text-[11px] text-white/55">4%–800%</p></form><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { fitContent(); setZoomMenuOpen(false); }}>Fit all <span className="float-right">⇧1</span></button><button className="rounded p-2 text-left hover:bg-white/10" disabled={!selectedElements.length} onClick={() => { focusSelection(); setZoomMenuOpen(false); }}>Zoom to selection <span className="float-right">⇧2</span></button><button className="rounded p-2 text-left hover:bg-white/10" onClick={() => { zoomAtCenter(1 / viewportRef.current.scale); setZoomMenuOpen(false); }}>100%</button></div>}
+      <nav style={canvasView==='design'?{right:312,top:20,bottom:"auto"}:undefined} aria-label="Canvas navigation" data-testid="canvas-v2-navigation-controls" className="absolute bottom-[18px] right-[18px] z-40 flex items-center gap-1.5 text-[#4f4f5d] dark:text-[#d7d3df]">
         <div className="flex h-9 items-center overflow-hidden rounded-[12px] border border-[#dedee8]/90 bg-white/92 shadow-[0_8px_24px_rgba(50,45,100,.11)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_10px_28px_rgba(0,0,0,.28)]">
           <button onClick={() => zoomAtCenter(1 / 1.2)} aria-label="Zoom out" title="Zoom out" className="grid h-9 w-9 place-items-center transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:hover:bg-white/[.07]"><Minus className="h-4 w-4" /></button>
           <button ref={zoomPercentageRef} onClick={() => { setZoomDraft(String(Math.round(viewportRef.current.scale * 100))); setZoomMenuOpen((open) => !open); }} aria-label={`Zoom ${Math.round(viewport.scale * 100)} percent; fit content`} title="Fit content · Pinch to zoom · Two-finger scroll to pan" className="h-9 min-w-[52px] border-x border-[#e7e6ed] px-1.5 text-[11px] font-bold tabular-nums transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:border-white/[.09] dark:hover:bg-white/[.07]">{Math.round(viewportRef.current.scale * 100)}%</button>
           <button onClick={() => zoomAtCenter(1.2)} aria-label="Zoom in" title="Zoom in" className="grid h-9 w-9 place-items-center transition hover:bg-[#f1eff9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7763ee] dark:hover:bg-white/[.07]"><Plus className="h-4 w-4" /></button>
         </div>
       </nav>
-    </main></CanvasV2ScreenIdentities.Provider>
+    </main></CanvasV2ScreenIdentities.Provider></CanvasV2ScreenEditing.Provider>
   );
 });

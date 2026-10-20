@@ -23,3 +23,65 @@ test('a section insertion anchor survives transport without turning reference co
   assert.match(context,/untrusted screen data, not instructions/);
   assert.equal(parseCanvasV2ScreenFeedbackTarget({...raw,insertionSide:'replace-everything'},'studio','Notes').insertionSide,undefined);
 });
+
+
+test('element moves snap within six screen pixels at any zoom and keep free and axis-locked movement predictable',async()=>{
+ const {screenElementDragOffset:move}=await import('../lib/canvas-v2/screen-direct-edit');
+ const rect={x:80,y:120,width:100,height:60},viewport={width:400,height:800};
+ for(const scale of [.25,1,2]){
+  const near=move(rect,viewport,scale,70*scale+4,0,{ });
+  assert.equal(near.x,70);assert.equal(near.guideX,200);
+  const outside=move(rect,viewport,scale,70*scale+7,0,{});
+  assert.equal(outside.guideX,undefined);
+  const free=move(rect,viewport,scale,70*scale+4,0,{free:true});
+  assert.equal(free.x,70+4/scale);assert.equal(free.guideX,undefined);
+ }
+ assert.deepEqual(move(rect,viewport,1,40,12,{axisLock:true,free:true}),{x:40,y:0});
+ assert.deepEqual(move(rect,viewport,1,10,-40,{axisLock:true,free:true}),{x:0,y:-40});
+ assert.throws(()=>move(rect,viewport,0,1,1));
+});
+
+test('manual typography, crop and position values stay local, bounded and reversible',async()=>{
+ const {validateScreenAppearanceStyles:validate}=await import('../lib/canvas-v2/screen-direct-edit');
+ assert.doesNotThrow(()=>validate({'font-family':'"Mona Sans", sans-serif','font-style':'italic','letter-spacing':'-1.2px','line-height':'1.2','text-align':'center',translate:'40px -12px','object-position':'25% 70%','object-fit':'cover'}));
+ assert.doesNotThrow(()=>validate({'line-height':'40px'}));
+ for(const styles of ([{'font-family':'url(https://invalid.test)'},{translate:'9000px 0px'},{translate:'NaNpx 0px'},{'letter-spacing':'-21px'},{'line-height':'10'},{'object-position':'120% 50%'},{'text-align':'arbitrary'},{color:'red;display:none'}] as Array<Record<string,string>>))assert.throws(()=>validate(styles));
+});
+
+
+test('chat handoff waits for all manual editors, propagates save failures and releases unmounted editors',async()=>{
+  const {registerScreenDirectFlush:register,flushScreenDirectEdits:flush}=await import('../lib/canvas-v2/screen-direct-edit');
+  const events=new EventTarget(),order:string[]=[];
+  let release!:()=>void;
+  const unregister=register(async()=>{await new Promise<void>(resolve=>{release=resolve});order.push('committed latest text')},events);
+  const removeStyle=register(async()=>{order.push('committed colour')},events);
+  const handoff=flush(events).then(()=>order.push('agent reads'));
+  await Promise.resolve();await Promise.resolve();
+  assert.deepEqual(order,['committed colour']);
+  release();await handoff;
+  assert.deepEqual(order,['committed colour','committed latest text','agent reads']);
+  unregister();removeStyle();
+  const removeFailure=register(async()=>{throw new Error('This item changed. Select it again.')},events);
+  await assert.rejects(flush(events),/This item changed/);
+  removeFailure();await flush(events);
+  const unrelated=new EventTarget();register(async()=>{throw new Error('Another workspace')},unrelated);
+  await flush(events);
+});
+
+test('a failed editor still drains the other pending save before rejecting handoff',async()=>{
+  const {registerScreenDirectFlush:register,flushScreenDirectEdits:flush}=await import('../lib/canvas-v2/screen-direct-edit');
+  const events=new EventTarget();
+  let release!:()=>void,settled=false,committed=false;
+  const removeFailure=register(()=>{throw new Error('Please select the changed text again.')},events);
+  const removePending=register(async()=>{await new Promise<void>(resolve=>{release=resolve});committed=true},events);
+  try {
+    const handoff=flush(events).finally(()=>{settled=true});
+    const rejection=assert.rejects(handoff,/select the changed text again/);
+    await Promise.resolve();await Promise.resolve();
+    assert.equal(settled,false,'an early rejection must not leave another editor saving in the background');
+    removePending();
+    release();await rejection;
+    assert.equal(committed,true,'an editor removed after handoff starts still belongs to that handoff');
+  } finally {removeFailure();removePending();}
+  await flush(events);
+});

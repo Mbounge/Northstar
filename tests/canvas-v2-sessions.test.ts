@@ -72,6 +72,21 @@ test('a lone canvas does not clone its full revision on every edit, but a follow
  owner.close();follower.close();
 });
 
+test('multiplayer upgrade hints reach other legacy tabs without sharing a snapshot or executing commands',async()=>{
+ type Port=ConstructorParameters<typeof LiveSessionChannel>[0];
+ const ports:Port[]=[];const messages:unknown[]=[];
+ const port=():Port=>{const p:Port={onmessage:null,close:()=>{},postMessage:data=>{messages.push(structuredClone(data));for(const other of ports)if(other!==p)queueMicrotask(()=>other.onmessage?.({data} as MessageEvent));}};ports.push(p);return p;};
+ let ownerUpgrades=0,followerUpgrades=0;
+ const handlers={read:()=>undefined,receive:()=>assert.fail('a hint must not replace local state'),execute:async()=>assert.fail('a hint must not execute a user command')};
+ const owner=new LiveSessionChannel(port(),{...handlers,owns:()=>true,multiplayer:()=>{ownerUpgrades++;}});
+ const follower=new LiveSessionChannel(port(),{...handlers,owns:()=>false,multiplayer:()=>{followerUpgrades++;}});
+ const older=new LiveSessionChannel(port(),{...handlers,owns:()=>false});
+ owner.upgrade();await new Promise(setImmediate);
+ assert.equal(ownerUpgrades,0);assert.equal(followerUpgrades,1);assert.deepEqual(messages,[{kind:'multiplayer'}]);
+ follower.upgrade();await new Promise(setImmediate);assert.equal(ownerUpgrades,1);assert.equal(followerUpgrades,1);
+ owner.close();follower.close();older.close();
+});
+
 test('autosave serializes writes and retains the latest change arriving during an upload',async()=>{
  const first=deferred();const writes:number[]=[];const states:string[]=[];
  const queue=new SnapshotQueue<number>(async value=>{writes.push(value);if(value===1)await first.promise;},value=>states.push(value));

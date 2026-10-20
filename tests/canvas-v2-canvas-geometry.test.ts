@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import ts from "typescript";
+import { resolveCanvasV2ContextToolbarPosition } from "../lib/canvas-v2/context-toolbar-placement";
 
 import { canvasV2CaptureGeometry, canvasV2ContentCaptureCamera, canvasV2DesignDetailIndexes, growCanvasV2CanvasGeometry, normalizeCanvasV2CanvasGeometry } from "../lib/canvas-v2/canvas-geometry";
 
@@ -120,7 +123,6 @@ test("continuous camera and object previews avoid scene-wide React work", () => 
     workspace.indexOf('className="absolute z-50', workspace.indexOf('aria-label="Element inspector"')),
   );
   assert.match(contextualToolbar, /navigateWorkspaceWheel\(event\)/, "screen-space controls must forward navigation outside the capture surface");
-  assert.match(viewportPreview, /toolbar\.style\.transform = `translate3d/, "camera previews move contextual controls in real time");
   assert.doesNotMatch(viewportPreview, /toolbar\.style\.translate/, "camera previews preserve Tailwind's centering translate");
   assert.match(workspace, /addEventListener\("gesturechange", nativePinch/);
   assert.match(workspace, /touchAction: "none"/);
@@ -183,4 +185,42 @@ test("changed and new region detail priority retains the real full-board reading
   assert.deepEqual(canvasV2DesignDetailIndexes([undefined, "valid"], [], 6), [1]);
   assert.deepEqual(canvasV2DesignDetailIndexes(ids, ["region-8"], 0), []);
   assert.deepEqual(ids, original);
+});
+
+
+test("camera preview keeps the real contextual toolbar near its visible object and hides it only offscreen", () => {
+  const source = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
+  const tree = ts.createSourceFile("workspace.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let callback: ts.Expression | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(tree) === "applyViewportVisual" && node.initializer && ts.isCallExpression(node.initializer)) callback = node.initializer.arguments[0];
+    ts.forEachChild(node, visit);
+  };
+  visit(tree); assert.ok(callback);
+  const style: Record<string, string> = {}, surface = { style: { transform: "" } };
+  const viewport = { left: 0, top: 96, right: 1000, bottom: 800 };
+  const code = ts.transpileModule(`exports.apply = (${callback.getText(tree)});`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const exports: { apply?: (next: { x: number; y: number; scale: number }) => void } = {};
+  vm.runInNewContext(code, { exports, resolveCanvasV2ContextToolbarPosition,
+    workspaceSurfaceRef: { current: surface }, gridOverlayRef: {}, zoomPercentageRef: {}, contextualToolbarRef: { current: { style } },
+    activeSelectionBoundsRef: { current: { x: 400, y: 300, width: 200, height: 100 } }, toolbarPreviewGeometry: { current: { viewport, toolbar: { width: 336, height: 56 }, chrome: [] } },
+    atmosphereLayerRef: {}, workspaceRef: {},
+  });
+  const check = (camera: { x: number; y: number; scale: number }) => {
+    exports.apply!(camera); assert.equal(style.visibility, "");
+    const center = parseFloat(style.left), top = parseFloat(style.top);
+    const selected = { left: camera.x + 400 * camera.scale, right: camera.x + 600 * camera.scale, top: camera.y + 300 * camera.scale, bottom: camera.y + 400 * camera.scale };
+    const toolbar = { left: center - 168, right: center + 168, top, bottom: top + 56 };
+    assert.ok(toolbar.left >= viewport.left && toolbar.right <= viewport.right && toolbar.top >= viewport.top && toolbar.bottom <= viewport.bottom);
+    const overlap = Math.max(0, Math.min(toolbar.right, selected.right) - Math.max(toolbar.left, selected.left)) * Math.max(0, Math.min(toolbar.bottom, selected.bottom) - Math.max(toolbar.top, selected.top));
+    assert.equal(overlap, 0, "controls must not cover the selected object");
+    const gap = Math.hypot(Math.max(0, toolbar.left - selected.right, selected.left - toolbar.right), Math.max(0, toolbar.top - selected.bottom, selected.top - toolbar.bottom));
+    assert.ok(gap <= 24, "camera previews must keep the toolbar attached to the visible selection");
+    return center;
+  };
+  const before = check({ x: 0, y: 0, scale: 1 }), after = check({ x: 150, y: 50, scale: 1 });
+  assert.equal(after - before, 150, "moving the camera must immediately move its contextual controls");
+  check({ x: 0, y: 0, scale: 1.5 });
+  exports.apply!({ x: -2000, y: 0, scale: 1 }); assert.equal(style.visibility, "hidden");
+  check({ x: 0, y: 0, scale: 1 }); assert.equal(surface.style.transform, "translate(0px, 0px) scale(1)");
 });

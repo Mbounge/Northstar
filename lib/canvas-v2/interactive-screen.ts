@@ -1,3 +1,4 @@
+import {validateScreenDesignSystem, type ScreenDesignSystem} from './screen-design-edit';
 import { isGraetPreviewSection, type GraetPreviewSection } from '../preview/graet-navigation';
 import { simulatorForApp } from '../preview/simulator-registry';
 import type { CanvasV2EvidenceAsset } from './types';
@@ -47,6 +48,7 @@ export async function canvasV2ScreenReferencePreview(original: {nodeId: string; 
 
 export interface CanvasV2InteractiveScreen {
   version: 1;
+  design?: ScreenDesignSystem;
   device?: 'ios' | 'android' | 'none';
   referenceNodeId?: string;
   referenceIntent?: 'faithful' | 'inspired' | 'original';
@@ -118,6 +120,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
     const visit=(value:unknown,depth:number):void=>{if(depth>12)throw new Error('Keep mock data within the product depth budget.');if(value===null||typeof value==='string'||typeof value==='boolean'||typeof value==='number'&&Number.isFinite(value))return;if(!value||typeof value!=='object'||![Object.prototype,Array.prototype,null].includes(Object.getPrototypeOf(value)))throw new Error('Use plain JSON mock data.');for(const [key,child] of Object.entries(value)){if(['__proto__','constructor','prototype'].includes(key))throw new Error('Use ordinary mock-data keys.');visit(child,depth+1)}};
     visit(screen.mockData,0);
   }
+  const design=validateScreenDesignSystem(screen.design);if(design)for(const component of design.components)for(const template of [component.html,...component.variants.map(v=>v.html)])validateCanvasV2Screen({...screen,design:undefined,html:template});
   // Only the host constructs the document and its sandbox. Source assets remain
   // opaque handles, so saved objects never hide expiring blob/signed URLs.
   if (/<\s*(?:script|iframe|object|embed|base|link|meta|html|head|body)\b|\son[a-z]+\s*=|javascript\s*:/i.test(screen.html)) throw new Error('Use a body HTML fragment, CSS and event listeners in javascript. Embedded documents, scripts and event attributes are not supported.');
@@ -129,7 +132,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   for (const match of (html + '\n' + css + '\n' + javascript).matchAll(SCREEN_ASSET_PATTERN)) {
     if (!tokens.has(match[1])) throw new Error('Declare and retain the exact asset handle before binding it in a screen.');
   }
-  return { version: 1, ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), ...(screen.mockData ? {mockData:structuredClone(screen.mockData)} : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.trustedRuntimeLibraries?.length ? { trustedRuntimeLibraries: [...screen.trustedRuntimeLibraries] } : {}), ...(wasmModules?.length ? {wasmModules} : {}), ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
+  return { version: 1, ...(screen.design?{design:validateScreenDesignSystem(screen.design)}:{}), ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), ...(screen.mockData ? {mockData:structuredClone(screen.mockData)} : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.trustedRuntimeLibraries?.length ? { trustedRuntimeLibraries: [...screen.trustedRuntimeLibraries] } : {}), ...(wasmModules?.length ? {wasmModules} : {}), ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
 }
 export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
   return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {

@@ -1,3 +1,5 @@
+import {reconcileScreenDesignSource} from './screen-design-live';
+import { screenInlineTextMarkup } from './screen-inline-text';
 import { canvasV2WasmRuntimeSource } from './screen-wasm';
 import { inspectScreenTextCollisions } from './screen-text-collision';
 import { installPrivateJourneyAudioIsolation } from './screen-private-audio';
@@ -6,7 +8,7 @@ import { packScreenCaptureImages } from './screen-capture-resources';
 import { validateCanvasV2Screen, canvasV2ScreenAssetToken, SCREEN_ASSET_PATTERN, type CanvasV2InteractiveScreen } from './interactive-screen';
 import { advanceScreenJourneyMotion, screenMotionTimeline } from './screen-motion-timeline';
 import { isCanvasV2ScreenVideoBytes, isCanvasV2FontBytes, isCanvasV2ScreenModelBytes } from './screen-asset-pixels';
-import { trustedRuntimeHelperSource, trustedRuntimeSource } from './screen-trusted-runtime';
+import { screenCanvasContributesPaint, trustedRuntimeHelperSource, trustedRuntimeSource } from './screen-trusted-runtime';
 import { readScreenNumericValue, screenNumericChangeResult, validateScreenInteractionSequence, type ScreenInteractionStep, type ScreenPointerDrag } from './screen-interaction-sequence';
 import { runScreenPointerDrag } from './screen-pointer-gesture';
 import { screenAssetTargetAtPoint } from './screen-asset-edit';
@@ -14,8 +16,76 @@ import { screenDirectOptionsAtPoint } from './screen-direct-edit';
 import { SCREEN_STATE_CHECKPOINT_SOURCE } from './screen-state-checkpoint';
 import { installScreenLayoutReadiness } from './screen-layout-readiness';
 import { installScreenCanvasContextObservation } from './screen-canvas-context';
+import { createScreenPresentationHandoff, screenPresentationSelector } from './screen-presentation-cache';
 
-export type ScreenAction = { action: 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag'; selector?: string; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
+/** Capture only the pixels actually present; never turn an unavailable canvas
+ * into an empty IMG that the embedder would fetch as the application HTML. */
+export function screenCanvasCaptureReplacement(canvas: HTMLCanvasElement, copy: Element, contributesPaint = true) {
+  return screenMediaCaptureReplacement(canvas, copy, contributesPaint, 'canvas');
+}
+
+/** Freeze the displayed media candidate and actual frame, never an empty URL. */
+export function screenMediaCaptureReplacement(media: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement, copy: Element, contributesPaint = true, kind: 'canvas' | 'image' | 'video' = 'canvas', presentationMaxDimension?: number) {
+  const canvas = media as HTMLCanvasElement, image = media as HTMLImageElement, video = media as HTMLVideoElement;
+  const dimensions = { width: kind === 'image' ? image.naturalWidth : kind === 'video' ? video.videoWidth : canvas.width, height: kind === 'image' ? image.naturalHeight : kind === 'video' ? video.videoHeight : canvas.height, clientWidth: media.clientWidth, clientHeight: media.clientHeight };
+  let pixels = '', reason = kind === 'canvas' ? 'zero-drawing-buffer' : 'media-frame-unavailable';
+  if (kind === 'image') {
+    const candidate = image.currentSrc || image.getAttribute('src') || '';
+    copy.removeAttribute('srcset'); copy.removeAttribute('sizes');
+    if (image.complete && dimensions.width > 0 && dimensions.height > 0 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(candidate)) {
+      copy.setAttribute('src', candidate);
+      return { replacement: copy, missing: undefined };
+    }
+  }
+  const ready = kind === 'canvas' || kind === 'image' && image.complete || kind === 'video' && video.readyState >= 2;
+  if (contributesPaint && ready && dimensions.width > 0 && dimensions.height > 0) {
+    try {
+      if (kind === 'canvas' && !presentationMaxDimension) pixels = canvas.toDataURL();
+      else {
+        const still = copy.ownerDocument.createElement('canvas');
+        const limit = presentationMaxDimension ?? 8192;
+        const ratio = Math.min(1, limit / dimensions.width, limit / dimensions.height, Math.sqrt(16_000_000 / (dimensions.width * dimensions.height)));
+        still.width = Math.max(1, Math.floor(dimensions.width * ratio)); still.height = Math.max(1, Math.floor(dimensions.height * ratio));
+        const context = still.getContext('2d');
+        if (context) { context.drawImage(media as CanvasImageSource, 0, 0, still.width, still.height); pixels = still.toDataURL('image/png'); }
+      }
+      reason = 'unreadable-media-pixels';
+    } catch { reason = 'media-readback-unavailable'; }
+  }
+  const available = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(pixels);
+  // Nonpainting replaced elements must remain atomic inline boxes: a DIV with
+  // display:inline would ignore the captured used width/height and shift flow.
+  const replacement = copy.ownerDocument.createElement(available || !contributesPaint ? 'img' : 'div');
+  replacement.setAttribute('style', copy.getAttribute('style') || '');
+  if (copy.id) replacement.id = copy.id;
+  const label = media.getAttribute('aria-label') || (kind === 'image' ? image.alt : '') || media.id || (kind === 'canvas' ? 'Canvas' : kind === 'video' ? 'Video' : 'Image');
+  if (available) { replacement.setAttribute('src', pixels); replacement.setAttribute('alt', label); }
+  else {
+    if(!contributesPaint)replacement.setAttribute('src','data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=');
+    replacement.setAttribute('role', 'img');
+    replacement.setAttribute('aria-label', label + ' — frame unavailable');
+    replacement.setAttribute('data-northstar-capture-unavailable', kind);
+    if(contributesPaint){
+      replacement.style.setProperty('display', 'grid'); replacement.style.setProperty('place-items', 'center');
+      replacement.style.setProperty('font', '12px/1.4 Arial, sans-serif');
+      replacement.textContent = (kind === 'canvas' ? 'Canvas' : kind === 'video' ? 'Video' : 'Image') + ' frame unavailable';
+    }
+  }
+  return { replacement, missing: available || !contributesPaint ? undefined : { selector: media.id ? '#' + media.id : kind === 'image' ? 'img' : kind, kind, reason, ...dimensions } };
+}
+
+/** Private snapshot images must already be retained bytes or owned blob URLs. */
+export function screenCaptureImageSourceIsSafe(source: string | null, retainedUrls: readonly string[]) {
+  return typeof source === 'string' && (/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(source) || retainedUrls.includes(source));
+}
+
+export type ScreenAction = { action: 'presence-mode' | 'feedback-target' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
+
+/** Host selection and saved-source patches preserve the user's live app state. */
+export function screenCommandMayRunDuringHumanInput(action:ScreenAction['action']):boolean {
+  return ['presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
+}
+
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
 
 export function signalCanvasV2ScreenRuntimeReady(document: {readyState: string; addEventListener(type: string, listener: () => void, options: {once: boolean}): void}, announce: () => void) {
@@ -75,6 +145,9 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     const token=${JSON.stringify(token)}, protocol=${JSON.stringify(SCREEN_PROTOCOL)};
     const readCanvasContext=(${installScreenCanvasContextObservation.toString()})();
     const errors=[];
+    const presentationSelector=(${screenPresentationSelector.toString()});
+    const presentationHandoff=(${createScreenPresentationHandoff.toString()})(id=>parent.postMessage({protocol,token,presentationFrameReady:id},'*'),${process.env.NODE_ENV !== 'production' ? "(id,stage)=>parent.postMessage({protocol,token,presentationFrameProgress:{id,stage}},'*')" : 'undefined'});
+    addEventListener('pagehide',presentationHandoff.dispose,{once:true});
     let assetPatchSequence=0;
     const detachedSections=new Map();
     // Each native product runtime starts from its retained family dataset.
@@ -161,9 +234,30 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       }
       return lastTrustedWait;
     };
-    let feedbackMode=false, feedbackOutline, motionSession, humanInputSequence=0;
+    let editSelectionSelector, editSelectionFrame;
+    let presenceMode=false, presenceTimer, presencePoint, lastPresenceAt=0;
+    const sendPresence=()=>{clearTimeout(presenceTimer);presenceTimer=undefined;if(!presenceMode)return;lastPresenceAt=performance.now();parent.postMessage({protocol,token,presencePointer:presencePoint},'*')};
+    document.addEventListener('pointermove',e=>{if(!presenceMode||!e.isTrusted)return;presencePoint={x:e.clientX,y:e.clientY};const wait=40-(performance.now()-lastPresenceAt);if(wait<=0)sendPresence();else if(!presenceTimer)presenceTimer=setTimeout(sendPresence,wait)},true);
+    document.documentElement.addEventListener('pointerleave',e=>{if(!presenceMode||!e.isTrusted)return;presencePoint=null;sendPresence()},true);
+    let editMode=false, feedbackMode=false, feedbackOutline, motionSession, humanInputSequence=0,editSelectionSelectors=[];
+    let layerHoverSelector,layerHoverElement,layerHoverOutline,layerHoverFrame,layerHoverBounds;
+    const clearLayerHover=()=>{layerHoverSelector=undefined;layerHoverElement=undefined;layerHoverBounds=undefined;if(layerHoverFrame)cancelAnimationFrame(layerHoverFrame);layerHoverFrame=undefined;layerHoverOutline?.remove();layerHoverOutline=undefined};
+    const drawLayerHover=()=>{
+      layerHoverFrame=undefined;if(!editMode||!layerHoverSelector){clearLayerHover();return;}
+      const element=layerHoverElement?.isConnected?layerHoverElement:document.querySelector(layerHoverSelector);layerHoverElement=element;if(!element){clearLayerHover();return;}let box=element.getBoundingClientRect();
+      if(element&&box&&!box.width&&!box.height&&getComputedStyle(element).display==='contents'){
+        const boxes=[...element.children].map(child=>child.getBoundingClientRect()).filter(r=>r.width&&r.height);
+        if(boxes.length){const x=Math.min(...boxes.map(r=>r.x)),y=Math.min(...boxes.map(r=>r.y));box={x,y,width:Math.max(...boxes.map(r=>r.right))-x,height:Math.max(...boxes.map(r=>r.bottom))-y};}
+      }
+      if(!layerHoverOutline){layerHoverOutline=document.createElement('div');layerHoverOutline.dataset.northstarFeedbackOverlay='true';layerHoverOutline.dataset.northstarLayerHover='true';layerHoverOutline.style.cssText='position:fixed;pointer-events:none;z-index:2147483646;border:1.5px solid #a58bf8;background:rgba(155,135,239,.1);border-radius:2px;box-sizing:border-box';document.body.append(layerHoverOutline);}
+      const bounds=box&&box.width&&box.height?[box.x,box.y,box.width,box.height].join('|'):'hidden';if(bounds!==layerHoverBounds){layerHoverBounds=bounds;if(bounds==='hidden')layerHoverOutline.style.display='none';else Object.assign(layerHoverOutline.style,{display:'block',left:box.x+'px',top:box.y+'px',width:box.width+'px',height:box.height+'px'});}
+      layerHoverFrame=requestAnimationFrame(drawLayerHover);
+    };
+
     const motionTimeline=${screenMotionTimeline.toString()};
     const packCapture=${packScreenCaptureImages.toString()};
+    const mediaCapture=${screenMediaCaptureReplacement.toString()};
+    const canvasContributesPaint=${screenCanvasContributesPaint.toString()};
     const advanceJourneyMotion=${advanceScreenJourneyMotion.toString()};
     const activateControl=${activateScreenControl.toString()};
     // The local naming helper keeps serialized nested callbacks self-contained
@@ -195,9 +289,35 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         e.preventDefault();parent.postMessage({protocol,token,assetDrag:true},'*');
       }
     },true);
+    for(const type of ['pointerdown','wheel','keydown','input','click','change'])document.addEventListener(type,e=>{if(e.isTrusted){humanInputSequence++;releaseMotion();stateCheckpoint.queueInput(type,humanInputSequence)}},{capture:true,passive:true});
+    // Edit mode consumes native input before application handlers. Private
+    // verification uses synthetic commands and remains independent of this UI mode.
+    for(const type of ['pointerdown','pointerup','click','keydown','keypress','keyup','submit'])document.addEventListener(type,e=>{
+      if(!editMode||feedbackMode||!e.isTrusted)return;
+      if(type==='keydown'&&e.key==='Escape'){
+        e.preventDefault();e.stopImmediatePropagation();parent.postMessage({protocol,token,exitEditing:true},'*');return;
+      }
+      if(type==='keydown'&&['Tab','Shift','Control','Meta','Alt'].includes(e.key))return;
+      e.preventDefault();e.stopImmediatePropagation();
+      if(type==='click'){
+        const options=(${screenDirectOptionsAtPoint.toString()})(document,e.clientX,e.clientY,true);
+        editSelectionSelector=options?.appearance?.selector;
+        parent.postMessage({protocol,token,directOptions:options||{x:e.clientX,y:e.clientY},inputSequence:humanInputSequence,directGesture:'select',selectionMode:e.shiftKey||e.metaKey||e.ctrlKey?'toggle':'replace'},'*');
+      }
+    },true);
+    document.addEventListener('scroll',()=>{
+      if(!editMode||!editSelectionSelector||editSelectionFrame)return;
+      editSelectionFrame=requestAnimationFrame(()=>{
+        editSelectionFrame=undefined;
+        if(!editMode||!editSelectionSelector)return;
+        const options=(${screenDirectOptionsAtPoint.toString()})(document,0,0,true,editSelectionSelector);
+        if(options?.appearance){options.x=Math.max(0,Math.min(innerWidth,options.appearance.rect.x));options.y=Math.max(0,Math.min(innerHeight,options.appearance.rect.y));}
+        parent.postMessage({protocol,token,directOptions:options||{x:0,y:0},inputSequence:humanInputSequence,directGesture:'select',directRefresh:true,selectionTargets:editSelectionSelectors.flatMap(selector=>{const target=(${screenDirectOptionsAtPoint.toString()})(document,0,0,true,selector)?.appearance;return target?[target]:[]})},'*');
+      });
+    },true);
     for(const type of ['dblclick','contextmenu'])document.addEventListener(type,e=>{
-      if(!e.isTrusted||feedbackMode)return;
-      const options=(${screenDirectOptionsAtPoint.toString()})(document,e.clientX,e.clientY);
+      if(!e.isTrusted||feedbackMode||type==='dblclick'&&!editMode)return;
+      const options=(${screenDirectOptionsAtPoint.toString()})(document,e.clientX,e.clientY,editMode);
       if(!options||type==='dblclick'&&!options.text||type==='contextmenu'&&!options.text&&!options.section&&!options.appearance)return;
       e.preventDefault();e.stopImmediatePropagation();
       parent.postMessage({protocol,token,directOptions:options,inputSequence:humanInputSequence,directGesture:type==='dblclick'?'text':'menu'},'*');
@@ -217,7 +337,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     addEventListener('unhandledrejection', e => errors.push(String(e.reason).slice(0,1000)));
     // Capture after the complete event dispatch; a capture-listener microtask
     // runs before the product's later handlers and would retain stale state.
-    for(const type of ['pointerdown','wheel','keydown','input','click','change'])document.addEventListener(type,e=>{if(e.isTrusted){humanInputSequence++;releaseMotion();stateCheckpoint.queueInput(type,humanInputSequence)}},{capture:true,passive:true});
+
     document.addEventListener('submit', e => e.preventDefault(), true);
     document.addEventListener('keydown', e => {if(e.key==='Escape'){clearFeedback();parent.postMessage({protocol,token,escape:true},'*')}});
     document.addEventListener('click', e => { const a=e.target.closest?.('a'); if(a && !a.getAttribute('href')?.startsWith('#')) e.preventDefault(); }, true);
@@ -340,36 +460,77 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const weight=value=>value==='normal'?400:value==='bold'?700:Number(value);
       return [...document.fonts].map(font=>{const family=font.family.replace(/[\"']/g,'').toLowerCase(),range=font.weight.split(' ').map(weight);return {family:font.family,weight:font.weight,style:font.style,status:font.status,used:styles.some(s=>s.fontFamily.split(',').some(f=>f.trim().replace(/[\"']/g,'').toLowerCase()===family)&&s.fontStyle===font.style&&weight(s.fontWeight)>=range[0]&&weight(s.fontWeight)<=range[range.length-1])}});
     };
-    const inspect = () => ({retainedState:retainedSnapshot(),navigationClearance:navigationClearance(),layoutWarnings:layoutWarnings(),viewportLayout:viewportLayout(),textCollisions:inspectTextCollisions(document),scrollRegions:scrollRegions(),componentTargets:[...document.querySelectorAll('[data-northstar-control],button,[role="button"],section,article,nav,[role="navigation"],[data-northstar-component]')].slice(0,100).map(el=>({...describe(el),...componentContext(el)})),productData:productData(),appearance:{reference:productAppearance,canvasIndependent:true,colorScheme:getComputedStyle(document.documentElement).colorScheme},fonts:fontReadings(),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),hiddenPainted:hiddenPainted(),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:horizontalOverflow(),errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
-    const snapshot = () => {
+    const inspect = () => ({retainedState:retainedSnapshot(),navigationClearance:navigationClearance(),layoutWarnings:layoutWarnings(),viewportLayout:viewportLayout(),textCollisions:inspectTextCollisions(document),scrollRegions:scrollRegions(),componentTargets:[...document.querySelectorAll('[data-northstar-control],button,[role="button"],section,article,nav,[role="navigation"],[data-northstar-component]')].slice(0,100).map(el=>({...describe(el),...componentContext(el)})),productData:productData(),appearance:{reference:productAppearance,canvasIndependent:true,colorScheme:getComputedStyle(document.documentElement).colorScheme},fonts:fontReadings(),reviewRegions:reviewRegions(),components:componentReadings(),motion:motionInfo(),title:document.title,text:document.body.innerText.slice(0,16000),controls:[...document.querySelectorAll('button,input,select,textarea,a,[role="button"]')].filter(visible).slice(0,100).map(describe),hiddenPainted:hiddenPainted(),canvases:[...document.querySelectorAll('canvas')].map(el=>({selector:selectorFor(el),width:el.width,height:el.height,clientWidth:el.clientWidth,clientHeight:el.clientHeight,contributesPaint:canvasContributesPaint(el),visible:visible(el),context:readCanvasContext(el)?.type??null})),images:[...document.images].map(el=>({label:el.alt,loaded:el.complete&&el.naturalWidth>0,visible:visible(el),width:el.naturalWidth,height:el.naturalHeight})),videos:[...document.querySelectorAll('video')].map(el=>({selector:selectorFor(el),label:el.getAttribute('aria-label'),loaded:el.readyState>=2&&el.videoWidth>0,visible:visible(el),width:el.videoWidth,height:el.videoHeight,time:el.currentTime,duration:Number.isFinite(el.duration)?el.duration:null,paused:el.paused,muted:el.muted,loop:el.loop,error:el.error?.code})),overflow:horizontalOverflow(),errors:[...errors].slice(-10),scroll:{x:scrollX,y:scrollY}});
+    // Navigation continuity needs pixels, not the review diagnostics or a
+    // computed-style copy on every static element. Preserve authored CSS and
+    // live DOM state; freeze only current animation/hover targets.
+    const presentationSnapshot = () => {
+      const live=[document.body,...document.body.querySelectorAll('*')];
+      if(live.length>1500)throw Error('This preview exceeds the idle presentation budget.');
+      const root=document.documentElement.cloneNode(false),clone=document.body.cloneNode(true),copies=[root,clone,...clone.querySelectorAll('*')],missingCaptures=[];
+      live.unshift(document.documentElement);
+      const states=['hover','focus','focus-within','focus-visible'].map(state=>[state,new Set(document.querySelectorAll(':'+state))]);
+      const animated=new Map();
+      for(const animation of document.getAnimations()){
+        const effect=animation.effect,target=effect?.target;if(!target)continue;
+        const properties=animated.get(target)||new Set();
+        for(const keyframe of effect.getKeyframes?.()||[])for(const property of Object.keys(keyframe))if(!['offset','computedOffset','easing','composite'].includes(property))properties.add(property.replace(/[A-Z]/g,character=>'-'+character.toLowerCase()));
+        if(properties.size>128)throw Error('This animation exceeds the idle presentation budget.');
+        animated.set(target,properties);
+      }
       let pseudoCss='';
+      live.forEach((el,i)=>{const copy=copies[i];
+        for(const[state,matches]of states)if(matches.has(el))copy.setAttribute('data-northstar-presentation-'+state,'');
+        if(animated.has(el)){
+          const properties=animated.get(el),style=getComputedStyle(el);for(const property of properties)copy.style?.setProperty(property,style.getPropertyValue(property));
+          for(const pseudo of ['::before','::after']){const ps=getComputedStyle(el,pseudo);if(ps.content&&!['none','normal'].includes(ps.content)){copy.setAttribute('data-northstar-presentation-id',String(i));pseudoCss+='[data-northstar-presentation-id="'+i+'"]'+pseudo+'{content:'+ps.content+'!important;'+[...properties].map(property=>property+':'+ps.getPropertyValue(property)+'!important').join(';')+'}';}}
+        }
+        if(el instanceof HTMLInputElement){copy.setAttribute('value',el.value);if(el.checked)copy.setAttribute('checked','');else copy.removeAttribute('checked')}
+        if(el instanceof HTMLTextAreaElement)copy.textContent=el.value;
+        if(el instanceof HTMLSelectElement){[...copy.options].forEach((option,j)=>option.toggleAttribute('selected',el.options[j].selected));if(!el.multiple&&el.selectedIndex<0){const blank=document.createElement('option');blank.setAttribute('selected','');blank.setAttribute('hidden','');copy.prepend(blank)}}
+        if(el instanceof HTMLCanvasElement||el instanceof HTMLVideoElement||el instanceof HTMLImageElement){const kind=el instanceof HTMLCanvasElement?'canvas':el instanceof HTMLVideoElement?'video':'image',captured=mediaCapture(el,copy,canvasContributesPaint(el),kind,640);if(captured.missing)missingCaptures.push(captured.missing);if(captured.replacement!==copy){const style=getComputedStyle(el);for(const property of style)captured.replacement.style.setProperty(property,style.getPropertyValue(property));copy.replaceWith(captured.replacement)}}
+        if(el.scrollTop||el.scrollLeft)for(let j=0;j<copy.children.length;j++){const child=copy.children[j];if(child.style&&getComputedStyle(el.children[j]).position!=='fixed'){child.style.position='relative';child.style.top=-el.scrollTop+'px';child.style.left=-el.scrollLeft+'px'}}
+      });
+      clone.style.setProperty('position','relative','important');clone.style.setProperty('left',-scrollX+'px','important');clone.style.setProperty('top',-scrollY+'px','important');
+      clone.querySelectorAll('script,iframe,object,embed,link,meta,base,[data-northstar-feedback-overlay]').forEach(el=>el.remove());
+      const rules=sheet=>[...sheet.cssRules].map(rule=>typeof rule.selectorText==='string'?(rule.cssRules?.length?presentationSelector(rule.selectorText)+'{'+rule.style.cssText+rules(rule)+'}':rule.cssText.replace(rule.selectorText,presentationSelector(rule.selectorText))):rule.cssRules?rule.cssText.slice(0,rule.cssText.indexOf('{')+1)+rules(rule)+'}':rule.cssText).join('\\n');
+      const css=[...document.styleSheets].map(rules).join('\\n')+'\\n'+pseudoCss+'\\n*{animation:none!important;transition:none!important}';
+      return {...packCapture(clone.outerHTML,css),rootAttributes:[...root.attributes].filter(attribute=>['class','id','style','lang','dir'].includes(attribute.name)||attribute.name.startsWith('data-')).map(attribute=>[attribute.name,attribute.value]),width:innerWidth,height:innerHeight,missingCaptures};
+    };
+    const snapshot = () => {
+      let pseudoCss='';const missingCaptures=[];
       const clone=document.body.cloneNode(true),live=[document.body,...document.body.querySelectorAll('*')],copies=[clone,...clone.querySelectorAll('*')];
       if(live.length>5000) throw Error('The screen is too large to capture.');
       live.forEach((el,i) => {const copy=copies[i];const s=getComputedStyle(el); for(const p of s) copy.style?.setProperty(p,s.getPropertyValue(p));copy.style?.setProperty('animation','none','important');copy.style?.setProperty('transition','none','important');
         for(const pseudo of ['::before','::after']){const ps=getComputedStyle(el,pseudo);if(ps.content && !['none','normal'].includes(ps.content)){copy.setAttribute('data-northstar-capture-id',String(i));pseudoCss+='[data-northstar-capture-id=\"'+i+'\"]'+pseudo+'{'+[...ps].map(p=>p+':'+ps.getPropertyValue(p)+'!important').join(';')+';animation:none!important;transition:none!important}';}}
         if(el instanceof HTMLInputElement){copy.setAttribute('value',el.value);if(el.checked)copy.setAttribute('checked','');else copy.removeAttribute('checked')}
         if(el instanceof HTMLTextAreaElement)copy.textContent=el.value;
-        if(el instanceof HTMLSelectElement) [...copy.options].forEach((o,j)=>o.selected=el.options[j].selected);
-        if(el instanceof HTMLCanvasElement){const image=document.createElement('img');image.src=el.toDataURL();image.setAttribute('style',copy.getAttribute('style')||'');copy.replaceWith(image)}
-        if(el instanceof HTMLVideoElement){const image=document.createElement('img');image.setAttribute('style',copy.getAttribute('style')||'');image.alt=el.getAttribute('aria-label')||'Video frame';if(el.readyState>=2&&el.videoWidth){const still=document.createElement('canvas');still.width=el.videoWidth;still.height=el.videoHeight;still.getContext('2d').drawImage(el,0,0);image.src=still.toDataURL('image/jpeg',0.95)}copy.replaceWith(image)}
-        // A review must capture the GIF's currently displayed frame, rather
-        // than restarting its animation in the private raster surface.
-        if(el instanceof HTMLImageElement && el.src.startsWith('data:image/gif;') && el.complete && el.naturalWidth){const still=document.createElement('canvas');still.width=el.naturalWidth;still.height=el.naturalHeight;still.getContext('2d').drawImage(el,0,0);copy.src=still.toDataURL('image/png')}
+        if(el instanceof HTMLSelectElement){[...copy.options].forEach((option,j)=>option.toggleAttribute('selected',el.options[j].selected));if(!el.multiple&&el.selectedIndex<0){const blank=document.createElement('option');blank.setAttribute('selected','');blank.setAttribute('hidden','');copy.prepend(blank)}}
+        if(el instanceof HTMLCanvasElement||el instanceof HTMLVideoElement||el instanceof HTMLImageElement){const kind=el instanceof HTMLCanvasElement?'canvas':el instanceof HTMLVideoElement?'video':'image',captured=mediaCapture(el,copy,canvasContributesPaint(el),kind);if(captured.missing)missingCaptures.push(captured.missing);if(captured.replacement!==copy)copy.replaceWith(captured.replacement)}
         // Translate scrolled contents inside their clipping box for raster capture.
         if(el.scrollTop||el.scrollLeft){for(const child of [...copy.children]) if(child.style && getComputedStyle(el.children[[...copy.children].indexOf(child)]).position!=='fixed'){child.style.position='relative';child.style.top=-el.scrollTop+'px';child.style.left=-el.scrollLeft+'px'}}
       });
       clone.style.margin='0';clone.style.setProperty('position','relative','important');clone.style.setProperty('left',-scrollX+'px','important');clone.style.setProperty('top',-scrollY+'px','important');
       clone.querySelectorAll('script,iframe,object,embed,link,meta,base,[data-northstar-feedback-overlay]').forEach(el=>el.remove());
-      return {...packCapture(clone.outerHTML,[...document.querySelectorAll('style')].map(el=>el.textContent).join('\\n')+pseudoCss),width:innerWidth,height:innerHeight,...inspect()};
+      return {...packCapture(clone.outerHTML,[...document.querySelectorAll('style')].map(el=>el.textContent).join('\\n')+pseudoCss),width:innerWidth,height:innerHeight,missingCaptures,...inspect()};
     };
     addEventListener('message', async e => {
       if(e.source!==parent || e.data?.protocol!==protocol || e.data.token!==token) return;
+      if(typeof e.data.presentationFrameId==='string'){
+        presentationHandoff.request(e.data.presentationFrameId);
+        return;
+      }
       if(typeof e.data.cancelRequestId==='string'){pointerRequests.get(e.data.cancelRequestId)?.abort();return}
       if(typeof e.data.viewportActive==='boolean'){window.northstarThree?.setViewportActive(e.data.viewportActive);window.northstarWasm?.setViewportActive(e.data.viewportActive);return}
       const {requestId,command}=e.data;
       let finishReviewDraw;
       try {
+        if(command.action==='presentation-snapshot'&&[...document.querySelectorAll('canvas')].some(canvas=>(canvas.width===0||canvas.height===0)&&canvasContributesPaint(canvas)))throw Error('Presentation pixels are not ready.');
         finishReviewDraw=window.northstarThree?.beginReviewDraw();
+        if(command.action==='presentation-snapshot'){
+          await document.fonts.ready;await waitTrustedRuntime();
+          parent.postMessage({protocol,token,requestId,result:presentationSnapshot()},'*');return;
+        }
         if(command.action==='asset-target'){
           const target=(${screenAssetTargetAtPoint.toString()})(document,command.x,command.y);
           parent.postMessage({protocol,token,requestId,result:{target}},'*');return;
@@ -432,10 +593,20 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           const el=document.getElementById(command.selector);if((el instanceof HTMLInputElement||el instanceof HTMLTextAreaElement)&&el.type===command.value&&visible(el)&&!el.disabled){el.focus({preventScroll:true});if(typeof command.selectionStart==='number'&&typeof command.selectionEnd==='number'&&typeof el.selectionStart==='number')el.setSelectionRange(command.selectionStart,command.selectionEnd)}
           parent.postMessage({protocol,token,requestId,result:{}},'*');return;
         }
+        if(command.action==='patch-design'){
+          if(!command.designPatch||typeof command.designPatch.beforeHTML!=='string'||typeof command.designPatch.afterHTML!=='string'||command.designPatch.afterHTML.length>8000000)throw Error('Use current bounded design source.');
+          if(command.stylesheet!==undefined&&(typeof command.stylesheet!=='string'||command.stylesheet.length>8000000||command.stylesheet.toLowerCase().includes('</style')||/@import/i.test(command.stylesheet)))throw Error('Use a retained product stylesheet.');
+          (${reconcileScreenDesignSource.toString()})(document,command.designPatch.beforeHTML,command.designPatch.afterHTML);
+          if(command.stylesheet!==undefined){const sheet=document.querySelector('style[data-northstar-screen-style]');if(sheet)sheet.textContent=command.stylesheet;}
+          await settle();parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
+        }
         if(command.action==='patch-elements'){
+          if(command.stylesheet!==undefined){if(typeof command.stylesheet!=='string'||command.stylesheet.length>8000000||command.stylesheet.toLowerCase().includes('</style')||/@import/i.test(command.stylesheet))throw Error('Use a retained product stylesheet.');}
+
           if(!Array.isArray(command.edits)||!command.edits.length||command.edits.length>24)throw Error('Use bounded precise feedback edits.');
-          const prepared=command.edits.map(edit=>{const el=document.querySelector(edit.selector);if(!(el instanceof HTMLElement)||edit.text!==undefined&&el.children.length)throw Error('A feedback element changed in the live product state.');return {el,edit}});
-          for(const {el,edit} of prepared){if(edit.text!==undefined)el.textContent=edit.text;for(const [property,value] of Object.entries(edit.styles||{}))el.style.setProperty(property,value)}
+          const prepared=command.edits.map(edit=>{const el=document.querySelector(edit.selector);if(!(el instanceof HTMLElement||el instanceof SVGElement)||edit.text!==undefined&&el.children.length)throw Error('A feedback element changed in the live product state.');for(const name of Object.keys(edit.attributes||{}))if(!['data-northstar-mask-original','data-northstar-layer','data-northstar-locked','data-northstar-style','data-northstar-component-id','data-northstar-variant','data-northstar-text-override','x','y','width','height','rx','ry','cx','cy','r','x1','y1','x2','y2','points','d'].includes(name)||!name.startsWith('data-northstar-')&&!(el instanceof SVGElement))throw Error('Choose bounded vector geometry.');const html=edit.html===undefined?undefined:(${screenInlineTextMarkup.toString()})(edit.html,new DOMParser());return {el,edit:{...edit,...(html===undefined?{}:{html})}}});
+          for(const {el,edit} of prepared){if(edit.html!==undefined){el.innerHTML=edit.html;if(edit.inlineText===false)el.removeAttribute('data-northstar-inline-text');else el.setAttribute('data-northstar-inline-text','true')}if(edit.text!==undefined)el.textContent=edit.text;for(const [name,value] of Object.entries(edit.attributes||{})){if(!['data-northstar-mask-original','data-northstar-layer','data-northstar-locked','data-northstar-style','data-northstar-component-id','data-northstar-variant','data-northstar-text-override','x','y','width','height','rx','ry','cx','cy','r','x1','y1','x2','y2','points','d'].includes(name)||!name.startsWith('data-northstar-')&&!(el instanceof SVGElement))throw Error('Choose bounded vector geometry.');if(value===null)el.removeAttribute(name);else el.setAttribute(name,value)}for(const [property,value] of Object.entries(edit.styles||{}))el.style.setProperty(property,value)}
+          if(command.stylesheet!==undefined){const sheet=document.querySelector('style[data-northstar-screen-style]');if(sheet)sheet.textContent=command.stylesheet;}
           await settle();parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
         }
         if(command.action==='test-sequence'){
@@ -498,6 +669,30 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           }
           parent.postMessage({protocol,token,requestId,result:{samples}},'*');return;
         }
+        if(command.action==='feedback-target'){if(!Number.isFinite(command.x)||!Number.isFinite(command.y)||command.x<0||command.y<0||command.x>innerWidth||command.y>innerHeight)throw Error('Choose an area inside this app.');const target=(${screenDirectOptionsAtPoint.toString()})(document,command.x,command.y,true)?.appearance;parent.postMessage({protocol,token,requestId,result:{target}},'*');return;}
+        if(command.action==='edit-hover'){clearLayerHover();if(command.selector){if(!editMode||typeof command.selector!=='string'||command.selector.length>1600||document.querySelectorAll(command.selector).length!==1)throw Error('Hover a current layer.');layerHoverSelector=command.selector;drawLayerHover();}parent.postMessage({protocol,token,requestId,result:{hovered:!!layerHoverSelector}},'*');return;}
+        if(command.action==='edit-selection'){if(!Array.isArray(command.selectors)||command.selectors.length>24||command.selectors.some(selector=>typeof selector!=='string'||!selector||selector.length>1600))throw Error('Choose up to 24 layers.');editSelectionSelectors=[...command.selectors];parent.postMessage({protocol,token,requestId,result:{selected:editSelectionSelectors.length}},'*');return;}
+        if(command.action==='edit-targets'){
+          if(!Array.isArray(command.selectors)||command.selectors.length>24||command.selectors.some(selector=>typeof selector!=='string'||!selector||selector.length>1600))throw Error('Choose up to 24 current layers.');
+          const targets=command.selectors.map(selector=>{
+            const element=document.querySelector(selector),r=element?.getBoundingClientRect();
+            const target=element?(${screenDirectOptionsAtPoint.toString()})(document,(r?.x??0)+(r?.width??0)/2,(r?.y??0)+(r?.height??0)/2,true,selector)?.appearance:undefined;
+            if(!target)throw Error('A selected layer is not visible in the current state. Select it again.');return target;
+          });
+          parent.postMessage({protocol,token,requestId,result:{targets}},'*');return;
+        }
+        if(command.action==='edit-target'){
+          const element=command.selector&&document.querySelector(command.selector);
+          if(['reveal','reveal-only'].includes(command.value)&&element)element.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+          const r=element?.getBoundingClientRect();
+          const options=element?(${screenDirectOptionsAtPoint.toString()})(document,(r?.x??0)+(r?.width??0)/2,(r?.y??0)+(r?.height??0)/2,true,command.selector):undefined;
+          editSelectionSelector=options?.appearance?.selector;
+          if(options){options.x=Math.max(0,Math.min(innerWidth,options.x));options.y=Math.max(0,Math.min(innerHeight,options.y));}
+          parent.postMessage({protocol,token,directOptions:options||{x:0,y:0},inputSequence:humanInputSequence,directGesture:'select',directRefresh:true,...(command.selectionRequestId!==undefined?{selectionRequestId:command.selectionRequestId,selectionSelectors:command.selectionSelectors}:{}),...(['reveal','select'].includes(command.value)?{directSelection:true,selectionMode:command.selectionMode??'replace'}:{})},'*');
+          parent.postMessage({protocol,token,requestId,result:{selected:!!options,directOptions:options}},'*');return;
+        }
+        if(command.action==='presence-mode'){presenceMode=command.value==='on';if(!presenceMode){clearTimeout(presenceTimer);presenceTimer=undefined;presencePoint=null;}parent.postMessage({protocol,token,requestId,result:{presenceMode}},'*');return;}
+        if(command.action==='edit-mode'){editMode=command.value==='on';if(!editMode){editSelectionSelector=undefined;clearLayerHover();}parent.postMessage({protocol,token,requestId,result:{editMode}},'*');return}
         if(command.action==='feedback-mode'){feedbackMode=command.value==='on';if(!feedbackMode)clearFeedback();parent.postMessage({protocol,token,requestId,result:{feedbackMode}},'*');return}
         if(command.action==='motion-end'){if(motionSession?.id===command.motionSessionId)releaseMotion();parent.postMessage({protocol,token,requestId,result:{restored:true}},'*');return}
         if(command.action==='motion-begin'){
@@ -524,14 +719,20 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         const el=command.selector?document.querySelector(command.selector):undefined;
         let gesture;
         if(command.selector&&!el)throw Error('No element matches '+command.selector);
-        if(command.action==='patch-element'){if(!(el instanceof HTMLElement))throw Error('The feedback element is no longer present in this state.');if(command.text!==undefined){if(el.children.length)throw Error('Preserve element children.');el.textContent=command.text}for(const [p,v] of Object.entries(command.styles||{}))el.style.setProperty(p,v)}
+        if(command.action==='patch-element'){if(!(el instanceof HTMLElement||el instanceof SVGElement))throw Error('The feedback element is no longer present in this state.');if(command.text!==undefined){if(el.children.length)throw Error('Preserve element children.');el.textContent=command.text}for(const [p,v] of Object.entries(command.styles||{}))el.style.setProperty(p,v)}
         else if(command.action==='click'){if(!el||!reachableControl(el)||el.disabled)throw Error('Choose a visible control.');gesture=await clickPointer(command.selector,requestId)}
         else if(command.action==='fill'){if(!el||!reachableControl(el)||el.disabled||el.readOnly)throw Error('Choose a visible, editable field.');if(!(el instanceof HTMLInputElement||el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement))throw Error('Choose a form field.');el.value=String(command.value??'');el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))}
         else if(command.action==='scroll'){(el||window).scrollTo(Number(command.x)||0,Number(command.y)||0)}
         else if(command.action==='drag'){const step=(${validateScreenInteractionSequence.toString()})([{action:'drag',selector:command.selector,drag:command.drag}])[0];gesture=await dragPointer(step,requestId)}
         else if(!['inspect','snapshot'].includes(command.action))throw Error('Unknown screen action.');
         await settle();void document.body.offsetHeight;await document.fonts.ready;await waitTrustedRuntime();
+        if(command.action==='snapshot'){
+          for(let attempt=0;attempt<2&&[...document.querySelectorAll('canvas')].some(canvas=>(canvas.width===0||canvas.height===0)&&canvasContributesPaint(canvas)&&canvas.clientWidth>0&&canvas.clientHeight>0);attempt++){
+            void document.body.offsetHeight;window.dispatchEvent(new Event('resize'));await settle();await waitTrustedRuntime();
+          }
+        }
         if(command.action==='snapshot')await Promise.all([...document.querySelectorAll('video')].filter(el=>visible(el)&&el.readyState<2).map(el=>new Promise(resolve=>{const done=()=>{clearTimeout(timer);el.removeEventListener('loadeddata',done);el.removeEventListener('error',done);resolve()};const timer=setTimeout(done,5000);el.addEventListener('loadeddata',done,{once:true});el.addEventListener('error',done,{once:true})})));
+        if(command.action==='snapshot')await Promise.all([...document.images].filter(el=>canvasContributesPaint(el)&&!el.complete&&(el.currentSrc||el.getAttribute('src'))).map(el=>new Promise(resolve=>{const done=()=>{clearTimeout(timer);el.removeEventListener('load',done);el.removeEventListener('error',done);resolve()};const timer=setTimeout(done,1500);el.addEventListener('load',done,{once:true});el.addEventListener('error',done,{once:true})})));
         parent.postMessage({protocol,token,requestId,result:command.action==='snapshot'?snapshot():{...inspect(),element:el?describe(el):undefined,...(gesture?{gesture}: {})}},'*');
       } catch(error){parent.postMessage({protocol,token,requestId,error:String(error)},'*')}
       finally{finishReviewDraw?.()}

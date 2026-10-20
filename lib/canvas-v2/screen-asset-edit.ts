@@ -70,6 +70,7 @@ export function replaceScreenAsset(screen: CanvasV2InteractiveScreen, target: Sc
   if (!target || typeof target.selector !== 'string' || !target.selector || target.selector.length > 1600 || !['src', 'background-image'].includes(target.property)) throw new Error('Choose an image in this screen.');
   if (asset.mediaType && asset.mediaType !== 'image' || !/^data:image\/(?:png|jpeg|webp);base64,/.test(asset.url)) throw new Error('Choose a retained PNG, JPEG or WebP image.');
   const doc = parser.parseFromString(screen.html, 'text/html'), matches = doc.body.querySelectorAll(target.selector), el = matches[0];
+  if(el?.closest('[data-northstar-locked="true"]')||el?.querySelector('[data-northstar-locked="true"]'))throw new Error('Unlock this layer before replacing its asset.');
   if (matches.length !== 1 || !(el instanceof HTMLElement) || el === doc.body || el.closest('[data-northstar-raster-interface]')) throw new Error('This image changed. Drop it onto the current image again.');
   const handle = 'northstar-asset:' + canvasV2ScreenAssetToken(asset.id);
   if (target.property === 'src') {

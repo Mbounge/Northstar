@@ -1,8 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia, canvasV2MediaDisplaySize } from "../lib/canvas-v2/canvas-media";
 import { applyCanvasV2NativeSceneMutation, copyCanvasV2NativeSelection, pasteCanvasV2NativeClipboard, serializeCanvasV2NativeScene, type CanvasV2NativeSceneDocument } from "../lib/canvas-v2/native-scene";
 import { validateCanvasV2ArtifactDocument, validateCanvasV2EvidenceBindings } from "../lib/canvas-v2/artifact-safety";
+
+test('the actual GIF ref restores its released source after same-node replay and uses the current source on replacement', () => {
+  const text=readFileSync(new URL('../components/canvas-v2/playable-media.tsx',import.meta.url),'utf8');
+  const source=ts.createSourceFile('playable-media.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let callback:ts.Expression|undefined;
+  const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(source)==='attachGif'&&node.initializer&&ts.isCallExpression(node.initializer))callback=node.initializer.arguments[0];ts.forEachChild(node,visit)};
+  visit(source);assert.ok(callback,'Exercise the production GIF callback, rather than a duplicate implementation.');
+  const code=ts.transpileModule(`const attachGif=${callback.getText(source)};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const ref:{current:typeof image|null}={current:null};
+  const make=(src:string)=>new Function('media','gifImage',`${code};return attachGif;`)({src},ref) as (element:typeof image|null)=>void;
+  let value:string|null='data:image/gif;base64,first',writes=0;
+  const image={getAttribute:()=>value,setAttribute:(_name:string,next:string)=>{value=next;writes++},removeAttribute:()=>{value=null}};
+  const first=make(value!);first(image);assert.equal(writes,0,'An unchanged attached resource must not reload.');
+  first(null);assert.equal(value,null);first(image);assert.equal(value,'data:image/gif;base64,first');assert.equal(writes,1);
+  first(image);assert.equal(writes,1,'Ordinary ref attachment cannot restart the GIF.');
+  first(null);const next=make('data:image/gif;base64,replacement');next(image);assert.equal(value,'data:image/gif;base64,replacement');
+  next(null);assert.equal(value,null);assert.equal(ref.current,null,'Actual unmount still releases its source.');
+});
 
 test("playable media remains a native object, requires exact provenance and survives copy/paste", () => {
   const empty: CanvasV2NativeSceneDocument = { schema:"canvas-v2.native-scene.v1",revisionId:"media",width:12000,height:8000,nodes:[],rootIds:[],css:"" };

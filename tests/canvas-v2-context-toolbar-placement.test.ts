@@ -40,7 +40,7 @@ test("the contextual toolbar never trades covering the selection for a cleaner e
   assert.equal(overlapWidth * overlapHeight, 0);
 });
 
-test("nearby canvas content stays clickable when no attached placement is clear", () => {
+test("crowded canvas content keeps the toolbar attached instead of sending it to a remote dock", () => {
   const placement = resolveCanvasV2ContextToolbarPosition({
     selection: { left: 540, top: 460, right: 760, bottom: 490 },
     toolbar: { width: 336, height: 56 },
@@ -52,9 +52,9 @@ test("nearby canvas content stays clickable when no attached placement is clear"
     chrome: [],
   });
 
-  assert.equal(placement.placement, "dock");
-  assert.equal(placement.center, 650);
-  assert.equal(placement.top, 18);
+  const rect = toolbarRect(placement, 336, 56);
+  assert.equal(overlap(rect, { left: 540, top: 460, right: 760, bottom: 490 }), 0, "the selected content must stay clear");
+  assert.ok(gapBetween(rect, { left: 540, top: 460, right: 760, bottom: 490 }) <= 24, "surrounding artwork must not detach the inspector from its selection");
 });
 
 test("a newly moved object does not put its toolbar over the next object", () => {
@@ -81,4 +81,55 @@ test("a top-edge selection flips to the immediately connected row below", () => 
   assert.equal(placement.placement, "below");
   assert.equal(placement.center, 830);
   assert.equal(placement.top, 70);
+});
+
+
+function toolbarRect(placement: { center: number; top: number }, width: number, height: number) {
+  return { left: placement.center - width / 2, top: placement.top, right: placement.center + width / 2, bottom: placement.top + height };
+}
+function overlap(a: { left: number; top: number; right: number; bottom: number }, b: typeof a) {
+  return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+}
+function gapBetween(a: { left: number; top: number; right: number; bottom: number }, b: typeof a) {
+  return Math.hypot(Math.max(0, a.left - b.right, b.left - a.right), Math.max(0, a.top - b.bottom, b.top - a.bottom));
+}
+
+test("a partially clipped poster keeps its toolbar beside the visible selection", () => {
+  const selection = { left: 620, top: -260, right: 920, bottom: 220 };
+  const viewport = { left: 16, top: 92, right: 1_424, bottom: 808 };
+  const placement = resolveCanvasV2ContextToolbarPosition({ selection, viewport, toolbar: { width: 336, height: 56 }, obstacles: [], chrome: [] });
+  const rect = toolbarRect(placement, 336, 56);
+  assert.equal(overlap(rect, selection), 0);
+  assert.ok(gapBetween(rect, { ...selection, top: viewport.top }) <= 24, "clipping must not leave a toolbar near the invisible original top");
+  assert.ok(rect.left >= viewport.left && rect.right <= viewport.right && rect.top >= viewport.top && rect.bottom <= viewport.bottom);
+});
+
+test("top-right mode controls remain usable while the nearby object toolbar flips below", () => {
+  const selection = { left: 1_050, top: 120, right: 1_220, bottom: 170 };
+  const chrome = { left: 1_140, top: 18, right: 1_424, bottom: 92 };
+  const placement = resolveCanvasV2ContextToolbarPosition({ selection, toolbar: { width: 312, height: 42 }, viewport: { left: 16, top: 18, right: 1_424, bottom: 808 }, obstacles: [], chrome: [chrome] });
+  const rect = toolbarRect(placement, 312, 42);
+  assert.equal(overlap(rect, selection), 0);
+  assert.equal(overlap(rect, chrome), 0, "canvas-wide mode controls must not be covered");
+  assert.ok(gapBetween(rect, selection) <= 24);
+});
+
+test("a narrow canvas clamps a wide inspector without covering the selected poster", () => {
+  const viewport = { left: 16, top: 18, right: 330, bottom: 620 };
+  const selection = { left: 100, top: 220, right: 240, bottom: 460 };
+  const placement = resolveCanvasV2ContextToolbarPosition({ selection, viewport, toolbar: { width: 640, height: 56 }, obstacles: [], chrome: [] });
+  const rect = toolbarRect(placement, viewport.right - viewport.left, 56);
+  assert.ok(rect.left >= viewport.left && rect.right <= viewport.right && rect.top >= viewport.top && rect.bottom <= viewport.bottom);
+  assert.equal(overlap(rect, selection), 0);
+  assert.ok(gapBetween(rect, selection) <= 24);
+});
+
+test("panning an object and its visible canvas together moves the toolbar by the same screen offset", () => {
+  const input = { selection: { left: 540, top: 300, right: 760, bottom: 540 }, toolbar: { width: 336, height: 56 }, viewport: { left: 16, top: 18, right: 1_424, bottom: 808 }, obstacles: [{ left: 800, top: 250, right: 1_100, bottom: 540 }], chrome: [{ left: 16, top: 18, right: 320, bottom: 92 }] };
+  const first = resolveCanvasV2ContextToolbarPosition(input);
+  const shift = (rect: typeof input.selection) => ({ left: rect.left + 130, right: rect.right + 130, top: rect.top + 60, bottom: rect.bottom + 60 });
+  const moved = resolveCanvasV2ContextToolbarPosition({ ...input, selection: shift(input.selection), viewport: shift(input.viewport), obstacles: input.obstacles.map(shift), chrome: input.chrome.map(shift) });
+  assert.equal(moved.placement, first.placement);
+  assert.equal(moved.center, first.center + 130);
+  assert.equal(moved.top, first.top + 60);
 });

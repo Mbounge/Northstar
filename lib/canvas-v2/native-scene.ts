@@ -1,3 +1,4 @@
+import { CANVAS_V2_NATIVE_GEOMETRY_CSS } from './native-geometry-document';
 import { SCREEN_ATTRIBUTE, parseCanvasV2Screen } from './interactive-screen';
 import { canvasV2TextPaintRects, canvasV2TextPaintIntersection, canvasV2ElementPaintBounds } from "./text-paint-bounds";
 import { MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from "@/lib/canvas-v2/canvas-media";
@@ -1421,7 +1422,11 @@ export function compileCanvasV2NativeScene(input: {
   const viewportPlacedRoot = fullWorkspaceRoot?.attributes["data-canvas-v2-viewport-placed"] === "true";
   const cohortPlacedNodeIds = new Set<string>();
   const absoluteCohort = fullWorkspaceRoot && !viewportPlacedRoot
-    ? visiblePlacementNodes.filter((node) => !referencedNodeIds.has(node.id) && node.layoutMode === "absolute" && !node.attributes["data-canvas-v2-scene-layout"])
+    ? visiblePlacementNodes.filter((node) => !referencedNodeIds.has(node.id) && node.layoutMode === "absolute" && !node.attributes["data-canvas-v2-scene-layout"]
+      // Explicit attachments and authorized repairs must reach the semantic
+      // placement path below, rather than becoming a viewport-placed cohort.
+      && !node.attributes["data-canvas-v2-territory-anchor"]
+      && !(node.sourceNodeId && relocatablePlacementNodeIds.has(node.sourceNodeId)))
     : [];
   if (fullWorkspaceRoot && absoluteCohort.length && absoluteCohort.length === visiblePlacementNodes.length - referencedNodeIds.size) {
     const left = Math.min(...absoluteCohort.map((node) => node.geometry.x));
@@ -3731,11 +3736,6 @@ export function serializeCanvasV2NativeScene(scene: CanvasV2NativeSceneDocument)
     const content = contentItems.map((item) => item.kind === "text" ? escapeHtml(item.value) : serialize(item.id, node.id)).join("");
     return `${opening}${content}</${node.tagName}>`;
   };
-  const geometryGuard = `
-/* canvas-v2-native-scene-geometry-v1 */
-[data-canvas-v2-scene-layout="absolute"]{box-sizing:border-box!important;position:absolute!important;left:var(--canvas-v2-scene-x)!important;top:var(--canvas-v2-scene-y)!important;width:var(--canvas-v2-scene-width)!important;height:var(--canvas-v2-scene-height)!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;transform:none!important;translate:none!important;rotate:var(--canvas-v2-scene-rotation)!important;transform-origin:center!important}
-[data-canvas-v2-scene-layout="flow"]{position:relative!important;rotate:var(--canvas-v2-scene-rotation)!important;transform-origin:center!important}
-/* /canvas-v2-native-scene-geometry-v1 */`;
   const css = scene.css.replace(/\n?\/\* canvas-v2-native-scene-geometry-v1 \*\/[\s\S]*?\/\* \/canvas-v2-native-scene-geometry-v1 \*\//g, "");
   // An empty visible board is still a valid canvas revision. The native
   // compiler intentionally omits inert <template> metadata from its node
@@ -3751,7 +3751,7 @@ export function serializeCanvasV2NativeScene(scene: CanvasV2NativeSceneDocument)
       })
       .map((id) => serialize(id))
       .join("")}`,
-    css: `${css}\n${geometryGuard}`,
+    css: `${css}\n${CANVAS_V2_NATIVE_GEOMETRY_CSS}`,
   };
 }
 

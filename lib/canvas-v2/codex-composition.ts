@@ -10,6 +10,8 @@ import { buildCanvasV2SceneObjectInventory, normalizeCanvasV2SceneObjectIdentiti
 import { findCanvasV2SourceNodeRange, parseCanvasV2AssetSourcePatch } from './source-patch';
 import { object, string } from './managed-agent/protocol';
 import type { CanvasV2WorkingContext } from './working-context';
+import type { CanvasV2NativeSceneDocument } from './native-scene';
+import { normalizeCodexCompositionPlacement } from './codex-composition-placement';
 
 /** A local edit preserves its stylesheet unless the author explicitly replaces it. */
 export function parseCodexCanvasPatch(serialized: string, evidence: readonly CanvasV2EvidenceAsset[]) {
@@ -117,7 +119,8 @@ export function rejectedCodexEdit(baseRevisionId: string, error: unknown) {
 }
 
 /** New canvas compositions inherit the canvas backdrop, including one-child layout wrappers. */
-export function normalizeCodexCompositionSurface(plan: CodexCompositionPlan, document: CanvasV2ArtifactDocument): CanvasV2ArtifactDocument {
+export function normalizeCodexCompositionSurface(plan: CodexCompositionPlan, document: CanvasV2ArtifactDocument, referenceScene?: CanvasV2NativeSceneDocument): CanvasV2ArtifactDocument {
+  document = normalizeCodexCompositionPlacement(plan, document, referenceScene);
   if (plan.execution.target.action !== 'create') return document;
   const targetId = plan.execution.target.islandId;
   const anchor = plan.execution.territory.anchorNodeId;

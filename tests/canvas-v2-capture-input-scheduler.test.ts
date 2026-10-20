@@ -10,10 +10,10 @@ async function harness() {
  const window={addEventListener:document.addEventListener,setTimeout:(run:()=>void)=>{timers.push(run);return timers.length}};
  const source=fs.readFileSync(new URL('../lib/canvas-v2/capture-input-scheduler.ts',import.meta.url),'utf8');
  const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
- const exports:{waitForCanvasInputQuiet?:(quietMs?:number,isCurrent?:()=>boolean)=>Promise<void>}={};
+ const exports:{waitForCanvasInputQuiet?:(quietMs?:number,isCurrent?:()=>boolean)=>Promise<void>;noteCanvasInputActivity?:(type:unknown,sequence?:unknown)=>boolean}={};
  vm.runInNewContext(compiled,{exports,document,window,performance:{now:()=>time}});
  const wait=exports.waitForCanvasInputQuiet!;await wait(0);
- return {document,wait,emit:(type:string,values:Record<string,unknown>={})=>{for(const run of handlers.get(type)??[])run({isTrusted:true,pointerId:1,pointerType:'mouse',buttons:1,...values})},advance:async(ms:number)=>{time+=ms;const pending=timers.splice(0);for(const run of pending)run();for(let tick=0;tick<3;tick++)await Promise.resolve()}};
+ return {document,wait,note:exports.noteCanvasInputActivity!,emit:(type:string,values:Record<string,unknown>={})=>{for(const run of handlers.get(type)??[])run({isTrusted:true,pointerId:1,pointerType:'mouse',buttons:1,...values})},advance:async(ms:number)=>{time+=ms;const pending=timers.splice(0);for(const run of pending)run();for(let tick=0;tick<3;tick++)await Promise.resolve()}};
 }
 
 for(const event of ['pointermove','pointerover','lostpointercapture'])test(`lost iframe pointer-up recovers only on native released mouse ${event}, with the normal quiet delay`,async()=>{
@@ -48,4 +48,16 @@ test('blur or hidden document clears a stale hold; visible visibility changes an
 test('superseded observations still abort while a real drag remains held',async()=>{
  const h=await harness();h.emit('pointerdown');let current=true;const waiting=h.wait(220,()=>current);const rejected=assert.rejects(waiting,/superseded/);
  current=false;await h.advance(32);await rejected;
+});
+
+test('validated iframe input extends capture quiet time without acquiring an unreleasable remote pointer hold',async()=>{
+ const h=await harness();assert.equal(h.note('pointerdown',1),true);let resolved=false;const waiting=h.wait().then(()=>{resolved=true});
+ await h.advance(200);assert.equal(resolved,false);assert.equal(h.note('wheel',2),true);
+ await h.advance(219);assert.equal(resolved,false);await h.advance(33);await waiting;assert.equal(resolved,true);
+});
+
+test('malformed frame input cannot delay capture; first-party trusted input may omit the native sequence',async()=>{
+ const h=await harness();
+ for(const [type,sequence] of [['mousemove',1],['wheel',0],['wheel',-1],['keydown',NaN],['input',1.5],['click','2'],['change',Number.MAX_SAFE_INTEGER+1],[null,1]] as const)assert.equal(h.note(type,sequence),false);
+ await h.wait();assert.equal(h.note('input'),true);let resolved=false;const waiting=h.wait().then(()=>{resolved=true});await h.advance(219);assert.equal(resolved,false);await h.advance(33);await waiting;
 });

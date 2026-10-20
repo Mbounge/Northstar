@@ -333,7 +333,7 @@ export function buildCanvasV2BoundedModelContext(
         stylesheetChanged: revision.sceneTransaction.stylesheetChanged,
         mutations: revision.sceneTransaction.mutations.slice(0, 120),
       } : undefined,
-      authorshipContract: "Every listed object has stable identity and remains directly selectable after commit. Preserve userEdited objects exactly and treat their rendered bounds as multiplayer placement obstacles. Develop an existing island through its identified descendants; create new objects only inside the declared island transaction and only in collision-free world-space territory.",
+      authorshipContract: "Every listed object has stable identity and remains directly selectable after commit. Treat current human edits as the starting point and evidence of intent. Preserve userEdited objects exactly unless the user explicitly authorizes modifying those selected objects under selectionPolicy=modify; refine only the requested scope, retaining unrelated human decisions. Treat protected objects’ rendered bounds as multiplayer placement obstacles. Develop an existing island through its identified descendants; create new objects only inside the declared island transaction and only in collision-free world-space territory.",
     },
     source: {
       htmlOutline: compactSource(revision, workingContext, discoveryWorkingSet),

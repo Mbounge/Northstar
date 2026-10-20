@@ -1,0 +1,50 @@
+'use client';
+import {useMemo,useRef,useState,type ComponentProps} from 'react';
+import {flushSync} from 'react-dom';
+import {CanvasV2ChatPanel} from '@/components/canvas-v2/canvas-v2-chat-panel';
+import {CanvasV2ScreenIdentities} from '@/components/canvas-v2/interactive-screen';
+import type {CanvasV2ChatTurn} from '@/components/canvas-v2/use-canvas-v2-chat';
+import {CANVAS_V2_DEFAULT_MODEL} from '@/lib/canvas-v2/model-catalog';
+import type {NorthstarArtifact} from '@/lib/canvas-v2/creative/types';
+
+type Result={name:string;passed:boolean;error?:string};
+type PanelProps=ComponentProps<typeof CanvasV2ChatPanel>;
+const engine={committed:{id:'fixture',evidence:[],document:{html:'<div></div>',css:''}},interactionReady:true,applyingManualEdit:false} as unknown as PanelProps['engine'];
+const settle=()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+export default function ChatHistoryReuseFixture(){
+ const root=useRef<HTMLDivElement>(null),reads=useRef<Record<string,number>>({}),calls=useRef<number[]>([]),sends=useRef(0);
+ const observe=(turn:CanvasV2ChatTurn,answer=turn.answer)=>Object.defineProperty({...turn},'answer',{enumerable:true,get:()=>{reads.current[turn.id]=(reads.current[turn.id]??0)+1;return answer;}}) as CanvasV2ChatTurn;
+ const initial=()=>[
+  observe({id:'history',message:'Original human message',answer:'opaque-app-id result. [Download proof](artifact:proof.txt)',status:'completed',createdAt:'2026-10-18T00:00:00Z'}),
+  observe({id:'stream',message:'Streaming request',answer:'First streamed text',status:'running',createdAt:'2026-10-18T00:00:01Z'}),
+  observe({id:'feedback',message:'Feedback note',feedbackFor:'stream',feedbackState:'queued',status:'completed',createdAt:'2026-10-18T00:00:02Z'}),
+  observe({id:'resume',message:'Paused request',answer:'Paused answer',status:'incomplete',createdAt:'2026-10-18T00:00:03Z'}),
+  observe({id:'projected-root',message:'Earlier steered request',answer:'Projected final answer',status:'completed',createdAt:'2026-10-18T00:00:04Z',activity:[{id:'projected-progress',kind:'progress',label:'Progress',detail:'Before steering. After steering.',requestId:'fixture',sequence:1,at:'2026-10-18T00:00:04Z'}]}),
+  observe({id:'projected-feedback',message:'Earlier steering segment',feedbackFor:'projected-root',steeringBoundary:[{id:'projected-progress',text:'Before steering.'}],feedbackState:'incorporated',status:'completed',createdAt:'2026-10-18T00:00:05Z'}),
+ ];
+ const[turns,setTurns]=useState(initial),[busy,setBusy]=useState(false),[pulse,setPulse]=useState(0),[identity,setIdentity]=useState('Original product'),[results,setResults]=useState<Result[]>([]),[running,setRunning]=useState(false);
+ const latest=useRef({turns,pulse});latest.current={turns,pulse};
+ const identities=useMemo(()=>[{id:'opaque-app-id',name:identity,platform:'web' as const,visualLanguage:'',typography:'',components:'',motion:'',tokens:{},referenceAssetIds:[]}],[identity]);
+ const chat={turns,busy,draft:'',attachments:[],screenFeedbackTargets:[],objectFeedbackTargets:[],modelSelection:CANVAS_V2_DEFAULT_MODEL,reasoningEffort:'high',continueTurn:()=>{calls.current.push(pulse);},submit:()=>{sends.current++;},stop:()=>{},setDraft:()=>{},setAttachmentError:()=>{},addAttachments:()=>{},removeAttachment:()=>{},removeFeedbackTarget:()=>{}} as unknown as PanelProps['chat'];
+ const run=async()=>{
+  setRunning(true);setResults([]);const output:Result[]=[];
+  const assert=(value:unknown,message:string)=>{if(!value)throw Error(message);};
+  const article=(id:string)=>root.current!.querySelector<HTMLElement>(`[data-chat-turn="${id}"]`)!;
+  const update=(id:string,change:Partial<CanvasV2ChatTurn>)=>flushSync(()=>setTurns(current=>current.map(turn=>turn.id===id?observe({...turn,...change}):turn)));
+  const check=async(name:string,test:()=>Promise<void>)=>{try{await test();output.push({name,passed:true});}catch(cause){output.push({name,passed:false,error:String(cause)});}setResults([...output]);};
+  flushSync(()=>{reads.current={};calls.current=[];sends.current=0;setTurns(initial());setBusy(false);setPulse(0);setIdentity('Original product');});await settle();
+  await check('Unrelated parent updates reuse immutable historical markdown',async()=>{const count=reads.current.history;flushSync(()=>setPulse(value=>value+1));await settle();assert(reads.current.history===count,'Unchanged history rendered again after a parent-only update.');});
+  await check('Streaming answer changes render while unrelated history remains reused',async()=>{const count=reads.current.history;update('stream',{answer:'Newest streamed text'});await settle();assert(article('stream').textContent?.includes('Newest streamed text'),'Stream text stayed stale.');assert(reads.current.history===count,'Streaming invalidated unchanged history without an artifact change.');});
+  await check('Independent streaming reuses unchanged steering root and feedback projections',async()=>{const count=reads.current['projected-root'];update('stream',{answer:'Independent streaming continuation'});await settle();assert(article('projected-feedback').textContent?.includes('Projected final answer'),'Steering projection lost its final answer.');assert(reads.current['projected-root']===count,'An independent streamed turn rebuilt unrelated steering history.');});
+  await check('Delivery receipts update and disappear when their owning run completes',async()=>{assert(article('feedback').textContent?.includes('Sending feedback'),'Initial receipt missing.');update('feedback',{feedbackState:'accepted'});await settle();assert(article('feedback').textContent?.includes('Sent to agent'),'Accepted receipt stayed stale.');update('stream',{status:'completed'});await settle();assert(!article('stream').querySelector('[data-testid="canvas-v2-pending-dots"]'),'Streaming status stayed active.');assert(!article('feedback').querySelector('[data-testid="canvas-v2-feedback-state"]'),'Completed run retained its live delivery receipt.');});
+  await check('Busy changes update historical recovery controls',async()=>{flushSync(()=>setBusy(true));await settle();assert(article('resume').querySelector('button')?.disabled,'Busy recovery remained enabled.');flushSync(()=>setBusy(false));await settle();assert(!article('resume').querySelector('button')?.disabled,'Recovery remained disabled after busy ended.');});
+  await check('Memoized history invokes the latest continuation callback',async()=>{const count=reads.current.history;flushSync(()=>setPulse(value=>value+1));await settle();assert(reads.current.history===count,'Fresh callback identity invalidated unchanged history.');article('resume').querySelector('button')!.click();assert(calls.current.at(-1)===latest.current.pulse,'Continuation called a stale parent closure.');});
+  await check('Changed human messages and completed answers remain visible',async()=>{update('history',{message:'Updated human message',answer:'opaque-app-id revised answer. [Download proof](artifact:proof.txt)'});await settle();assert(article('history').textContent?.includes('Updated human message')&&article('history').textContent?.includes('revised answer'),'Changed completed turn did not render.');});
+  await check('Artifact additions update references inside unchanged earlier turns',async()=>{const count=reads.current.history;const artifact:NorthstarArtifact={id:'proof.txt',name:'proof.txt',label:'Proof file',mimeType:'text/plain',dataUrl:'data:text/plain;base64,cHJvb2Y=',bytes:5,workspacePath:'/mnt/data/proof.txt',origin:'computed',createdAt:'2026-10-18T00:00:00Z',inputAssetIds:[]};update('stream',{artifacts:[artifact]});await settle();assert([...article('history').querySelectorAll('button')].some(button=>button.textContent==='Download proof'),'Earlier artifact link remained unresolved.');assert(reads.current.history>count,'Artifact changes did not invalidate the earlier reference.');});
+  await check('Context changes update memoized history without replacing its turn',async()=>{const turn=latest.current.turns[0];flushSync(()=>setIdentity('Renamed product'));await settle();assert(latest.current.turns[0]===turn,'The context regression replaced history instead of exercising React context.');assert(article('history').textContent?.includes('Renamed product revised answer'),'Memo hid the latest product identity context.');});
+  await check('Stable text preview callbacks open the latest immutable attachment content',async()=>{const text='Newest attachment body';update('history',{attachments:[{kind:'text',id:'latest-note',name:'Updated note',mimeType:'text/plain',text,charCount:text.length,createdAt:'2026-10-18T00:00:00Z'}]});await settle();article('history').querySelector<HTMLButtonElement>('button[aria-label="Read full text of Updated note"]')!.click();await settle();assert(document.querySelector('[aria-label="Full pasted text"]')?.textContent===text,'Text preview opened stale attachment bytes.');document.querySelector<HTMLButtonElement>('button[aria-label="Close text preview"]')!.click();await settle();});
+  await check('No contract calls Send or a model',async()=>{assert(sends.current===0,'A contract called the chat submit action.');});
+  setRunning(false);
+ };
+ return <main className="min-h-screen bg-white p-5 text-black"><h1>Chat history reuse contracts</h1><p>Uses the public chat panel with local immutable fixture turns. No model or board changes.</p><button disabled={running} onClick={()=>void run()} className="my-3 rounded border px-3 py-2">Run chat history contracts</button><p role="status">{running?'Running':`${results.filter(result=>result.passed).length}/${results.length} passed`}</p><textarea aria-label="Chat history contract results" readOnly value={JSON.stringify({results,reads:reads.current,latestCallback:calls.current.at(-1),generation:pulse,sends:sends.current},null,2)} className="h-48 w-full border font-mono text-xs"/><div ref={root} className="mt-4 flex h-[720px] max-w-[600px] flex-col border"><CanvasV2ScreenIdentities.Provider value={identities}><CanvasV2ChatPanel chat={chat} engine={engine}/></CanvasV2ScreenIdentities.Provider></div></main>;
+}
