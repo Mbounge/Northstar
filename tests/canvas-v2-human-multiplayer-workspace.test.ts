@@ -8,6 +8,8 @@ import type { NorthstarSnapshot } from '../lib/canvas-v2/sessions/types';
 import { PrivateWorkspaceSync, type PrivateWorkspaceEntry, type PrivateWorkspaceSyncOptions } from '../lib/canvas-v2/sessions/private-workspace-sync';
 import { privateCanvasHistory, type PrivateCanvasHistory } from '../lib/canvas-v2/sessions/private-workspace';
 import type { PrivateCanvasWorkspace } from '../lib/canvas-v2/sessions/collaboration-local';
+import { SoloSnapshotRecovery, sameSoloSnapshotContent, type SoloRecoveryEntry } from '../lib/canvas-v2/sessions/solo-recovery';
+import { encodeSnapshot, decodeSnapshotBlob } from '../lib/canvas-v2/sessions/snapshot';
 
 const revision = (id:string):CanvasV2ArtifactRevision=>({schema:CANVAS_V2_ARTIFACT_SCHEMA,id,state:'committed',createdAt:'2026-10-20T00:00:00Z',document:{html:'<p>Shared</p>',css:''},evidence:[]});
 const snapshot = (value:CanvasV2ArtifactRevision):NorthstarSnapshot=>({schema:1,revision:value,turns:[],draft:'private draft',model:'gpt-5.6-sol',effort:'high',viewport:{x:12,y:34,scale:1}});
@@ -26,6 +28,7 @@ function workspace(options:{denied?:boolean;shared?:boolean;user?:string;session
   let shared=options.shared??false,leaseCalls=0,connectCalls=0,legacyReads=0,remoteReads=0,remoteFailure=options.remoteFailure??false,pending=0;
   const local=snapshot(revision('legacy')),accepted=revision('accepted'),recoveries:CanvasV2ArtifactRevision[]=[],privateWrites:PrivateCanvasHistory[]=[];
   let cached:PrivateWorkspaceEntry|undefined=options.cachedEntry?structuredClone(options.cachedEntry):undefined;
+  let soloEntry:SoloRecoveryEntry|undefined;
   let cloud=options.remoteHistory?{history:options.remoteHistory,version:3,path:'owner/room/private/saved.json'}:undefined;
   const cloudWrites:Array<{history:PrivateCanvasHistory;version:number;operationId:string}>=[],cameraWrites:NorthstarSnapshot['viewport'][]=[];
   const identities:Array<{id:string;user:string}>=[],syncs:PrivateWorkspaceSync[]=[],cacheKeys:string[]=[];
@@ -74,8 +77,9 @@ function workspace(options:{denied?:boolean;shared?:boolean;user?:string;session
     react,
     'react/jsx-runtime':{Fragment:'fragment',jsx:(type:unknown,props:Record<string,unknown>)=>({type,props}),jsxs:(type:unknown,props:Record<string,unknown>)=>({type,props})},
     './canvas-v2-workspace':{CanvasV2Workspace:marker},
-    '@/lib/canvas-v2/sessions/snapshot':{SnapshotQueue:Queue},
-    '@/lib/canvas-v2/sessions/store':{getSession:async()=>({id:'room',owner_id:options.sessionOwner??'owner',title:'Canvas'}),leaseSession:async()=>{leaseCalls++;return true;},loadSnapshot:async()=>{legacyReads++;return local;},renameSession:async()=>{},saveSnapshot:async()=>{}},
+    '@/lib/canvas-v2/sessions/snapshot':{SnapshotQueue:Queue,encodeSnapshot,decodeSnapshotBlob},
+    '@/lib/canvas-v2/sessions/solo-recovery':{SoloSnapshotRecovery,sameSoloSnapshotContent,soloRecoveryCache:()=>({read:async()=>soloEntry,write:async(entry:SoloRecoveryEntry)=>{soloEntry=entry;},clear:async(expected?:readonly string[])=>{if(!expected||!soloEntry||expected.includes(soloEntry.id))soloEntry=undefined;}})},
+    '@/lib/canvas-v2/sessions/store':{getSession:async()=>({id:'room',owner_id:options.sessionOwner??'owner',title:'Canvas',snapshot_path:'legacy.json',version:1}),leaseSession:async()=>{leaseCalls++;return true;},loadSnapshot:async()=>{legacyReads++;return local;},renameSession:async()=>{},saveSnapshot:async()=>{}},
     '@/lib/canvas-v2/sessions/writer':{claimSessionWriter:async()=> 'tab'},
     '@/lib/canvas-v2/sessions/collaboration-client':{CanvasCollaborationClient:Client},
     '@/lib/canvas-v2/sessions/collaboration-supabase':{SupabaseCanvasTransport:class {},canvasCollaborationJournal:()=>({})},

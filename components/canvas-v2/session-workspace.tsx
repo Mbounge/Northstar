@@ -1,6 +1,8 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CanvasV2Workspace } from './canvas-v2-workspace';
+import { SoloSnapshotRecovery, soloRecoveryCache, sameSoloSnapshotContent } from '@/lib/canvas-v2/sessions/solo-recovery';
+import { encodeSnapshot, decodeSnapshotBlob } from '@/lib/canvas-v2/sessions/snapshot';
 import { SnapshotQueue } from '@/lib/canvas-v2/sessions/snapshot';
 import { getSession, leaseSession, loadSnapshot, renameSession, saveSnapshot } from '@/lib/canvas-v2/sessions/store';
 import type { LiveSessionState, SessionCommand, NorthstarSession, NorthstarSnapshot } from '@/lib/canvas-v2/sessions/types';
@@ -23,6 +25,9 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
   const [error,setError] = useState('');
   const [replica,setReplica] = useState<LiveSessionState>();
   const [generation,setGeneration] = useState(0);
+  const recovery=useRef<SoloSnapshotRecovery|undefined>(undefined);
+  const [recovered,setRecovered]=useState<NorthstarSnapshot>();
+  const recoveredRef=useRef<NorthstarSnapshot|undefined>(undefined);
   const [collaboration,setCollaboration]=useState<CanvasCollaborationClient>();
   const collaborationRef=useRef<CanvasCollaborationClient|undefined>(undefined);
   const localView=useRef(privateCanvasWorkspace(owner,id));
@@ -64,7 +69,8 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     record.current = session; setTitle(session.title); titleRef.current = session.title;
     queue.current = new SnapshotQueue(async snapshot => {
       if (blockedRef.current) throw new Error('This canvas is being edited in another tab.');
-      record.current = await saveSnapshot(record.current!,writer.current,snapshot);
+      const saved = await saveSnapshot(record.current!,writer.current,snapshot,await recovery.current?.blobFor(snapshot));
+      record.current=saved;await recovery.current?.accepted(snapshot,saved);
     }, (status, cause) => { setError(cause?.message || ''); report({saveStatus:status,error:cause?.message}); });
   },[report]);
   useEffect(() => {
@@ -141,12 +147,23 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
         }
         const editable = await leaseSession(id,writer.current);
         const session = await getSession(id);
-        const snapshot = await loadSnapshot(session);
+        let snapshot = await loadSnapshot(session);
+        const journal=new SoloSnapshotRecovery({cache:soloRecoveryCache(owner,id,writer.current),encode:encodeSnapshot,decode:decodeSnapshotBlob,onError:setError});
+        let restored:Awaited<ReturnType<SoloSnapshotRecovery['open']>>;
+        try{restored=await journal.open(session);}catch{setError('Local recovery storage is unavailable. Keep this canvas open until changes are saved.');}
+        const camera=await localView.current.readCamera().catch(()=>undefined);
         if (!disposed) {
+          recovery.current=journal;
+          if(restored&&editable){
+            if(restored.safe){snapshot=restored.snapshot;}
+            else {recoveredRef.current=restored.snapshot;setRecovered(restored.snapshot);}
+          }
+          if(snapshot&&camera)snapshot={...snapshot,viewport:camera};
           blockedRef.current = !editable;
           latest.current=snapshot || null;
           if(!editable && snapshot){receivedRevisions.current.add(snapshot.revision.id);setReplica({snapshot,busy:snapshot.turns.some(t=>t.status==='running'),title:session.title});}
           attach(session);if(editable || snapshot)setLoaded({snapshot});report({saveStatus:editable?'saved':'viewing',mirrored:!editable});
+          if(restored?.safe&&editable&&snapshot){journal.observe(snapshot);queue.current?.enqueue(snapshot);void queue.current?.flush();}
           channel.current?.request();booted=true;
           // The owner may have enabled sharing between our initial room read
           // and loading its legacy snapshot. Recheck before accepting edits.
@@ -180,12 +197,12 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     const sync=setInterval(()=>channel.current?.request(),2000);
     // Do not release on pagehide: its delayed request can clear a refreshed
     // document's renewed lease. Refresh reuses the writer; closed leases expire.
-    const unload = (event: BeforeUnloadEvent) => {if ((!blockedRef.current && queue.current?.dirty)||personal.current?.dirty) {event.preventDefault();event.returnValue = '';}};
+    const unload = (event: BeforeUnloadEvent) => {if ((!blockedRef.current && (queue.current?.dirty||recovery.current?.dirty))||personal.current?.dirty) {event.preventDefault();event.returnValue = '';}};
     window.addEventListener('beforeunload',unload);
-    const reconnect=()=>{void personal.current?.flush();};
-    const hide=()=>{void personal.current?.flush();if(latest.current)void localView.current.writeCamera(latest.current.viewport).catch(()=>{});};
+    const reconnect=()=>{void personal.current?.flush();if(!blockedRef.current){void recovery.current?.flush();void queue.current?.flush();}};
+    const hide=()=>{void personal.current?.flush();if(!blockedRef.current&&!collaborationRef.current?.enabled){void recovery.current?.flush();void queue.current?.flush();}if(latest.current)void localView.current.writeCamera(latest.current.viewport).catch(()=>{});};
     window.addEventListener('online',reconnect);window.addEventListener('pagehide',hide);
-    return () => {disposed=true;void personal.current?.close();personal.current=undefined;privateOpening.current=undefined;window.removeEventListener('online',reconnect);window.removeEventListener('pagehide',hide);collaborationRef.current?.close();collaborationRef.current=undefined;clearTimeout(privateSave.current);clearInterval(heartbeat);clearInterval(checkpoint);clearInterval(sync);channel.current?.close();channel.current=null;window.removeEventListener('beforeunload',unload);};
+    return () => {disposed=true;if(!blockedRef.current&&!collaborationRef.current?.enabled){void recovery.current?.flush();void queue.current?.flush();}void personal.current?.close();personal.current=undefined;privateOpening.current=undefined;window.removeEventListener('online',reconnect);window.removeEventListener('pagehide',hide);collaborationRef.current?.close();collaborationRef.current=undefined;clearTimeout(privateSave.current);clearInterval(heartbeat);clearInterval(checkpoint);clearInterval(sync);channel.current?.close();channel.current=null;window.removeEventListener('beforeunload',unload);};
   },[id,temporary,owner,attach,report,openPrivate]);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
@@ -207,6 +224,7 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     catch(e){setError((e as Error).message);throw e;}
   },[]);
   const snapshotChanged = useCallback((snapshot:NorthstarSnapshot,running:boolean) => {
+    if(recoveredRef.current)return;
     if(collaborationRef.current?.enabled){
       latest.current=snapshot;busy.current=running;
       personal.current?.observe(privateCanvasHistory(snapshot));
@@ -226,14 +244,16 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
       }
       return;
     }
+    const changed=!sameSoloSnapshotContent(latest.current,snapshot);
     latest.current=snapshot;busy.current=running;
+    if(!privateSave.current)privateSave.current=setTimeout(()=>{privateSave.current=undefined;const current=latest.current;if(current)void localView.current.writeCamera(current.viewport).catch(()=>{})},900);
     const firstPrompt=snapshot.turns[0]?.message?.trim();
     if (titleRef.current === 'Untitled canvas' && firstPrompt) {
       const next=firstPrompt.replace(/\s+/g,' ').slice(0,80);titleRef.current=next;setTitle(next);
       if(record.current) void renameSession(record.current.id,next).then(()=>{record.current!.title=next;report();}).catch(()=>{});
     }
-    if(queue.current) {
-      queue.current.enqueue(snapshot);clearTimeout(timer.current);
+    if(queue.current&&changed) {
+      recovery.current?.observe(snapshot);queue.current.enqueue(snapshot);clearTimeout(timer.current);
       timer.current=setTimeout(()=>void queue.current?.flush(),900);
     }
     report();
@@ -259,5 +279,6 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
         const history=personal.current?.getHistory();if(!history)return;const url=URL.createObjectURL(new Blob([JSON.stringify(history)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='northstar-my-conversation.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }}>Save my copy</button><button disabled={busy.current} className="shrink-0 text-[#bda6ff] disabled:opacity-40" onClick={()=>{void personal.current?.useSavedHistory().then(history=>{const current=latest.current;if(!current)return;const next={...current,...history};latest.current=next;setLoaded({snapshot:next});setGeneration(value=>value+1);}).catch(cause=>setError(String(cause)))}}>Open saved chat</button></>:<button className="shrink-0 text-[#bda6ff]" onClick={()=>void personal.current?.flush()}>Retry</button>}
     </div>}
+    {recovered&&<div role="dialog" aria-label="Recover unsaved canvas changes" aria-modal="true" className="fixed inset-0 z-[1300] grid place-items-center bg-black/40 backdrop-blur-sm"><div className="max-w-md rounded-2xl border border-[#a994ff]/20 bg-[#211d28] p-6 text-sm text-[#d4c9df]"><p>Unsaved changes were found on this device. The saved canvas has changed since then.</p><div className="mt-5 flex flex-wrap gap-4"><button className="text-[#bda6ff]" onClick={()=>{const snapshot=recovered;recoveredRef.current=undefined;setRecovered(undefined);recovery.current?.observe(snapshot);queue.current?.enqueue(snapshot);latest.current=snapshot;setLoaded({snapshot});setGeneration(value=>value+1);void queue.current?.flush();}}>Restore my changes</button><button className="text-[#bda6ff]" onClick={()=>{void recovery.current?.clear().then(()=>{recoveredRef.current=undefined;setRecovered(undefined);setGeneration(value=>value+1);}).catch(()=>setError('Keep this tab open; local recovery could not be updated.'));}}>Keep saved version</button><button className="text-[#bda6ff]" onClick={()=>{void recovery.current?.blobFor(recovered).then(blob=>{const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='northstar-recovered-canvas.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});}}>Download my copy</button></div></div></div>}
     {error && <div role="alert" className="fixed bottom-36 right-5 z-[100] max-w-sm rounded-xl bg-[#302323] p-3 text-sm text-white">{error}{!replica && <button className="ml-3 underline" onClick={()=>void queue.current?.flush()}>Retry save</button>}</div>}</>;
 }

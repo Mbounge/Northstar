@@ -82,8 +82,8 @@ export interface CanvasV2CanvasSceneProps {
   onElementTextCommit?: (element: CanvasV2InspectableElement, text: string, nativeContent?: CanvasV2NativeTextContentUpdate[], layout?: { width?: number; height?: number }) => boolean | void;
   onGeometry?: (geometry: CanvasV2CanvasGeometry) => void;
   onWorkspaceWheel?: (event: { clientX: number; clientY: number; deltaX: number; deltaY: number; deltaMode?: number; ctrlKey: boolean; metaKey: boolean; shiftKey?: boolean }) => void;
-  onWorkspacePointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => void;
-  onElementPointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => void;
+  onWorkspacePointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean }) => void;
+  onElementPointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => void;
   transientGeometry?: Readonly<Record<string, CanvasV2TransientGeometry>>;
   /**
    * Observation renders are allowed to resize their private iframe while they
@@ -483,6 +483,7 @@ function CanvasV2ObservationScene({
           pointerId: event.pointerId,
           ...hostPoint(event.clientX, event.clientY),
           button: event.button,
+          buttons: event.buttons,
           shiftKey: event.shiftKey,
           metaKey: event.metaKey,
           element: inspectedElement,
@@ -501,10 +502,11 @@ function CanvasV2ObservationScene({
       forwardingPointer = event.pointerId;
       (event.target as Element | null)?.setPointerCapture?.(event.pointerId);
       event.preventDefault();
-      forward({ phase: "down", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
+      forward({ phase: "down", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey });
     };
     const pointerMove = (event: globalThis.PointerEvent) => {
       if (forwardingPointer !== event.pointerId) return;
+      if (event.buttons === 0) { pointerUp(event); return; }
       if (forwardingElement && elementPointerRef.current) {
         if (!forwardingMoved && forwardingStart) {
           forwardingMoved = Math.hypot(event.clientX - forwardingStart.x, event.clientY - forwardingStart.y) >= 3;
@@ -514,11 +516,11 @@ function CanvasV2ObservationScene({
         // object or suppress inline text editing.
         if (!forwardingMoved) return;
         event.preventDefault();
-        elementPointerRef.current({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: forwardingElement });
+        elementPointerRef.current({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey, element: forwardingElement });
         return;
       }
       event.preventDefault();
-      workspacePointerRef.current?.({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
+      workspacePointerRef.current?.({ phase: "move", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey });
     };
     const pointerUp = (event: globalThis.PointerEvent) => {
       if (forwardingPointer !== event.pointerId) return;
@@ -528,11 +530,11 @@ function CanvasV2ObservationScene({
         forwardingElement = undefined;
         if (forwardingMoved) event.preventDefault();
         forwardingStart = undefined;
-        elementPointerRef.current({ phase: "up", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element });
+        elementPointerRef.current({ phase: "up", cancelled: event.type === "pointercancel", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey, element });
         return;
       }
       event.preventDefault();
-      workspacePointerRef.current?.({ phase: "up", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
+      workspacePointerRef.current?.({ phase: "up", cancelled: event.type === "pointercancel", pointerId: event.pointerId, ...hostPoint(event.clientX, event.clientY), button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey });
     };
     const keydown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;

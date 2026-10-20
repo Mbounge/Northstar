@@ -327,3 +327,24 @@ recorded one 67 ms long task. Both ended each cycle with all 800 cards and
 presentation FPS, hardware-independent latency, or a zero-jank guarantee.
 Raw sequence, metrics and limits are in `large-canvas-quiescent-matched.json`
 under the 2026-10-20 human-multiplayer output directory.
+
+## Pointer release and solo save recovery, 2026-10-20
+
+Selecting an unfocused embedded app can replace its host selection surface
+with an opaque iframe. The stable native scene now captures that app pointer
+before replacement. Text and image selection keep their native double-click
+sequence. Native, iframe-forwarded and window fallback move handlers retire a
+released pointer before sampling transform coordinates. Lost capture completes
+the last held geometry; window blur cancels active authoring gestures.
+
+Solo sessions checkpoint meaningful edits immediately to an account, canvas
+and writer scoped IndexedDB journal, reusing the portable snapshot bytes for
+cloud upload. Camera-only changes neither encode the board nor postpone its
+cloud save. Page hide, reconnect and unmount also drain pending saves. Reopening
+replays a checkpoint automatically only when its cloud base is recognized;
+otherwise the user can restore, keep the saved canvas or download their copy.
+A replacement journal claims storage ownership so delayed older encoders and
+acknowledgements cannot overwrite or clear its newer checkpoint. Cloud save
+success remains success if local checkpoint cleanup fails. Before-unload still
+protects changes whose encoding or persistence has not completed; this does
+not guarantee recovery after abrupt process termination before a disk write.

@@ -47,14 +47,14 @@ async function commitSnapshot(pending:PendingSave,writer:string) {
   if(session.snapshot_path) void db().storage.from(bucket).remove([session.snapshot_path]);
   return {...session,version,snapshot_path:path,model:snapshot.model,effort:snapshot.effort,updated_at:new Date().toISOString()};
 }
-export async function saveSnapshot(session: NorthstarSession, writer: string, snapshot: NorthstarSnapshot): Promise<NorthstarSession> {
+export async function saveSnapshot(session: NorthstarSession, writer: string, snapshot: NorthstarSnapshot, preparedBlob?:Blob): Promise<NorthstarSession> {
   const key=`${writer}:${session.id}`;
   const pending=pendingSaves.get(key);
   if(pending) {
     session=await commitSnapshot(pending,writer);pendingSaves.delete(key);
     if(pending.snapshot===snapshot)return session;
   }
-  const blob = await encodeSnapshot(snapshot);
+  const blob = preparedBlob ?? await encodeSnapshot(snapshot);
   const path = `${session.owner_id}/${session.id}/${crypto.randomUUID()}.json`;
   checked(await db().storage.from(bucket).upload(path,blob,{contentType:'application/json',upsert:false}));
   // Retain the exact operation until acknowledged, including across newer edits.

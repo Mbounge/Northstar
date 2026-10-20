@@ -1004,6 +1004,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const marqueePreviewFrameRef = useRef<number | undefined>(undefined);
   const updateDirectGestureHandlerRef = useRef<(pointerId: number, clientX: number, clientY: number, constrain?: boolean) => boolean>(() => false);
   const finishDirectGestureHandlerRef = useRef<(pointerId: number, cancelled?: boolean) => boolean>(() => false);
+  const releasePointerGestureHandlerRef = useRef<(pointerId: number, cancelled?: boolean) => void>(() => undefined);
   const updateConnectorGestureHandlerRef = useRef<(pointerId: number, clientX: number, clientY: number) => boolean>(() => false);
   const finishConnectorGestureHandlerRef = useRef<(pointerId: number, cancelled?: boolean) => boolean>(() => false);
   const startDrawingGestureHandlerRef = useRef<(pointerId: number, clientX: number, clientY: number) => boolean>(() => false);
@@ -1847,13 +1848,15 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     beginCameraPreview();
   };
 
-  const forwardedWorkspacePointer = useCallback((event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => {
+  const forwardedWorkspacePointer = useCallback((event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean }) => {
+    if (event.phase === "up" && event.cancelled) { releasePointerGestureHandlerRef.current(event.pointerId, true); return; }
+    if (event.phase === "move" && event.buttons === 0) { releasePointerGestureHandlerRef.current(event.pointerId); return; }
     if(collaboration?.enabled)collaboration.pointer(workspacePoint(event.clientX,event.clientY));
     const activeDrawing = drawingGestureRef.current?.pointerId === event.pointerId;
     if (canvasView === "design" && tool === "draw" && !spacePan && (event.button === 0 || activeDrawing)) {
       if (event.phase === "down") startDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
       else if (event.phase === "move") updateDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
-      else finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
+      else finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY, event.cancelled);
       return;
     }
     // Pointer move events report `button === -1` in Chromium even while the
@@ -1873,7 +1876,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         marqueeRef.current = next;
         publishMarqueePreview();
       } else if (marqueeRef.current?.pointerId === event.pointerId && event.phase === "up") {
-        finishMarquee(marqueeRef.current);
+        if (event.cancelled) { marqueeRef.current = undefined; setMarquee(undefined); }
+        else finishMarquee(marqueeRef.current);
       }
       return;
     }
@@ -2241,7 +2245,22 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   updateDirectGestureHandlerRef.current = updateDirectGesture;
   finishDirectGestureHandlerRef.current = finishDirectGesture;
 
+  releasePointerGestureHandlerRef.current = (pointerId, cancelled = false) => {
+    // Never treat a buttonless hover as the final transform/drawing sample.
+    // Finish the last held geometry, or restore it on explicit cancellation.
+    finishDrawingGestureHandlerRef.current(pointerId, undefined, undefined, cancelled);
+    finishConnectorGestureHandlerRef.current(pointerId, cancelled);
+    finishDirectGestureHandlerRef.current(pointerId, cancelled);
+    if (placementRef.current?.pointerId === pointerId) { placementRef.current = undefined; setPlacement(undefined); }
+    if (marqueeRef.current?.pointerId === pointerId) {
+      if (cancelled) { marqueeRef.current = undefined; setMarquee(undefined); }
+      else finishMarquee(marqueeRef.current);
+    }
+    if (panRef.current?.pointerId === pointerId) { panRef.current = undefined; finishCameraPreview(); }
+  };
+
   const pointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.buttons === 0) { releasePointerGestureHandlerRef.current(event.pointerId); return; }
     lastCanvasPointerRef.current = workspacePoint(event.clientX, event.clientY);
     if (placementRef.current?.pointerId === event.pointerId) {
       placementRef.current = { ...placementRef.current, end: workspacePoint(event.clientX, event.clientY) };
@@ -2305,6 +2324,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const ownsDirect = directGestureRef.current?.pointerId === event.pointerId;
       const ownsConnector = connectorGestureRef.current?.pointerId === event.pointerId;
       const ownsDrawing = drawingGestureRef.current?.pointerId === event.pointerId;
+      if (event.buttons === 0) { releasePointerGestureHandlerRef.current(event.pointerId); return; }
       if (!ownsDirect && !ownsConnector && !ownsDrawing) return;
       // The workspace's React handler owns events inside it. This fallback is
       // only for the pointer crossing onto floating chrome outside the canvas.
@@ -2328,10 +2348,16 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       }
       workspaceRef.current?.focus({ preventScroll: true });
     };
+    const blur = () => {
+      const ids = new Set([directGestureRef.current?.pointerId, connectorGestureRef.current?.pointerId, drawingGestureRef.current?.pointerId, placementRef.current?.pointerId, marqueeRef.current?.pointerId, panRef.current?.pointerId]);
+      for (const id of ids) if (id !== undefined) releasePointerGestureHandlerRef.current(id, true);
+    };
+    window.addEventListener("blur", blur);
     window.addEventListener("pointermove", move, { capture: true, passive: false });
     window.addEventListener("pointerup", finish, { capture: true, passive: false });
     window.addEventListener("pointercancel", finish, { capture: true, passive: false });
     return () => {
+      window.removeEventListener("blur", blur);
       window.removeEventListener("pointermove", move, true);
       window.removeEventListener("pointerup", finish, true);
       window.removeEventListener("pointercancel", finish, true);
@@ -2367,12 +2393,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const tagCanvasElement = (element: CanvasV2InspectableElement) => {
     if(!element.hidden)window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:[element.nodeId]}}));
   };
-  const forwardedElementPointer = (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => {
+  const forwardedElementPointer = (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => {
+    if (event.phase === "up" && event.cancelled) { releasePointerGestureHandlerRef.current(event.pointerId, true); return; }
+    if (event.phase === "move" && event.buttons === 0) { releasePointerGestureHandlerRef.current(event.pointerId); return; }
     if (feedbackPickingRef.current && !spacePan && tool !== "pan" && event.button === 0) { if (event.phase === 'down') tagCanvasElement(event.element); return; }
     if (tool === "draw" && !spacePan) {
       if (event.phase === "down" && event.button === 0) startDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
       else if (event.phase === "move") updateDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
-      else if (event.phase === "up") finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
+      else if (event.phase === "up") finishDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY, event.cancelled);
       return;
     }
     if (event.phase === "move") {
@@ -2380,7 +2408,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       return;
     }
     if (event.phase === "up") {
-      finishDirectGesture(event.pointerId);
+      finishDirectGesture(event.pointerId, event.cancelled);
       // The iframe receives the browser's terminal click/focus after the
       // pointer-down handler. Reclaim keyboard ownership at the end of the
       // gesture as well so an immediately-following arrow/duplicate/delete
@@ -4063,9 +4091,12 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const selectedScreenDescriptor=useMemo(()=>selectedScreen?parseCanvasV2Screen(selectedScreen):undefined,[selectedScreen]);
   useEffect(()=>{
     if(canvasView!=='design')return;
+    // Keep the host pointer surface stable until its held gesture ends.
+    // Enter the app's internal layers after release, never during a drag.
+    if(directGestureRef.current||drawingGestureRef.current||connectorGestureRef.current)return;
     const focus=!collaborationReadOnly&&selectedElements.length===1&&!selectedElement?.locked&&selectedScreenDescriptor&&!selectedScreenDescriptor.simulation?selectedElement?.nodeId:undefined;
     setScreenEditNodeId(focus);
-  },[canvasView,collaborationReadOnly,selectedElements.length,selectedElement?.nodeId,selectedElement?.locked,selectedScreenDescriptor]);
+  },[canvasView,collaborationReadOnly,humanEditing,selectedElements.length,selectedElement?.nodeId,selectedElement?.locked,selectedScreenDescriptor]);
   const changeCanvasView = async (next:'design'|'preview') => {
     const intent=++viewIntentRef.current;
     if(next===canvasView)return;

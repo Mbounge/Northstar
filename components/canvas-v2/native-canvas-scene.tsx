@@ -90,8 +90,8 @@ export interface CanvasV2NativeCanvasSceneProps {
   onElementDoubleClick?: (element: CanvasV2InspectableElement) => void;
   onElementTextCommit?: (element: CanvasV2InspectableElement, text: string, nativeContent?: CanvasV2NativeTextContentUpdate[], layout?: { width?: number; height?: number }) => boolean | void;
   onWorkspaceWheel?: (event: { clientX: number; clientY: number; deltaX: number; deltaY: number; deltaMode?: number; ctrlKey: boolean; metaKey: boolean; shiftKey?: boolean }) => void;
-  onWorkspacePointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean }) => void;
-  onElementPointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => void;
+  onWorkspacePointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean }) => void;
+  onElementPointer?: (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => void;
   transientGeometry?: Readonly<Record<string, CanvasV2TransientGeometry>>;
 }
 
@@ -686,7 +686,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
   const placementReferenceSceneRef = useRef<CanvasV2NativeSceneDocument | undefined>(undefined);
   const [compileError, setCompileError] = useState<string>();
   const [compiledRevisionId, setCompiledRevisionId] = useState<string>();
-  const activePointerRef = useRef<{ pointerId: number; startX: number; startY: number; captured?: boolean; element?: CanvasV2InspectableElement } | undefined>(undefined);
+  const activePointerRef = useRef<{ pointerId: number; startX: number; startY: number; lastX: number; lastY: number; captured?: boolean; element?: CanvasV2InspectableElement } | undefined>(undefined);
   const hoveredPointerNodeRef = useRef<string | undefined>(undefined);
   const imageVisibilityRef = useRef<CanvasV2ImageVisibilityObserver | undefined>(undefined);
   const inspectableSnapshotRef = useRef<{ byId: Map<string, CanvasV2NativeSceneNode>; inspected: Map<string, CanvasV2InspectableElement> } | undefined>(undefined);
@@ -1158,21 +1158,23 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     }
     const targetResult = inspectionEnabled ? targetNode(event.target) : undefined;
     const inspected = targetResult ? inspectNativeNode(targetResult.node, byId, targetResult.element) : undefined;
-    activePointerRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, ...(inspected ? { element: inspected } : {}) };
+    activePointerRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, ...(inspected ? { element: inspected } : {}) };
     // Text objects need the browser's compatibility click sequence so a
     // physical double-click can produce click/dblclick after object selection.
     // The scene already disables ordinary text selection until edit mode, so
     // preserving the default here does not leak a browser-native selection.
     if (inspected && event.button === 0 && !inspected.textEditable) event.preventDefault();
-    // Do not capture the pointer on the scene root. Retargeting pointer-up to
-    // the root also retargets the browser's click/double-click sequence, which
-    // prevents the authored text leaf from entering inline edit mode. The
-    // workspace's window-level gesture listeners already own drag completion
-    // when the pointer leaves the scene.
+    // Selecting a live app removes its host selection surface and exposes
+    // an opaque iframe. Capture before that render so release still reaches
+    // this stable scene. Text and images retain their native double-clicks.
+    if (inspected && !inspected.textEditable && event.button === 0 && targetResult?.node.attributes[SCREEN_ATTRIBUTE]) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      activePointerRef.current.captured = true;
+    }
     if (inspected && event.button === 0 && onElementPointer) {
-      onElementPointer({ phase: "down", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: inspected });
+      onElementPointer({ phase: "down", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey, element: inspected });
     } else {
-      onWorkspacePointer?.({ phase: "down", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
+      onWorkspacePointer?.({ phase: "down", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey });
     }
   };
 
@@ -1184,6 +1186,17 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     if (inspectionEnabled && !activePointerRef.current && !navigating) inspectHoverTarget(event.target);
     const active = activePointerRef.current;
     if (!active || active.pointerId !== event.pointerId) return;
+    if (event.buttons === 0) {
+      activePointerRef.current = undefined;
+      // A release can be swallowed by an iframe or OS boundary. Finish at
+      // the last held position; the new hover point is never a drag sample.
+      const ended = { phase: "up" as const, pointerId: event.pointerId, clientX: active.lastX, clientY: active.lastY, button: event.button, buttons: 0 };
+      if (active.element && onElementPointer) onElementPointer({ ...ended, element: active.element });
+      else onWorkspacePointer?.(ended);
+      return;
+    }
+    active.lastX = event.clientX;
+    active.lastY = event.clientY;
     // Preserve the authored text's native click/double-click sequence. Once
     // movement becomes a real drag, capture on the stable scene root so a
     // selection re-render or an iframe boundary cannot strand the gesture.
@@ -1191,16 +1204,18 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       event.currentTarget.setPointerCapture(event.pointerId);
       active.captured = true;
     }
-    if (active.element && onElementPointer) onElementPointer({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: active.element });
-    else onWorkspacePointer?.({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
+    if (active.element && onElementPointer) onElementPointer({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey, element: active.element });
+    else onWorkspacePointer?.({ phase: "move", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey });
   };
 
   const pointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const active = activePointerRef.current;
     if (!active || active.pointerId !== event.pointerId) return;
     activePointerRef.current = undefined;
-    if (active.element && onElementPointer) onElementPointer({ phase: "up", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey, element: active.element });
-    else onWorkspacePointer?.({ phase: "up", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey });
+    const clientX = event.type === "pointerup" ? event.clientX : active.lastX;
+    const clientY = event.type === "pointerup" ? event.clientY : active.lastY;
+    if (active.element && onElementPointer) onElementPointer({ phase: "up", cancelled: event.type === "pointercancel", pointerId: event.pointerId, clientX, clientY, button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey, element: active.element });
+    else onWorkspacePointer?.({ phase: "up", cancelled: event.type === "pointercancel", pointerId: event.pointerId, clientX, clientY, button: event.button, buttons: event.buttons, shiftKey: event.shiftKey, metaKey: event.metaKey });
   };
 
   const beginTextEditing = (
@@ -1546,6 +1561,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
         onPointerMove={pointerMove}
         onPointerUp={pointerUp}
         onPointerCancel={pointerUp}
+        onLostPointerCapture={pointerUp}
         onPointerLeave={() => {
           hoveredPointerNodeRef.current = undefined;
           onElementHover?.(undefined);
