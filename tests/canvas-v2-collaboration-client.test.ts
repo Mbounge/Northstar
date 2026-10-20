@@ -413,3 +413,56 @@ test('claim responses expose busy object identities and release them without wri
   f.faults.busyObjects = []; a.value.selection([], 'design', 'viewing'); await turn();
   assert.deepEqual(a.value.getStatus().busyObjects, []); assert.equal(f.commits.length, 0);
 });
+
+test('an unobserved evicted parent fails closed and recovers the complete long native draft', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  const oldEngineBase = a.revision();
+  for (let index = 1; index <= 25; index++) {
+    await b.value.observe(revision(`long-peer-${index}`, html.replace('Second', `Bob accepted update ${index}`))); await b.value.sync(); await a.value.sync();
+  }
+  assert(a.revision().document.html.includes('Bob accepted update 25'));
+  const longHumanDraft = { ...revision('long-native-draft', oldEngineBase.document.html.replace('First', 'Alice final long edit')), parentId: oldEngineBase.id };
+  await a.value.observe(longHumanDraft); await a.value.sync(); await b.value.sync();
+  assert(f.html().includes('Bob accepted update 25'), 'an unknown/evicted parent must never be guessed from the latest peer document and reverse its untouched fields');
+  const ownCommits = f.commits.filter(operation => operation.clientId === 'alice-tab');
+  assert.equal(ownCommits.length, 0, 'an explicit unavailable parent cannot authorize any guessed diff');
+  assert.equal(a.value.getStatus().recovery?.revision.document.html, longHumanDraft.document.html);
+  assert.equal(a.journal()?.recovery?.revision.id, longHumanDraft.id, 'the whole draft must survive a reload through the journal');
+  assert.equal(a.revision().document.html, f.html(), 'accepted peer source remains the displayed authority');
+  assert.equal(a.value.getStatus().pending, 0);
+});
+
+test('an observed editing basis survives twenty-five peer revisions and commits only the owned object', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'); t.after(() => { a.value.close(); b.value.close(); });
+  const oldEngineBase = a.revision();
+  // Workspace observes its committed engine revision before deferring incoming
+  // source during a long native edit. This must pin its exact comparison basis.
+  await a.value.observe(oldEngineBase);
+  for (let index = 1; index <= 25; index++) {
+    await b.value.observe(revision(`pinned-peer-${index}`, html.replace('Second', `Bob accepted update ${index}`))); await b.value.sync(); await a.value.sync();
+  }
+  await a.value.observe({ ...revision('pinned-human-draft', oldEngineBase.document.html.replace('First', 'Alice long edit')), parentId: oldEngineBase.id });
+  await a.value.sync(); await b.value.sync();
+  const expected = html.replace('First', 'Alice long edit').replace('Second', 'Bob accepted update 25');
+  assert.equal(f.html(), expected); assert.equal(a.revision().document.html, expected); assert.equal(b.revision().document.html, expected);
+  const ownAccepted = f.log.filter(operation => operation.actorId === 'alice');
+  assert.equal(ownAccepted.length, 1); assert.deepEqual(ownAccepted[0].changes.map(change => change.key), ['node:a:body']);
+  assert.equal(a.value.getStatus().recovery, undefined);
+  assert.equal(await a.value.undo(), true); await a.value.sync();
+  assert.equal(f.html(), html.replace('Second', 'Bob accepted update 25'), 'author undo must preserve all twenty-five peer edits');
+});
+
+test('rapid queued manual revisions resolve their real parent chain before either observe finishes', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const base = a.revision(); await a.value.observe(base);
+  f.faults.offline = true;
+  const first = { ...revision('rapid-parent-one', html.replace('First', 'First queued edit')), parentId: base.id };
+  const second = { ...revision('rapid-parent-two', first.document.html.replace('Second', 'Second queued edit')), parentId: first.id };
+  await Promise.all([a.value.observe(first), a.value.observe(second)]); await a.value.sync();
+  assert.equal(a.value.getStatus().pending, 2); assert.equal(a.value.getStatus().recovery, undefined);
+  assert.deepEqual(a.journal()?.pending.map(operation => operation.changes.map(change => change.key)), [['node:a:body'], ['node:b:body']]);
+  f.faults.offline = false; await a.value.sync();
+  assert.equal(f.html(), second.document.html); assert.equal(f.log.length, 2); assert.equal(a.value.getStatus().pending, 0);
+  assert.equal(await a.value.undo(), true); await a.value.sync(); assert.equal(f.html(), first.document.html);
+  assert.equal(await a.value.undo(), true); await a.value.sync(); assert.equal(f.html(), html);
+});

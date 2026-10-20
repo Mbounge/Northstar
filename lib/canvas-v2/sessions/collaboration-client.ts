@@ -72,6 +72,7 @@ export class CanvasCollaborationClient {
   private pending: SharedOperation[] = [];
   private known = new Set<string>();
   private material = new Map<string, SharedCells>();
+  private observedBasis?: { id: string; cells: SharedCells };
   private undoHistory: Array<{ original: CellChange[]; inverse: CellChange[] }> = [];
   private redoHistory: Array<{ original: CellChange[]; inverse: CellChange[] }> = [];
   private historyIntent = new Map<string, 'undo' | 'redo'>();
@@ -193,20 +194,35 @@ export class CanvasCollaborationClient {
     catch { /* The next durable sync determines whether access was removed. */ }
   }
   observe(revision: CanvasV2ArtifactRevision, label = 'Edited canvas'): Promise<void> {
-    if (!this.enabled || this.known.has(revision.id) || this.closed) return Promise.resolve();
+    if (!this.enabled || this.closed) return Promise.resolve();
+    if (this.known.has(revision.id)) {
+      // The workspace can keep this revision open during a long human edit.
+      // Pin its exact basis independently of the bounded peer-history cache.
+      this.observedBasis = { id: revision.id, cells: this.material.get(revision.id) ?? sharedCellsFromRevision(revision) };
+      return Promise.resolve();
+    }
     // Capture call-time bytes before any hashing/network await.
     const cells = sharedCellsFromRevision(revision);
+    const parentBasis = revision.parentId ? this.material.get(revision.parentId) ?? (this.observedBasis?.id === revision.parentId ? this.observedBasis.cells : undefined) : undefined;
     this.observing = this.observing.then(async () => {
       if (this.known.has(revision.id)) return;
       if (!this.writable) { this.update({ error: 'This canvas is view-only.' }); return; }
       // A remote update can arrive between a local synchronous edit and its
       // React effect. Diff against the edit's real parent, not a newer peer
       // document, or an old local render could accidentally reverse that peer.
-      const basis = this.material.get(revision.parentId ?? '') ?? this.visible;
+      const basis = parentBasis ?? (revision.parentId
+        ? this.material.get(revision.parentId) ?? (this.observedBasis?.id === revision.parentId ? this.observedBasis.cells : undefined)
+        : this.visible);
+      if (!basis) {
+        this.retainLocalRevision(revision, label);
+        this.update({ error: 'The canvas changed while you were editing. Your version is kept in recovery; teammate changes were preserved.' });
+        this.emitRevision(this.visible);
+        return;
+      }
       const changes = await diffSharedCells(basis, cells);
-      if (!changes.length) { this.revision = revision; this.remember(revision.id, cells); return; }
+      if (!changes.length) { this.revision = revision; this.remember(revision.id, cells); this.observedBasis = { id: revision.id, cells }; return; }
       const sameBasis = basis.size === this.visible.size && [...basis].every(([key, value]) => this.visible.get(key) === value);
-      this.revision = revision; if (sameBasis) this.visible = cells; this.remember(revision.id, cells);
+      this.revision = revision; if (sameBasis) this.visible = cells; this.remember(revision.id, cells); this.observedBasis = { id: revision.id, cells };
       this.pending.push({ id: crypto.randomUUID(), clientId: this.clientId, changes, label: label.slice(0, 160) });
       this.redoHistory = []; this.update({ error: undefined }); await this.rebase(); void this.sync();
     }).catch(error => this.update({ error: error instanceof Error ? error.message : 'The shared edit could not be prepared.' }));

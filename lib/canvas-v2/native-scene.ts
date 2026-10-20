@@ -850,6 +850,8 @@ function kindFor(element: Element): CanvasV2BoardObjectKind {
   if (html.dataset?.canvasV2Primitive === "connector") return "connector";
   if (html.dataset?.canvasV2PaintedEdge || html.dataset?.canvasV2SurfaceOwner) return "shape";
   if (html.dataset?.canvasV2Group === "true") return "group";
+  const primitive = html.dataset?.canvasV2Primitive;
+  if (primitive === "text" || primitive === "shape" || primitive === "note" || primitive === "line" || primitive === "drawing" || primitive === "frame" || primitive === "image" || primitive === "table") return primitive;
   if (html.dataset?.canvasV2IslandId || html.dataset?.canvasV2DesignRegion !== undefined) return "island";
   if (html.dataset?.canvasV2EvidenceId) return element.tagName === "IMG" ? "image" : "evidence";
   if (element.tagName === "IMG") return "image";

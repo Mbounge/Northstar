@@ -1011,7 +1011,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const remoteRevisionRef=useRef<import('@/lib/canvas-v2/types').CanvasV2ArtifactRevision|undefined>(undefined);
   const receiveCollaborativeRevision=useRef<(revision:import('@/lib/canvas-v2/types').CanvasV2ArtifactRevision)=>void>(()=>{});
   receiveCollaborativeRevision.current=revision=>{
-    if(directGestureRef.current||drawingGestureRef.current||editingNodeId||engine.applyingManualEdit){remoteRevisionRef.current=revision;return;}
+    if(directGestureRef.current||drawingGestureRef.current||connectorGestureRef.current||tidyGestureRef.current||editingNodeId||cropDraft||tidyDraft||engine.applyingManualEdit){remoteRevisionRef.current=revision;return;}
     const current=engine.readCommittedRevision();
     if(current.document.html===revision.document.html&&current.document.css===revision.document.css&&current.document.javascript===revision.document.javascript&&JSON.stringify(current.evidence)===JSON.stringify(revision.evidence))return;
     engine.receiveSharedRevision(revision);
@@ -2471,6 +2471,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       // of the render-closure snapshot so rapid, sequential object edits do
       // not build from a stale revision and snap back on release.
       const sourceScene = engine.readNativeScene();
+      if (!sourceScene && (sceneElementsRef.current.length > 0 || atomicMutations.some(item => item.kind === "image-crop"))) {
+        setMutationError("The canvas is updating. Your edit stays open; try again in a moment.");
+        if (deletedNodeIds.length) restoreDeletionPreview();
+        return false;
+      }
       const nextNativeScene = sourceScene ? applyCanvasV2NativeSceneMutation(sourceScene, mutation) : undefined;
       const geometryOnly = atomicMutations.every((item) => item.kind === "move" || item.kind === "resize" || item.kind === "rotate" || item.kind === "transform");
       const document = nextNativeScene

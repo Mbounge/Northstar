@@ -464,7 +464,7 @@ export function applyCanvasV2ManualMutation(
     element.dataset.canvasV2Rotation = String(rotation);
     element.style.setProperty("rotate", `${rotation}deg`, "important");
     markUserEdit(element, mutation.kind);
-  } else {
+  } else if (mutation.kind === "ungroup") {
     if (element.dataset.canvasV2Group !== "true") throw new Error("Only an explicit North Star object group can be ungrouped.");
     const parent = element.parentElement;
     if (!parent) throw new Error("The selected group has no parent.");
@@ -483,7 +483,7 @@ export function applyCanvasV2ManualMutation(
       parent.insertBefore(child, element);
     }
     element.remove();
-  }
+  } else throw new Error("This edit requires a ready native canvas. Try again when the canvas finishes updating.");
 
   return assertCanvasV2ArtifactDocument({
     ...artifact,

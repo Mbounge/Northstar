@@ -59,6 +59,11 @@ reloads, including exact field deltas when structural changes prevent rendering.
 Earlier revision-only recovery branches remain in the downloaded recovery file.
 Failed local journal writes retry even when no new edit occurs. Authoritative
 roster refreshes update editor/viewer controls while preserving room ownership.
+An open human edit pins its actual source basis independently of the bounded
+peer-history cache. If an explicit parent is unavailable, the edit is retained
+for recovery instead of being diffed against newer teammate content. Active
+crop, tidy, connector and drawing gestures defer shared scene replacement until
+the gesture finishes; a missing native authority cannot enter a legacy mutation.
 
 `native-scene-source.ts` compares serializations of the before/after native
 scene and applies only their actual delta to the original source. It does not
