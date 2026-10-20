@@ -23,7 +23,7 @@ function room() {
   const members: CanvasMember[] = [{ userId: 'alice', name: 'Alice', role: 'owner' }, { userId: 'bob', name: 'Bob', role: 'editor' }, { userId: 'viewer', name: 'Viewer', role: 'viewer' }];
   const signals = new Map<string, Parameters<CollaborationTransport['watch']>[1]>();
   const gates = new Map<string, ReturnType<typeof deferred>>(), entered = new Map<string, ReturnType<typeof deferred>>();
-  const faults = { offline: false, denied: false, loseNextAck: false, rejectNext: false, busyObjects: [] as string[] };
+  const faults = { offline: false, denied: false, readError: '', loseNextAck: false, rejectNext: false, busyObjects: [] as string[] };
   const calls = { since: [] as number[], members: [] as number[] };
   const transport = (userId: string): CollaborationTransport => ({
     async read() { if (faults.offline) throw new Error('Offline'); return { version: log.length, cells: new Map(cells), seed, ownerId: 'alice', role: members.find(m => m.userId === userId)!.role, members: structuredClone(members) }; },
@@ -39,7 +39,7 @@ function room() {
       if (faults.loseNextAck) { faults.loseNextAck = false; throw new Error('ACK was lost after acceptance'); }
       return { ok: true, version: log.length };
     },
-    async since(version) { calls.since.push(Date.now()); if (faults.denied) throw new Error('Access denied'); if (faults.offline) throw new Error('Offline'); return structuredClone(log.filter(op => op.version > version).slice(0, 100)); },
+    async since(version) { calls.since.push(Date.now()); if (faults.denied) throw new Error('Access denied'); if (faults.readError) throw new Error(faults.readError); if (faults.offline) throw new Error('Offline'); return structuredClone(log.filter(op => op.version > version).slice(0, 100)); },
     async claim() { return { busy: [...faults.busyObjects] }; }, async members() { calls.members.push(Date.now()); return structuredClone(members); },
     watch(clientId, receive) { signals.set(clientId, receive); return () => { signals.delete(clientId); }; },
     presence(value) { presence.push(structuredClone(value)); }, notify() {},
@@ -195,6 +195,34 @@ test('revoked access blocks the connection while retaining queued human work on 
   assert.equal(a.journal()?.pending.length, 1); assert.ok(JSON.stringify(a.journal()).includes('Keep this unsent work'));
   assert.equal(f.signals.has('alice-tab'), false); assert.equal(f.log.length, 0);
 });
+
+for (const expiry of ['JWT expired', ' JWT has expired at the gateway ']) {
+test(`an expired JWT (${expiry.trim()}) retries after external auth refresh and saves queued work without a reload`, async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  f.faults.offline = true;
+  await a.value.observe(revision('expiry-pending', html.replace('First', 'Unsent across token expiry'))); await a.value.sync();
+  f.faults.offline = false; f.faults.readError = expiry; await a.value.sync();
+  assert.equal(a.value.getStatus().phase, 'reconnecting', 'expiry must permit a later SDK-refreshed request rather than permanently block the controller');
+  assert.equal(a.value.getStatus().pending, 1); assert.equal(a.journal()?.pending.length, 1); assert.equal(f.log.length, 0);
+  f.faults.readError = ''; const requestsBeforeRefresh = f.calls.since.length; await a.value.sync();
+  assert(f.calls.since.length > requestsBeforeRefresh, 'the healthy next tick must actually perform authoritative RPC reauthentication');
+  assert.equal(a.value.getStatus().phase, 'live'); assert.equal(a.value.writable, true); assert.equal(a.value.getStatus().pending, 0);
+  assert.equal(f.html(), html.replace('First', 'Unsent across token expiry')); assert.equal(f.log.length, 1);
+});
+}
+
+for (const message of ['Access denied', 'Invalid JWT']) {
+  test(`${message} remains blocked after the transport becomes healthy`, async t => {
+    const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+    f.faults.offline = true;
+    await a.value.observe(revision('hard-auth-pending', html.replace('First', 'Retained after authentication rejection'))); await a.value.sync();
+    f.faults.offline = false; f.faults.readError = message; await a.value.sync();
+    assert.equal(a.value.getStatus().phase, 'blocked'); assert.equal(a.value.writable, false); assert.equal(f.signals.has('alice-tab'), false);
+    const deniedRequests = f.calls.since.length; f.faults.readError = ''; await a.value.sync();
+    assert.equal(f.calls.since.length, deniedRequests); assert.equal(f.log.length, 0); assert.equal(a.value.getStatus().pending, 1);
+    assert(JSON.stringify(a.journal()).includes('Retained after authentication rejection'));
+  });
+}
 
 test('presence rejects malformed packets, orders sequences, expires locally and never writes document operations', async t => {
   const f = room(), a = await f.client('alice'); t.after(() => a.value.close());

@@ -315,7 +315,11 @@ export class CanvasCollaborationClient {
         this.update({ phase: 'live', error: undefined });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Connection interrupted.';
-        const denied = /access denied|permission denied|JWT|not authenticated|view-only/i.test(message);
+        // Supabase can renew an expired token after a temporary refresh/network
+        // failure. Keep retrying that case; revocation and invalid tokens still
+        // stop access and retain pending work without issuing further reads.
+        const expired = /^JWT (?:has )?expired\b/i.test(message.trim());
+        const denied = !expired && /access denied|permission denied|JWT|not authenticated|view-only/i.test(message);
         this.update({ phase: denied ? 'blocked' : 'reconnecting', error: denied ? 'Your access to this canvas changed. Your unsent work is kept on this device.' : 'Reconnecting. Your unsent changes are kept on this device.' });
         if (denied) { this.watchStop?.(); this.watchStop = undefined; this.peers.clear(); this.emitPresence(); }
         await this.journal();
