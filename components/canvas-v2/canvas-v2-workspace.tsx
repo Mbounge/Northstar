@@ -3447,7 +3447,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       if(!request||typeof request.resolve!=='function')return;
       try{
         const revision=engine.readCommittedRevision(),scene=engine.readNativeScene(),current=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===request.nodeId);
-        if(!scene||scene.revisionId!==revision.id||!current||current.encoded!==request.encoded||current.screen.simulation)throw new Error('This item changed. Select it again.');
+        if(!scene||scene.revisionId!==revision.id)throw new Error('The canvas is still preparing this edit. Try again in a moment.');
+        if(!current||current.encoded!==request.encoded||current.screen.simulation)throw new Error('This item changed. Select it again.');
         const owned=scene.nodes.find(node=>(node.sourceNodeId??node.id)===request.nodeId);
         if(owned?.locked)throw new Error('Unlock this screen before editing it.');
         if(!owned||owned.hidden)throw new Error('This item changed. Select it again.');
@@ -3461,7 +3462,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         const next=reviseCanvasV2NativeScreen(scene,request.nodeId,encoded),node=next.nodes.find(item=>(item.sourceNodeId??item.id)===request.nodeId)!;
         node.userEdited=true;node.lastAuthor='user';node.attributes['data-canvas-v2-user-edited']='content';node.attributes['data-canvas-v2-last-author']='user';
         const summary=design?.label??(request.action==='element'?'Edited screen element':request.action==='appearance'?'Changed screen appearance':['text','rich-text'].includes(request.action)?'Edited screen text':request.action==='remove'?`Removed ${request.target.label||'section'}`:`Moved ${request.target.label||'section'} ${request.action==='move-up'?'up':'down'}`);
-        if(!engine.applyManualDocument(serializeManualNativeScene(next),summary,revision.evidence,next,{origin:'user',selectionNodeIds:[request.nodeId]}))throw new Error('This item changed. Select it again.');
+        if(!engine.applyManualDocument(serializeManualNativeScene(next),summary,revision.evidence,next,{origin:'user',selectionNodeIds:[request.nodeId]}))throw new Error(engine.readManualFailure()||'The canvas could not save this edit. Try again in a moment.');
         // A direct edit is a deliberate interaction with this phone. Retain
         // that exact owner as the scope for subsequent chat edits and history.
         if(!['element','rich-text'].includes(request.action)){
