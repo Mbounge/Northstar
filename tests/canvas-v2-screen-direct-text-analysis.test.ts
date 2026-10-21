@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { analyzeScreenTextMutations } from '../lib/canvas-v2/screen-direct-text-analysis';
+import { analyzeScreenTextMutations, analyzeScreenAppearanceMutations } from '../lib/canvas-v2/screen-direct-text-analysis';
 
 function gatherJavaScript(): string {
   try {
@@ -154,3 +154,107 @@ test('locally shadowed document is never treated as the browser global', () => {
   assert.equal(result.safe, false);
   assert.equal(result.unknown, true);
 });
+
+const productData = `const p=window.northstarProduct;const d=p.data||(p.data={});d.tour=d.tour||{};`;
+
+test('static campaign headings remain editable while product records initialize and save computed fields', () => {
+  const source = productData + `
+    for(const [k,v] of Object.entries({name:'',email:''})) if(d.tour[k]===undefined)d.tour[k]=v;
+    document.querySelector('#name').addEventListener('input',e=>{d.tour[e.target.name]=e.target.value});
+    for(const k of ['name','email']) d.tour[k]=document.querySelector('#'+k).value.trim();
+    Object.assign(d.tour,{name:'',email:''});
+    window.scrollTo(0,0);
+    document.querySelector('#greeting').textContent=d.tour.name;
+  `;
+  const heading = analyzeScreenTextMutations(source, {selector:'#email-title',ancestorSelectors:['#email-view']});
+  assert.equal(heading.safe,true);
+  assert.equal(heading.unknown,false);
+  assert.equal(analyzeScreenTextMutations(source,{selector:'#greeting'}).safe,false,'the actual app-rendered greeting remains protected');
+});
+
+test('plain managed-data writes do not suppress actual style ownership', () => {
+  const source = productData + `d.tour[field]='value';document.querySelector('#email-title').style.color='red';`;
+  assert.equal(analyzeScreenTextMutations(source,{selector:'#email-title'}).safe,true);
+  assert.equal(analyzeScreenAppearanceMutations(source,{selector:'#email-title'}).safe,false);
+  assert.equal(analyzeScreenAppearanceMutations(productData+`d.tour[field]='value';`,{selector:'#email-title'}).safe,true);
+});
+
+test('DOM injection, unknown mutators and ambiguous aliases cannot turn data exemption into a DOM bypass', () => {
+  for(const mutation of [
+    `d.tour=document.body;`,
+    `const element=document.querySelector('#email-title');d.tour=element;`,
+    `d.tour=chooseRecord();`,
+    `d[recordName]=document.body;`,
+    `Object.assign(d,{tour:document.body});`,
+    `Reflect.set(d,'tour',document.body);`,
+    `mutate(d.tour);`,
+    `Object.defineProperty(d,'tour',{get:()=>document.body});`,
+    `Object.values(d).forEach(record=>{record.child=document.body});`,
+    `Object.entries(d).forEach(pair=>{pair[1].child=document.body});`,
+    `const records=[d];mutate(records);`,
+    `const holder={record:d};mutate(holder);`,
+    `const {tour}=d;mutate(tour);`,
+    `function expose(){return d}`,
+    `const expose=()=>d;`,
+    `external.record=d||{};`,
+    `new Bag(d);`,
+    `[d.tour]=[document.body];`,
+    `window.northstarProduct={data:{tour:document.body}};`,
+  ]) {
+    const result=analyzeScreenTextMutations(productData+mutation+`d.tour[property]='replacement';`,{selector:'#email-title'});
+    assert.equal(result.safe,false,mutation);
+    assert.equal(result.unknown,true,mutation);
+  }
+  for(const source of [
+    `const d=window.northstarProduct.data;d= document.body;d[property]='replacement'`,
+    `const d=window.northstarProduct.data;{const d=document.body;d[property]='replacement'}`,
+    `(function(window){const d=window.northstarProduct.data;d[property]='replacement'})(otherWindow)`,
+    `const d=unknownApplication.data;d[property]='replacement'`,
+  ]) assert.equal(analyzeScreenTextMutations(source,{selector:'#email-title'}).safe,false,source);
+});
+
+test('replacing a nested data owner with another proven JSON record is safe, not with a nested node', () => {
+  assert.equal(analyzeScreenTextMutations(productData+`d.tour={name:''};d.tour[property]='new';`,{selector:'#title'}).safe,true);
+  assert.equal(analyzeScreenTextMutations(productData+`d.tour={child:document.body};d.tour.child[property]='new';`,{selector:'#title'}).safe,false);
+  assert.equal(analyzeScreenTextMutations(productData+`d.tour.child=d.tour.child||{};d.tour.child[property]='new';`,{selector:'#title'}).safe,true);
+});
+
+for (const [name, body] of [
+  ['catch binding', `try{throw document.querySelector('#email-title')}catch(d){d[property]='replacement'}`],
+  ['destructured catch binding', `try{throw {d:document.querySelector('#email-title')}}catch({d}){d[property]='replacement'}`],
+  ['destructured function parameter', `(function({d}){d[property]='replacement'})({d:document.querySelector('#email-title')})`],
+  ['nested destructured parameter', `(function({inner:{d}}){d[property]='replacement'})({inner:{d:document.querySelector('#email-title')}})`],
+  ['with scope', `with({d:document.querySelector('#email-title')}){d[property]='replacement'}`],
+] as const) {
+  test(`managed-data exemption rejects DOM alias introduced by ${name}`, async () => {
+    const { runInNewContext } = await import('node:vm');
+    const source = `const d=window.northstarProduct.data;${body}`;
+    const target = { textContent: 'original' };
+    runInNewContext(source, {
+      window: { northstarProduct: { data: {} } },
+      document: { querySelector: () => target },
+      property: 'textContent',
+    });
+    assert.equal(target.textContent, 'replacement', 'the scoped receiver really writes the selected node, not the plain data record');
+    const result = analyzeScreenTextMutations(source, { selector: '#email-title' });
+    assert.equal(result.safe, false);
+    assert.equal(result.unknown, true);
+  });
+}
+
+for (const compiler of ['eval', 'Function'] as const) {
+  test(`managed-data exemption fails closed when ${compiler} can replace the record`, async () => {
+    const { runInNewContext } = await import('node:vm');
+    const dynamic = `window.northstarProduct.data.tour=document.querySelector('#email-title')`;
+    const invoke = `${compiler}(${JSON.stringify(dynamic)})${compiler === 'Function' ? '()' : ''}`;
+    const source = `const d=window.northstarProduct.data;${invoke};d.tour[property]='replacement'`;
+    const target = { textContent: 'original' };
+    runInNewContext(source, {
+      window: { northstarProduct: { data: {} } },
+      document: { querySelector: () => target },
+      property: 'textContent',
+    });
+    assert.equal(target.textContent, 'replacement');
+    assert.equal(analyzeScreenTextMutations(source, { selector: '#email-title' }).safe, false);
+  });
+}

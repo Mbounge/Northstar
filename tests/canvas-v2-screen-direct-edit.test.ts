@@ -3,6 +3,7 @@ import { Script } from 'node:vm';
 import test from 'node:test';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
 import { parseCanvasV2ScreenFeedbackTarget, canvasV2ScreenFeedbackContext } from '../lib/canvas-v2/screen-feedback';
+import { screenElementHasImportantStyle } from '../lib/canvas-v2/screen-direct-edit';
 
 // These helpers are embedded as JavaScript in an opaque-origin frame. A type
 // check alone cannot catch broken interpolation or script-boundary escaping.
@@ -84,4 +85,34 @@ test('a failed editor still drains the other pending save before rejecting hando
     assert.equal(committed,true,'an editor removed after handoff starts still belongs to that handoff');
   } finally {removeFailure();removePending();}
   await flush(events);
+});
+
+test('important scroll policy does not own typography, while matching visual declarations remain protected',()=>{
+  // CSSOM fixtures represent parsed browser rules, including nested media.
+  // This test exercises the actual guard, not a second CSS parsing heuristic.
+  const declaration=(values:Record<string,string>)=>Object.assign(Object.keys(values),{getPropertyPriority:(property:string)=>values[property]});
+  const rule=(selectorText:string,values:Record<string,string>)=>({selectorText,style:declaration(values)});
+  const fixtures:Record<string,unknown[]>={
+    scroll:[{cssRules:[rule('*',{'scroll-behavior':'important'})]}],
+    mixed:[{cssRules:[rule('*',{'scroll-behavior':'important','font-weight':'important'})]}],
+    typography:[{cssRules:[rule('#title',{'font-size':'important'})]}],
+    other:[rule('#other',{'color':'important'})],
+    ordinary:[rule('#title',{'color':''})],
+    visual:[rule('#title',{'opacity':'important'})],
+    invalid:[rule('invalid selector',{'color':'important'})],
+  };
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'CSSStyleSheet');
+  Object.defineProperty(globalThis,'CSSStyleSheet',{configurable:true,value:class {
+    cssRules:unknown[]=[];
+    replaceSync(css:string){if(css==='broken!important')throw Error('parse failed');this.cssRules=fixtures[css.replace('!important','')]??[];}
+  }});
+  const element={matches:(selector:string)=>{if(selector==='invalid selector')throw Error('bad selector');return selector==='*'||selector==='#title'}} as unknown as Element;
+  try {
+    assert.equal(screenElementHasImportantStyle('scroll!important',element),false);
+    assert.equal(screenElementHasImportantStyle('ordinary!important',element),false);
+    assert.equal(screenElementHasImportantStyle('other!important',element),false);
+    for(const name of ['mixed','typography','visual','invalid','broken'])assert.equal(screenElementHasImportantStyle(name+'!important',element),true,name);
+  } finally {
+    if(previous)Object.defineProperty(globalThis,'CSSStyleSheet',previous);else Reflect.deleteProperty(globalThis,'CSSStyleSheet');
+  }
 });

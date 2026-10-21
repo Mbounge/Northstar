@@ -233,7 +233,7 @@ export function screenAppearanceCanEditDirectly(screen: CanvasV2InteractiveScree
 
 /** Only important declarations which can style this selected element block
  * direct overrides. Unrelated utility rules do not own the entire screen. */
-function screenElementHasImportantStyle(css:string,element:Element):boolean {
+export function screenElementHasImportantStyle(css:string,element:Element):boolean {
   css=css.replace(/\/\* ns-responsive:[\s\S]*?\*\/\s*@media[^{}]*\{(?:[^{}]*\{[^{}]*\})*\}/g,'');
   if(!/!important\b/i.test(css))return false;
   try{
@@ -241,7 +241,9 @@ function screenElementHasImportantStyle(css:string,element:Element):boolean {
     const visit=(rules:CSSRuleList):boolean=>Array.from(rules).some(rule=>{
       if('selectorText' in rule&&'style' in rule){
         const entry=rule as CSSStyleRule;
-        if(!Array.from(entry.style).some(property=>entry.style.getPropertyPriority(property)==='important'))return false;
+        // Reduced-motion scroll policy does not own the selected layer's
+        // typography or appearance. Keep every visual/layout rule protected.
+        if(!Array.from(entry.style).some(property=>property!=='scroll-behavior'&&entry.style.getPropertyPriority(property)==='important'))return false;
         const selector=entry.selectorText.replace(/:(?:hover|active|focus(?:-visible|-within)?|visited|disabled|checked)\b/g,'');
         try{return element.matches(selector)}catch{return true}
       }

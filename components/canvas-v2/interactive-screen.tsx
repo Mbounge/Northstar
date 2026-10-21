@@ -4,7 +4,7 @@ import { ScreenDesignStudio } from './screen-design-studio';
 import { buildScreenDesignExport, downloadScreenDesign } from '@/lib/canvas-v2/screen-design-export';
 import type { ScreenDesignOperation, ScreenDesignOrigin } from '@/lib/canvas-v2/screen-design-edit';
 import { canvasV2ScreenRuntimeIdentity, clearCanvasV2ScreenRuntimeState, rememberCanvasV2ScreenRuntimeState, restoreCanvasV2ScreenRuntimeState, screenMockDataEqual, type CanvasV2ScreenRuntimeState } from '@/lib/canvas-v2/screen-mock-state';
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasV2ArtifactTheme } from '@/lib/canvas-v2/artifact-theme';
 import { parseCanvasV2Screen, validateCanvasV2Screen, canvasV2ScreenBoundAssets } from '@/lib/canvas-v2/interactive-screen';
 import { buildCanvasV2ScreenRuntime, screenCaptureImageSourceIsSafe, screenCommandMayRunDuringHumanInput, canvasV2ScreenNeedsViewportActivity, bindCanvasV2ScreenAssetSource, SCREEN_PROTOCOL, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
@@ -23,6 +23,7 @@ import type { CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
 import { CANVAS_V2_EDIT_SELECTION_FEEDBACK, screenFeedbackSelectionSurvives, screenFeedbackSelectionCanRefresh, CANVAS_V2_FEEDBACK_PICKING, setCanvasV2FeedbackPicking, CANVAS_V2_SCREEN_FEEDBACK, parseCanvasV2ScreenFeedbackTarget, canvasV2ScreenLiveEdit, type CanvasV2ScreenLiveEdit } from '@/lib/canvas-v2/screen-feedback';
 import { screenMotionTargetCropRect, screenJourneyTimeoutMs, validateScreenInteractionSequence } from '@/lib/canvas-v2/screen-interaction-sequence';
 import { canvasV2ScreenFontFamilies, readCanvasV2ScreenFontCss } from '@/lib/canvas-v2/screen-fonts';
+import { readCanvasV2EditorFonts, type CanvasV2EditorFonts } from '@/lib/canvas-v2/screen-editor-fonts';
 import { canvasV2ScreenDevice, canvasV2ScreenDeviceMetrics } from '@/lib/canvas-v2/screen-device';
 import { SCREEN_DIRECT_EDIT_EVENT, SCREEN_DIRECT_PROMPT_EVENT, flushScreenDirectEdits, screenStructureLivePatch, screenSectionNeedsAgent, screenSectionMoves, moveScreenSection, screenTextCanEditDirectly, screenAppearanceCanEditDirectly, type ScreenDirectOptions, type ScreenDirectRequest, type ScreenDirectResult } from '@/lib/canvas-v2/screen-direct-edit';
 import { screenEditableLayers, updateScreenLayerSelection } from '@/lib/canvas-v2/screen-vector-edit';
@@ -375,24 +376,32 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const nativeSelectionHistory=useRef(new Map<string,string[]>());
   const pendingNativeSelectionRevision=useRef<{encoded:string;sequence:number}|undefined>(undefined);
   const partsRects=useRef<CanvasV2ScreenFeedbackTarget[]>([]),selectionSequence=useRef(0),rangeAnchor=useRef<string|undefined>(undefined);
-  const writeParts=(parts:CanvasV2ScreenFeedbackTarget[],source=previousSource.current)=>{selectedPartsRef.current=parts;partsRects.current=parts;partsSource.current=source;setSelectedParts(parts)};
+  const textEditorRequest=useRef<{aborter:AbortController;selector:string;version:string}|undefined>(undefined);
+  const cancelPendingTextEditor=useCallback(()=>{textEditorRequest.current?.aborter.abort();textEditorRequest.current=undefined;},[]);
+  const exitScreenEditing=useCallback(()=>{cancelPendingTextEditor();editingRef.current.exit();},[cancelPendingTextEditor]);
+  const writeParts=useCallback((parts:CanvasV2ScreenFeedbackTarget[],source=previousSource.current)=>{const request=textEditorRequest.current;if(request&&(source!==request.version||parts.length!==1||parts[0].selector!==request.selector))cancelPendingTextEditor();selectedPartsRef.current=parts;partsRects.current=parts;partsSource.current=source;setSelectedParts(parts)},[cancelPendingTextEditor]);
+
+  const [textEditor,setTextEditor]=useState<{target:CanvasV2ScreenFeedbackTarget;value:string;encoded:string;fonts:CanvasV2EditorFonts}>();
+  const closeTextEditor=useCallback(()=>{cancelPendingTextEditor();setTextEditor(undefined);},[cancelPendingTextEditor]);
 
   const elementRect=useRef<CanvasV2ScreenFeedbackTarget['rect']|undefined>(undefined);
   const hasElementSelection=selectedParts.length>0||Boolean(elementSelection);
   const selectScreenElement=editing.select;
   useEffect(()=>{if(!editingActive)return;selectScreenElement(hasElementSelection?nodeId:undefined,selectedParts);return()=>selectScreenElement(undefined)},[hasElementSelection,nodeId,editingActive,selectScreenElement,selectedParts]);
-  useEffect(()=>{if(!editingActive){writeParts([]);setElementSelection(undefined);setDirectMenu(undefined);setTextEditor(undefined);}},[editingActive]);
-  useEffect(()=>{if(screen.simulation)return;const aborter=new AbortController();void inspectCanvasV2Screen(nodeId,encoded,{action:'edit-mode',value:editingActive?'on':'off'},aborter.signal).catch(()=>{if(!aborter.signal.aborted&&editingActive){editingRef.current.exit();setDirectError('This screen is not ready to edit. Try again.')}});return()=>aborter.abort();},[editingActive,nodeId,encoded,runtime,screen.simulation]);
+  useEffect(()=>{if(!editingActive){writeParts([]);setElementSelection(undefined);setDirectMenu(undefined);closeTextEditor();}},[editingActive,writeParts,closeTextEditor]);
+  useEffect(()=>{if(screen.simulation)return;const aborter=new AbortController();void inspectCanvasV2Screen(nodeId,encoded,{action:'edit-mode',value:editingActive?'on':'off'},aborter.signal).catch(()=>{if(!aborter.signal.aborted&&editingActive){exitScreenEditing();setDirectError('This screen is not ready to edit. Try again.')}});return()=>aborter.abort();},[editingActive,nodeId,encoded,runtime,screen.simulation,exitScreenEditing]);
   useEffect(()=>{if(screen.simulation)return;const aborter=new AbortController();void inspectCanvasV2Screen(nodeId,encoded,{action:'presence-mode',value:editing.presence?'on':'off'},aborter.signal).catch(()=>{});return()=>aborter.abort();},[nodeId,encoded,runtime,screen.simulation,editing.presence]);
-  const [textEditor,setTextEditor]=useState<{target:CanvasV2ScreenFeedbackTarget;value:string;encoded:string;fontCss:string}>();
+  useEffect(()=>{const request=textEditorRequest.current;if(request&&(request.version!==encoded||!editingActive))cancelPendingTextEditor();},[encoded,editingActive,cancelPendingTextEditor]);
+  useEffect(()=>()=>{textEditorRequest.current?.aborter.abort();textEditorRequest.current=undefined;},[]);
   const [directError,setDirectError]=useState('');
-  useEffect(()=>{setDirectMenu(undefined);setDirectError('');if(!editingActive){setTextEditor(undefined);setElementSelection(undefined)}},[encoded,editingActive]);
+  useEffect(()=>{setDirectMenu(undefined);setDirectError('');if(!editingActive){closeTextEditor();setElementSelection(undefined)}},[encoded,editingActive,closeTextEditor]);
   const elementSelectionRef=useRef(elementSelection);elementSelectionRef.current=elementSelection;
   const editableLayers=useMemo(()=>editingActive&&typeof DOMParser!=='undefined'?screenEditableLayers(screen.html,'body',new DOMParser()):[],[editingActive,screen.html]);
   const selectLayer=async(selector:string,mode:'replace'|'toggle'|'range'='replace',ordered=editableLayers.map(layer=>layer.selector))=>{
+    cancelPendingTextEditor();
     const sequence=++selectionSequence.current;
     try{
-      await flushScreenDirectEdits();if(sequence!==selectionSequence.current)return;setTextEditor(undefined);
+      await flushScreenDirectEdits();if(sequence!==selectionSequence.current)return;closeTextEditor();
       const version=previousSource.current,next=updateScreenLayerSelection(selectedPartsRef.current.map(part=>part.selector),selector,mode,ordered,rangeAnchor.current);
       if(mode!=='range')rangeAnchor.current=selector;nativeSelectionHistory.current.set(version,next);
       await inspectCanvasV2Screen(nodeId,version,{action:'edit-target',selector,value:'reveal-only'},new AbortController().signal);
@@ -407,8 +416,8 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const layerHoverRequest=useRef<AbortController|undefined>(undefined);
   const hoverLayer=(selector?:string)=>{layerHoverRequest.current?.abort();const aborter=new AbortController();layerHoverRequest.current=aborter;void inspectCanvasV2Screen(nodeId,previousSource.current,{action:'edit-hover',selector},aborter.signal).catch(()=>{});};
   useEffect(()=>{return()=>{layerHoverRequest.current?.abort();void controllers.get(nodeId)?.run({action:'edit-hover'},new AbortController().signal).catch(()=>{});}},[nodeId,encoded,editingActive,editing.chatOpen]);
-  const clearNativeSelection=()=>{selectionSequence.current++;nativeSelectionHistory.current.set(previousSource.current,[]);writeParts([]);setElementSelection(undefined);};
-  const leaveEditing=()=>{void flushScreenDirectEdits().then(()=>editingRef.current.exit()).catch(error=>setDirectError(error instanceof Error?error.message:'Your last change could not be saved.'))};
+  const clearNativeSelection=()=>{cancelPendingTextEditor();selectionSequence.current++;nativeSelectionHistory.current.set(previousSource.current,[]);writeParts([]);setElementSelection(undefined);};
+  const leaveEditing=()=>{cancelPendingTextEditor();void flushScreenDirectEdits().then(()=>exitScreenEditing()).catch(error=>setDirectError(error instanceof Error?error.message:'Your last change could not be saved.'))};
   const selectionKey=selectedParts.map(part=>part.selector).join('\n');
   useEffect(()=>{if(!editingActive)return;const aborter=new AbortController();void inspectCanvasV2Screen(nodeId,encoded,{action:'edit-selection',selectors:selectionKey?selectionKey.split('\n'):[]},aborter.signal).catch(()=>{});return()=>aborter.abort()},[selectionKey,editingActive,nodeId,encoded,runtime]);
   useEffect(()=>{
@@ -427,7 +436,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       return inspectCanvasV2Screen(nodeId,encoded,{action:'edit-target',selector:retained.at(-1)!.selector},aborter.signal);
     }).catch(()=>{if(!aborter.signal.aborted&&previousSource.current===encoded&&selectionSequence.current===sequence){writeParts([]);setElementSelection(undefined);setDirectError('The selected layers are no longer available. Select them again.')}});
     return()=>aborter.abort();
-  },[encoded,editingActive,nodeId,screen.title]);
+  },[encoded,editingActive,nodeId,screen.title,writeParts]);
   const askSelectionRef=useRef<(prompt?:boolean)=>Promise<void>>(async()=>{});
   const askAboutSelection=async(prompt=true)=>{
     const sequence=selectionSequence.current;
@@ -440,23 +449,28 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       if(previousSource.current!==version||sequence!==selectionSequence.current)throw new Error('The object or selection changed. Try adding the selection again.');
       if(!Array.isArray(result.targets)||result.targets.length!==parts.length)throw new Error('Read all selected layers again.');
       const targets=(result.targets as unknown[]).map((target,index)=>{const parsed=parseCanvasV2ScreenFeedbackTarget(target,nodeId,screen.title);if(parsed.selector!==parts[index].selector||parsed.tag!==parts[index].tag||parsed.namespace!==parts[index].namespace)throw new Error('A selected layer changed identity. Select it again.');return parsed});
-      setTextEditor(undefined);setDirectMenu(undefined);
+      closeTextEditor();setDirectMenu(undefined);
       window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{entries:targets.map(target=>({target,encoded:version})),prompt}}));
     }catch(error){setDirectError(error instanceof Error?error.message:'Select the current elements before asking Northstar.')}
   };
   askSelectionRef.current=askAboutSelection;
-  useEffect(()=>{const start=()=>{setTextEditor(undefined);setDirectMenu(undefined)};window.addEventListener(VISUAL_FEEDBACK_START,start);return()=>window.removeEventListener(VISUAL_FEEDBACK_START,start)},[]);
+  useEffect(()=>{const start=()=>{closeTextEditor();setDirectMenu(undefined)};window.addEventListener(VISUAL_FEEDBACK_START,start);return()=>window.removeEventListener(VISUAL_FEEDBACK_START,start)},[closeTextEditor]);
   useEffect(()=>{const add=(event:Event)=>{if(editingRef.current.nodeId===nodeId&&(event as CustomEvent).detail?.nodeId===nodeId)void askSelectionRef.current(false)};window.addEventListener(CANVAS_V2_EDIT_SELECTION_FEEDBACK,add);return()=>window.removeEventListener(CANVAS_V2_EDIT_SELECTION_FEEDBACK,add)},[nodeId]);
   const openTextEditor=async(target:CanvasV2ScreenFeedbackTarget)=>{
+    cancelPendingTextEditor();setDirectError('');
+    const sequence=++selectionSequence.current;
     editing.enter(nodeId);writeParts([target]);
     const version=previousSource.current,current=parseCanvasV2Screen(version),doc=new DOMParser().parseFromString(current.html,'text/html'),matches=doc.body.querySelectorAll(target.selector),el=matches[0];
     setDirectMenu(undefined);
     if(!screenTextCanEditDirectly(current,target,new DOMParser())){window.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_FEEDBACK,{detail:{target,encoded:version}}));window.dispatchEvent(new CustomEvent(SCREEN_DIRECT_PROMPT_EVENT,{detail:'Change the tagged text to: '}));return;}
     if(matches.length!==1)return;
-    if(target.namespace==='svg'){setTextEditor(undefined);setElementSelection({x:target.rect.x,y:target.rect.y,text:target,appearance:target,encoded:version,appearanceNeedsAgent:!screenAppearanceCanEditDirectly(current,target,new DOMParser())});return;}
+    if(target.namespace==='svg'){closeTextEditor();setElementSelection({x:target.rect.x,y:target.rect.y,text:target,appearance:target,encoded:version,appearanceNeedsAgent:!screenAppearanceCanEditDirectly(current,target,new DOMParser())});return;}
     if(!(el instanceof HTMLElement))return;
     const value=el.textContent??'';
-    try{const fontCss=await readCanvasV2ScreenFontCss(current,new AbortController().signal);if(previousSource.current===version)setTextEditor({target,value,encoded:version,fontCss})}catch{setDirectError('This text is not ready to edit. Try again.')}
+    const request={aborter:new AbortController(),selector:target.selector,version},editingAtOpen=editingRef.current;
+    textEditorRequest.current=request;
+    const isCurrent=()=>textEditorRequest.current===request&&!request.aborter.signal.aborted&&previousSource.current===version&&selectionSequence.current===sequence&&selectedPartsRef.current.length===1&&selectedPartsRef.current[0].selector===target.selector&&!editingRef.current.readOnly&&(editingRef.current.nodeId===nodeId||editingRef.current===editingAtOpen);
+    try{const fonts=await readCanvasV2EditorFonts(current,runtimeEvidence.current,request.aborter.signal);if(isCurrent())setTextEditor({target,value,encoded:version,fonts})}catch{if(isCurrent())setDirectError('This text is not ready to edit. Try again.')}finally{if(textEditorRequest.current===request)textEditorRequest.current=undefined;}
   };
   directActions.current.openTextEditor=openTextEditor;
   const designCommitQueue=useRef<Promise<unknown>>(Promise.resolve());
@@ -478,7 +492,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     window.dispatchEvent(new CustomEvent<ScreenDirectRequest>(SCREEN_DIRECT_EDIT_EVENT,{detail:{nodeId,encoded:version,target,action,text,styles,html,attributes,resolve}}));
   });
   const openAppearance=(selectedOptions?:ScreenDirectOptions)=>{
-    const options=selectedOptions??directMenu;setDirectMenu(undefined);setTextEditor(undefined);
+    const options=selectedOptions??directMenu;setDirectMenu(undefined);closeTextEditor();
     if(!options?.appearance||options.encoded!==previousSource.current){setDirectError('This item changed. Select it again.');return;}
     if(options.appearanceNeedsAgent){window.dispatchEvent(new CustomEvent(CANVAS_V2_SCREEN_FEEDBACK,{detail:{target:options.appearance,encoded:options.encoded}}));window.dispatchEvent(new CustomEvent(SCREEN_DIRECT_PROMPT_EVENT,{detail:'Change the appearance of the tagged element and update any app code that controls its styling. Keep the rest of the app intact. The change should be: '}));return;}
     editing.enter(nodeId);setElementSelection(options);
@@ -624,10 +638,10 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     return () => observer.disconnect();
   }, [screen.width, screen.height]);
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setDirectMenu(undefined); setTextEditor(undefined); setDirectError(''); frame.current?.blur(); host.current?.focus({ preventScroll: true }); setCanvasV2FeedbackPicking(false); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setDirectMenu(undefined); closeTextEditor(); setDirectError(''); frame.current?.blur(); host.current?.focus({ preventScroll: true }); setCanvasV2FeedbackPicking(false); } };
     window.addEventListener('keydown', escape);
     return () => window.removeEventListener('keydown', escape);
-  }, []);
+  }, [closeTextEditor]);
   useEffect(() => {
     const aborter = new AbortController();
     // A live patch deliberately leaves runtimeEncoded at the mounted baseline
@@ -719,7 +733,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     let retainedBytes = new Map<string,string>();
     let simulationDocument: Document | null = null;
     const simulationInput = (event: Event) => { if (event.isTrusted) { lastHumanInput.current = Date.now(); noteCanvasInputActivity(event.type); } };
-    const simulationEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setDirectMenu(undefined); setTextEditor(undefined); setDirectError(''); frame.current?.blur(); host.current?.focus({ preventScroll: true }); } };
+    const simulationEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setDirectMenu(undefined); closeTextEditor(); setDirectError(''); frame.current?.blur(); host.current?.focus({ preventScroll: true }); } };
     const simulation = screen.simulation;
     const pending = new Map<string, { resolve: (value: ScreenResult) => void; reject: (error: Error) => void }>();
     setError('');
@@ -760,7 +774,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       }
       if(Array.isArray(event.data.selectionTargets)&&event.data.selectionTargets.length<=24&&!simulation&&controllers.get(nodeId)?.encoded===previousSource.current){try{const targets=(event.data.selectionTargets as unknown[]).map(target=>parseCanvasV2ScreenFeedbackTarget(target,nodeId,runtimeScreen.title));if(targets.every(target=>selectedPartsRef.current.some(part=>part.selector===target.selector&&part.tag===target.tag)))partsRects.current=targets}catch{/* Reject malformed geometry. */}}
       if(event.data.directOptions&&!simulation&&event.data.directGesture==='select'&&!event.data.directRefresh&&editingRef.current.nodeId===nodeId&&controllers.get(nodeId)?.encoded!==previousSource.current){
-        try{const controller=controllers.get(nodeId),version=previousSource.current,raw=event.data.directOptions.appearance;if(!controller||!raw)return;const target=parseCanvasV2ScreenFeedbackTarget(raw,nodeId,runtimeScreen.title);if(!screenFeedbackSelectionSurvives(parseCanvasV2Screen(controller.encoded).html,parseCanvasV2Screen(version).html,target,new DOMParser()))return;const sequence=++selectionSequence.current,desired=event.data.selectionMode==='toggle'?updateScreenLayerSelection(selectedPartsRef.current.map(t=>t.selector),target.selector,'toggle',[...new Set([...selectedPartsRef.current.map(t=>t.selector),target.selector])]):[target.selector];nativeSelectionHistory.current.set(version,desired);void(async()=>{await inspectCanvasV2Screen(nodeId,version,{action:'edit-targets',selectors:[target.selector]},aborter.signal);if(sequence!==selectionSequence.current||previousSource.current!==version)return;await inspectCanvasV2Screen(nodeId,version,{action:'edit-target',selector:target.selector,value:'select',selectionRequestId:sequence,selectionSelectors:desired,selectionMode:event.data.selectionMode==='toggle'?'toggle':'replace'},aborter.signal);})().catch(()=>{if(sequence===selectionSequence.current)setDirectError('This layer changed. Select it again.');});}catch{/* A stale frame cannot redirect selection. */}return;
+        try{const controller=controllers.get(nodeId),version=previousSource.current,raw=event.data.directOptions.appearance;if(!controller||!raw)return;const target=parseCanvasV2ScreenFeedbackTarget(raw,nodeId,runtimeScreen.title);if(!screenFeedbackSelectionSurvives(parseCanvasV2Screen(controller.encoded).html,parseCanvasV2Screen(version).html,target,new DOMParser()))return;cancelPendingTextEditor();const sequence=++selectionSequence.current,desired=event.data.selectionMode==='toggle'?updateScreenLayerSelection(selectedPartsRef.current.map(t=>t.selector),target.selector,'toggle',[...new Set([...selectedPartsRef.current.map(t=>t.selector),target.selector])]):[target.selector];nativeSelectionHistory.current.set(version,desired);void(async()=>{await inspectCanvasV2Screen(nodeId,version,{action:'edit-targets',selectors:[target.selector]},aborter.signal);if(sequence!==selectionSequence.current||previousSource.current!==version)return;await inspectCanvasV2Screen(nodeId,version,{action:'edit-target',selector:target.selector,value:'select',selectionRequestId:sequence,selectionSelectors:desired,selectionMode:event.data.selectionMode==='toggle'?'toggle':'replace'},aborter.signal);})().catch(()=>{if(sequence===selectionSequence.current)setDirectError('This layer changed. Select it again.');});}catch{/* A stale frame cannot redirect selection. */}return;
       }
       if (event.data.directOptions && !simulation && controllers.get(nodeId)?.encoded===previousSource.current) {
         try {
@@ -798,15 +812,15 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
                 if(parts.at(-1)?.selector!==target.selector){setElementSelection(undefined);if(parts.length)void inspectCanvasV2Screen(nodeId,previousSource.current,{action:'edit-target',selector:parts.at(-1)!.selector},new AbortController().signal);}
                 else setElementSelection(options);
               }else{nativeSelectionHistory.current.set(previousSource.current,[]);writeParts([]);setElementSelection(undefined);}
-              setTextEditor(undefined);
+              closeTextEditor();
             }else{setElementSelection(options.appearance?options:undefined);if(options.text)setTextEditor(current=>current&&current.target.selector===options.text!.selector?{...current,target:options.text!}:current);}
             setDirectMenu(undefined);
           }
-          else if(event.data.directGesture==='menu'&&(options.text||options.section||options.appearance)){setTextEditor(undefined);setDirectMenu(options)}
+          else if(event.data.directGesture==='menu'&&(options.text||options.section||options.appearance)){closeTextEditor();setDirectMenu(options)}
         } catch(error) {if(error instanceof Error&&error.message==='Select up to 24 layers at a time.')setDirectError(error.message);/* Untrusted descriptors never authorize a mutation. */}
         return;
       }
-      if(event.data.exitEditing){editingRef.current.exit();return;}
+      if(event.data.exitEditing){exitScreenEditing();return;}
       if (event.data.feedbackTarget) {
         if (!feedbackPicking.current) return;
         try {
@@ -820,11 +834,11 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
         if(!Number.isSafeInteger(event.data.inputSequence)||!noteCanvasInputActivity(event.data.userInputType,event.data.inputSequence))return;
         lastHumanInput.current=Date.now();
         dismiss('input'); lease?.invalidate(); presentationCache.interrupt();
-        if(['wheel','pointerdown'].includes(event.data.userInputType)&&event.data.inputSequence>directInputSequence.current){if(editingRef.current.nodeId!==nodeId){setElementSelection(undefined);setTextEditor(undefined)}setDirectMenu(undefined);setDirectError('')}
+        if(['wheel','pointerdown'].includes(event.data.userInputType)&&event.data.inputSequence>directInputSequence.current){if(editingRef.current.nodeId!==nodeId){setElementSelection(undefined);closeTextEditor()}setDirectMenu(undefined);setDirectError('')}
         retainRuntimeState(event.data.retainedState);
         return;
       }
-      if (event.data.escape) { editingRef.current.exit();setElementSelection(undefined);setDirectMenu(undefined);setTextEditor(undefined);setDirectError('');setAssetDrag(false); setAssetTarget(undefined); setCanvasV2FeedbackPicking(false); frame.current?.blur(); host.current?.focus({ preventScroll: true }); return; }
+      if (event.data.escape) { exitScreenEditing();setElementSelection(undefined);setDirectMenu(undefined);closeTextEditor();setDirectError('');setAssetDrag(false); setAssetTarget(undefined); setCanvasV2FeedbackPicking(false); frame.current?.blur(); host.current?.focus({ preventScroll: true }); return; }
       if (event.data.ready) {
         ready=true;
         lease?.visible(inView && !document.hidden && presentationMutations === 0); handoff();
@@ -939,7 +953,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       for (const request of pending.values()) request.reject(new Error('The screen was revised or removed.'));
       pending.clear();
     };
-  }, [nodeId, runtimeEncoded, runtimeEpoch, sources, reload, screen.width, screen.height, screen.simulation]);
+  }, [nodeId, runtimeEncoded, runtimeEpoch, sources, reload, screen.width, screen.height, screen.simulation,closeTextEditor,exitScreenEditing,writeParts,cancelPendingTextEditor]);
   const imageTarget = async (clientX: number, clientY: number) => {
     const rect = frame.current?.getBoundingClientRect();
     if (!rect || !scale || screen.simulation) return;
@@ -978,7 +992,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       {editingActive&&selectedParts.length>1&&<ScreenSelectionInspector targets={selectedParts} targetRects={partsRects} frame={frame} screenWidth={screen.width} onAsk={()=>void askAboutSelection()} onSelect={selector=>void selectLayer(selector)} onRemove={selector=>void selectLayer(selector,'toggle')} onClear={clearNativeSelection}><ScreenDesignStudio screen={screen} targets={selectedParts} onOperation={commitDesign} onExport={exportDesign} onCompare={()=>editing.compare?.(nodeId)}/></ScreenSelectionInspector>}
       {editingActive&&selectedParts.length<=1&&(!elementSelection?.appearance||textEditor)&&<ScreenInspectorEmpty title={screen.title}/>}
       {editingActive&&selectedParts.length<=1&&elementSelection?.appearance&&!textEditor&&<ScreenAppearanceEditor key={elementSelection.appearance.selector} sourceVersion={encoded} ready={elementSelection.encoded===encoded} layers={editableLayers} onSelectLayer={selector=>void selectLayer(selector)} target={elementSelection.appearance} position={{x:0,y:96}} docked selectionRect={elementRect} screenTitle={screen.title} onEditText={elementSelection.text&&!elementSelection.textNeedsAgent&&elementSelection.text.namespace!=='svg'?()=>void openTextEditor(elementSelection.text!):undefined} frame={frame} screenWidth={screen.width} canMove={!elementSelection.appearanceNeedsAgent&&elementSelection.appearance.styles.display!=='contents'} canStyle={!elementSelection.appearanceNeedsAgent&&elementSelection.appearance.styles.display!=='contents'} textValue={elementSelection.text&&!elementSelection.textNeedsAgent?new DOMParser().parseFromString(screen.html,'text/html').querySelector(elementSelection.text.selector)?.textContent??'':undefined} fontFamilies={[...screen.css.matchAll(/font-family\s*:\s*([^;}]+)/g)].map(match=>match[1].trim()).filter(family=>family.length<200&&!/[();{}]/.test(family))} onAsk={()=>void askAboutSelection()} onPreview={leaveEditing} onReplace={file=>{const target=elementSelection.appearance!;window.dispatchEvent(new CustomEvent<ScreenAssetDrop>(SCREEN_ASSET_DROP_EVENT,{detail:{nodeId,encoded:previousSource.current,target:{selector:target.selector,property:'src',label:target.label,rect:target.rect,fit:target.styles['object-fit']},file}}))}} onCancel={clearNativeSelection} onSave={(styles,text,version,attributes)=>{const expected=version??elementSelection.encoded!,current=parseCanvasV2Screen(expected),element=new DOMParser().parseFromString(current.html,'text/html').querySelector(elementSelection.appearance!.selector);const target={...elementSelection.appearance!,text:(element?.textContent??'').slice(0,500)};return commitDirectEdit('element',target,text,styles,undefined,expected,attributes)}} onToggle={()=>void selectLayer(elementSelection.appearance!.selector,'toggle')} onMove={async(x,y)=>{if(elementSelection.encoded!==previousSource.current)return{ok:false,error:'This item changed. Select it again.'};return commitDirectEdit('appearance',elementSelection.appearance!,undefined,{translate:x+'px '+y+'px'})}}><ScreenDesignStudio screen={screen} targets={selectedParts.length?selectedParts:[elementSelection.appearance]} onOperation={commitDesign} onExport={exportDesign} onCompare={()=>editing.compare?.(nodeId)}/></ScreenAppearanceEditor>}
-      {textEditor && <ScreenTextEditor key={textEditor.target.selector} target={textEditor.target} sourceVersion={encoded} selectionRect={elementRect} html={new DOMParser().parseFromString(screen.html,'text/html').querySelector(textEditor.target.selector)?.innerHTML??''} frame={frame} screenWidth={screen.width} fontCss={textEditor.fontCss} onCancel={()=>setTextEditor(undefined)} onSave={async(html,version)=>{const current=parseCanvasV2Screen(version??previousSource.current),element=new DOMParser().parseFromString(current.html,'text/html').querySelector(textEditor.target.selector);if(!element)return{ok:false,error:'This text changed. Select it again.'};const target={...textEditor.target,text:(element.textContent??'').slice(0,500)};return commitDirectEdit('rich-text',target,undefined,undefined,html,version)}}/>}
+      {textEditor && <ScreenTextEditor key={textEditor.target.selector} target={textEditor.target} sourceVersion={encoded} selectionRect={elementRect} html={new DOMParser().parseFromString(screen.html,'text/html').querySelector(textEditor.target.selector)?.innerHTML??''} frame={frame} screenWidth={screen.width} fonts={textEditor.fonts} onCancel={()=>closeTextEditor()} onSave={async(html,version)=>{const current=parseCanvasV2Screen(version??previousSource.current),element=new DOMParser().parseFromString(current.html,'text/html').querySelector(textEditor.target.selector);if(!element)return{ok:false,error:'This text changed. Select it again.'};const target={...textEditor.target,text:(element.textContent??'').slice(0,500)};return commitDirectEdit('rich-text',target,undefined,undefined,html,version)}}/>}
       {directMenu && <ScreenDirectMenu onDesign={()=>{setDirectMenu(undefined);editing.enter(nodeId)}} previewOnly={editing.mode==='preview'} options={directMenu} scale={scale} onClose={()=>setDirectMenu(undefined)} onEdit={target=>void openTextEditor(target)} onAppearance={()=>openAppearance()} onRemove={target=>void removeSection(target,directMenu.sectionNeedsAgent,directMenu.encoded)} onMove={direction=>void moveSection(direction)} onAdd={requestSection}/>}
 
       {directError && <div role="alert" className="absolute inset-x-3 bottom-3 z-20 rounded-xl bg-[#fcfbfe] p-3 text-xs text-[#7d475d] shadow dark:bg-[#231f2c] dark:text-[#e1b3c4]">{directError}<button aria-label="Dismiss editing message" className="ml-2 underline" onClick={()=>setDirectError('')}>Dismiss</button></div>}

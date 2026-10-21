@@ -1,8 +1,7 @@
 /**
  * Pure, source-only analysis for deciding whether a screen text node is
- * rewritten by its embedded application.  This is deliberately not imported
- * by the direct-edit runtime yet: it is a small reviewable seam for replacing
- * the current global query-count heuristic with a scoped mutation check.
+ * rewritten by its embedded application. The host's direct-edit guards use
+ * this scoped check before changing the retained source.
  *
  * The caller supplies the selected element's selector and its ancestor
  * selectors.  The analysis is conservative: an unknown selector or an
@@ -182,6 +181,7 @@ function bindingNames(node: unknown): string[] {
   if (!isNode(node)) return [];
   const name = identifierName(node);
   if (name) return [name];
+  if (node.type === 'Property') return bindingNames(node.value);
   if (node.type === 'ObjectPattern' || node.type === 'ArrayPattern' || node.type === 'RestElement' || node.type === 'AssignmentPattern') {
     return Object.values(node).flatMap(value => Array.isArray(value) ? value.flatMap(bindingNames) : bindingNames(value));
   }
@@ -242,6 +242,7 @@ function collectBindings(ast: AstNode): BindingState {
     if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
       for (const param of Array.isArray(node.params) ? node.params : []) for (const name of bindingNames(param)) counts.set(name, (counts.get(name) || 0) + 1);
     }
+    if (node.type === 'CatchClause') for (const name of bindingNames(node.param)) counts.set(name, (counts.get(name) || 0) + 1);
     if (node.type === 'AssignmentExpression' && isNode(node.left)) for (const name of bindingNames(node.left)) invalid.add(name);
     if (node.type === 'UpdateExpression') for (const name of bindingNames(node.argument)) invalid.add(name);
     if ((node.type === 'ForInStatement' || node.type === 'ForOfStatement') && isNode(node.left)) for (const name of bindingNames(node.left)) invalid.add(name);
@@ -293,6 +294,136 @@ function isComputedMutation(node: AstNode): boolean {
   return node.type === 'AssignmentExpression' && isNode(node.left) && node.left.type === 'MemberExpression' && Boolean(node.left.computed) && !literalString(node.left.property);
 }
 
+/** The host seeds product.data with plain JSON. A computed write to a record
+ * in that tree is not a DOM write. Keep the exemption receiver-specific: an
+ * injected node, a reassigned alias or an unknown mutator must still block it. */
+function createProductDataWriteProof(ast: AstNode, bindings: BindingState): (node: AstNode) => boolean {
+  const declarations = new Map<string, unknown>();
+  let dynamicScope = false;
+  walk(ast, part => {
+    // Dynamic scope/code can introduce a DOM owner absent from this AST.
+    // Reject aliases and indirect compilation too; this is an exemption, not
+    // permission to assume an unknown compiler leaves the JSON tree alone.
+    if (part.type === 'WithStatement'
+      || part.type === 'Identifier' && ['eval', 'Function'].includes(String(part.name))
+      || part.type === 'MemberExpression' && ['eval', 'Function', 'constructor'].includes(propertyName(part) ?? '')
+      || ['CallExpression', 'NewExpression'].includes(part.type) && isNode(part.callee) && part.callee.type === 'MemberExpression' && part.callee.computed && !literalString(part.callee.property)) dynamicScope = true;
+    if (part.type === 'VariableDeclarator') {
+      const name = identifierName(part.id);
+      if (name) declarations.set(name, part.init);
+    }
+  });
+  if (dynamicScope) return () => false;
+  type Path = string[];
+  const same = (a: Path, b: Path) => a.length === b.length && a.every((key, i) => key === b[i]);
+  const prefix = (a: Path, b: Path) => a.length <= b.length && a.every((key, i) => key === '*' || b[i] === '*' || key === b[i]);
+  const path = (value: unknown, seen = new Set<string>()): Path | undefined => {
+    if (!isNode(value)) return;
+    const name = identifierName(value);
+    if (name) {
+      if (bindings.invalid.has(name) || bindings.ambiguous.has(name) || seen.has(name)) return;
+      if (name === 'window' && !bindings.bound.has(name)) return ['window'];
+      return path(declarations.get(name), new Set([...seen, name]));
+    }
+    if (value.type === 'MemberExpression') {
+      const owner = path(value.object, seen);
+      if (owner) return [...owner, propertyName(value) ?? '*'];
+    }
+    if (value.type === 'AssignmentExpression') return path(value.left, seen);
+    if (value.type === 'LogicalExpression') {
+      const left = path(value.left, seen), right = path(value.right, seen);
+      if (left && right && same(left, right)) return left;
+    }
+  };
+  const root = ['window', 'northstarProduct', 'data'];
+  const checking = new Set<string>();
+  const proofs = new Map<string, boolean>();
+  const recordStaysData = (target: Path): boolean => {
+    const key = JSON.stringify(target);
+    if (proofs.has(key)) return proofs.get(key)!;
+    if (checking.has(key)) return false;
+    checking.add(key);
+    let safe = true;
+    const escapesRecord = (value: unknown): boolean => {
+      if (!isNode(value)) return false;
+      const reference = path(value);
+      if (reference && prefix(root, reference) && prefix(reference, target)) return true;
+      if (value.type === 'LogicalExpression') return escapesRecord(value.left) || escapesRecord(value.right);
+      if (value.type === 'ConditionalExpression') return escapesRecord(value.consequent) || escapesRecord(value.alternate);
+      return false;
+    };
+    const valueAt = (value: unknown, tail: Path, prior: Path): boolean => {
+      if (!isNode(value)) return false;
+      const source = path(value);
+      // Retaining this very record (e.g. data.tour || {}) changes no owner.
+      if (source && same(source, prior)) return true;
+      if (value.type === 'LogicalExpression' || value.type === 'ConditionalExpression') {
+        return value.type === 'LogicalExpression'
+          ? valueAt(value.left, tail, prior) && valueAt(value.right, tail, prior)
+          : valueAt(value.consequent, tail, prior) && valueAt(value.alternate, tail, prior);
+      }
+      if (value.type === 'AssignmentExpression') return valueAt(value.right, tail, prior);
+      if (value.type === 'ObjectExpression') {
+        const properties = Array.isArray(value.properties) ? value.properties : [];
+        if (properties.some(p => !isNode(p) || p.type !== 'Property' || p.kind !== 'init' || p.method || p.computed)) return false;
+        if (!tail.length) return true;
+        const property = properties.findLast(p => isNode(p) && (identifierName(p.key) ?? literalString(p.key)) === tail[0]);
+        return !property || isNode(property) && valueAt(property.value, tail.slice(1), prior);
+      }
+      if (value.type === 'ArrayExpression' && !tail.length) return true;
+      if (value.type === 'Literal' && !tail.length) return true;
+      return Boolean(source && prefix(root, source) && !source.includes('*') && recordStaysData([...source, ...tail]));
+    };
+    walk(ast, part => {
+      if (!safe) return;
+      // Containers, destructuring and returns can create aliases the selector
+      // analysis does not resolve. Do not infer JSON ownership through them.
+      if (part.type === 'ArrayExpression' && Array.isArray(part.elements) && part.elements.some(escapesRecord)
+        || part.type === 'ObjectExpression' && Array.isArray(part.properties) && part.properties.some(p => isNode(p) && escapesRecord(p.type === 'SpreadElement' ? p.argument : p.value))
+        || ['ReturnStatement', 'YieldExpression'].includes(part.type) && escapesRecord(part.argument)
+        || part.type === 'ArrowFunctionExpression' && escapesRecord(part.body)
+        || part.type === 'VariableDeclarator' && !identifierName(part.id) && escapesRecord(part.init)) safe = false;
+      if (part.type === 'AssignmentExpression') {
+        const destination = path(part.left);
+        if ((!destination || !prefix(root, destination)) && escapesRecord(part.right)) safe = false;
+        if (destination && prefix(destination, target)) {
+          if (part.operator !== '=' || destination.includes('*') || !valueAt(part.right, target.slice(destination.length), destination)) safe = false;
+        } else if (isNode(part.left) && ['ArrayPattern', 'ObjectPattern'].includes(part.left.type)) {
+          walk(part.left, item => { const assigned = path(item); if (assigned && prefix(assigned, target)) safe = false; });
+        }
+      }
+      if (part.type !== 'CallExpression' && part.type !== 'NewExpression') return;
+      const args = Array.isArray(part.arguments) ? part.arguments : [];
+      const callee = part.callee;
+      const method = isNode(callee) && callee.type === 'MemberExpression' ? propertyName(callee) : undefined;
+      const owner = isNode(callee) && callee.type === 'MemberExpression' ? identifierName(callee.object) : undefined;
+      const destination = path(args[0]);
+      if (owner === 'Object' && !bindings.bound.has('Object') && method === 'assign' && destination && prefix(destination, target)) {
+        // assign cannot replace the destination itself, but can replace an
+        // ancestor's child record with a node or an unknown return value.
+        if (destination.includes('*') || destination.length < target.length && args.slice(1).some(value => !valueAt(value, target.slice(destination.length), destination))) safe = false;
+        return;
+      }
+      // keys exposes only strings. values/entries can leak mutable child
+      // records to unknown callbacks, so those retain the escape check.
+      if (owner === 'Object' && !bindings.bound.has('Object') && method === 'keys') return;
+      if (args.some(value => { const argument = path(value); return argument && prefix(argument, target); })) safe = false;
+      if (isNode(callee) && callee.type === 'MemberExpression') {
+        const calledOwner = path(callee.object);
+        if (calledOwner && prefix(root, calledOwner) && prefix(calledOwner, target)) safe = false;
+      }
+    });
+    checking.delete(key);
+    proofs.set(key, safe);
+    return safe;
+  };
+  return node => {
+    if (!isComputedMutation(node) || !isNode(node.left)) return false;
+    const receiver = path(node.left.object);
+    return Boolean(receiver && prefix(root, receiver) && !receiver.includes('*') && recordStaysData(receiver));
+  };
+}
+
 function sourceReason(site: AstNode): string {
   if (isMutationAssignment(site)) return `assignment to ${propertyName(site.left as AstNode)}`;
   if (isComputedMutation(site)) return 'assignment through a computed property';
@@ -341,9 +472,11 @@ export function analyzeScreenTextMutations(source: string, target: ScreenTextMut
   }
 
   const bindings = collectBindings(ast);
+  const provenProductDataWrite = createProductDataWriteProof(ast, bindings);
   const sites: ScreenTextMutationSite[] = [];
   walk(ast, node => {
     if (!isMutationAssignment(node) && !isMutationCall(node) && !isComputedMutation(node)) return;
+    if (provenProductDataWrite(node)) return;
     const resolution = siteResolution(node, bindings);
     const selectors = resolution.selectors;
     const selector = selectors[0];
