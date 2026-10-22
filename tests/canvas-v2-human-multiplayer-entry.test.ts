@@ -35,7 +35,7 @@ test('the public invitation landing does not open workspace, private API or sibl
   const g=guard();
   for(const route of ['/canvas?workspace=11111111-1111-4111-8111-111111111111','/canvas/join-other','/canvas/join/private']){
     const response=await g.run(new NextRequest(`https://northstar.invalid${route}`));
-    assert.equal(response.status,307); assert.equal(new URL(response.headers.get('location')!).pathname,'/login');
+    assert.equal(response.status,307); assert.equal(new URL(response.headers.get('location')!).pathname,'/signin');
   }
   assert.equal((await g.run(new NextRequest('https://northstar.invalid/api/canvas-v2/private'))).status,401);
   assert.ok(g.calls()>0);

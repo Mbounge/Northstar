@@ -35,6 +35,8 @@ async function openCleanCanvas(page: Page, path: "/canvas-v2-e2e" | "/canvas") {
 }
 
 async function send(page: Page, message: string) {
+  const openChat = page.getByRole('button', { name: 'Open North Star panel', exact: true });
+  if (await openChat.isVisible()) await openChat.click();
   await page.getByLabel("Message North Star").fill(message);
   await page.getByRole("button", { name: "Send message" }).click();
 }
@@ -56,9 +58,15 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await expect(text).toHaveAttribute("data-canvas-v2-origin", "user");
     await expect(text).toHaveAttribute("data-canvas-v2-last-author", "user");
     await expect(text).toHaveAttribute("data-canvas-v2-edit-version", "1");
+    // Placement finishes an inline editor; explicitly select the object the
+    // prompt should modify rather than relying on creation-tool focus.
+    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await text.click();
     const camera = await surface.evaluate((element) => getComputedStyle(element).transform);
 
+    const routing = page.waitForRequest(request => request.url().endsWith('/canvas-v2-e2e/route') || request.url().endsWith('/api/canvas-v2/route'));
     await send(page, "Exercise collaboration continuation closure");
+    expect((await routing).postDataJSON().selection?.nodeId).toBe(nodeId);
     await expect(text).toHaveText("Northstar partial draft.", { timeout: 60_000 });
     await expect(text).toHaveAttribute("data-canvas-v2-origin", "user");
     await expect(text).toHaveAttribute("data-canvas-v2-last-author", "northstar");
@@ -96,13 +104,13 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await app(page).getByRole("button", { name: "Undo canvas action" }).click();
     await expect(text).toHaveText("Human continuation edit.");
     await expect(text).toHaveAttribute("data-canvas-v2-last-author", "user");
-    await expect(page.getByText(`Selected · ${nodeId}`, { exact: true })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Design properties', exact: true }).getByText(nodeId!, { exact: true })).toBeVisible();
     await expect(app(page).getByTestId("canvas-v2-element-selection")).toBeVisible();
 
     await app(page).getByRole("button", { name: "Redo canvas action" }).click();
     await expect(text).toHaveText("Northstar continued from the human revision.");
     await expect(text).toHaveAttribute("data-canvas-v2-last-author", "northstar");
-    await expect(page.getByText(`Selected · ${nodeId}`, { exact: true })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Design properties', exact: true }).getByText(nodeId!, { exact: true })).toBeVisible();
     expect(await surface.evaluate((element) => getComputedStyle(element).transform)).toBe(camera);
   });
 }

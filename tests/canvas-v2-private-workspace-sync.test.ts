@@ -57,8 +57,9 @@ test('unchanged transcript references produce no repeated cache or cloud upload'
 });
 
 test('a continuous stream of draft changes checkpoints from the first edit rather than starving on debounce', async t => {
-  const timers = t.mock.timers as unknown as { enable(apis: string[]): void; tick(ms: number): void; reset(): void };
-  timers.enable(['setTimeout']); const clear = globalThis.clearTimeout;
+  const timers = t.mock.timers as unknown as { enable(options: { apis: string[] } | string[]): void; tick(ms: number): void; reset(): void };
+  try { timers.enable({ apis: ['setTimeout'] }); } catch { timers.enable(['setTimeout']); }
+  const clear = globalThis.clearTimeout;
   // Node 20.9 MockTimers incorrectly treats clearTimeout(undefined) as a timer ID.
   t.mock.method(globalThis, 'clearTimeout', (id: Parameters<typeof clearTimeout>[0]) => { if (id !== undefined) clear(id); });
   const f = fixture({ cloud: { history: history(), version: 1, path: 'user/canvas/one.json' } });

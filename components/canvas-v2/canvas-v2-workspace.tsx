@@ -3457,7 +3457,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         if(!['design','text','rich-text','appearance','element','remove','move-up','move-down'].includes(request.action)){request.resolve({ok:false});return;}
         const design=request.action==='design'&&request.operation?applyScreenDesignOperation(current.screen,request.targets??[request.target],request.operation,parser):undefined;
         const encoded=design?.encoded??(request.action==='rich-text'?editScreenRichText(current.screen,request.target,request.html!,parser):request.action==='element'?(()=>{let value=current.screen;if(request.attributes&&Object.keys(request.attributes).length)value=parseCanvasV2Screen(editScreenAttributes(value,request.target,request.attributes,parser));if(request.text!==undefined)value=parseCanvasV2Screen(editScreenText(value,request.target,request.text,parser));if(request.styles&&Object.keys(request.styles).length)value=parseCanvasV2Screen(editScreenAppearance(value,request.target,request.styles,parser));return encodeCanvasV2Screen(value)})():request.action==='appearance'?editScreenAppearance(current.screen,request.target,request.styles!,parser):request.action==='text'?editScreenText(current.screen,request.target,request.text!,parser):request.action==='remove'?removeScreenSection(current.screen,request.target,parser):moveScreenSection(current.screen,request.target,request.action==='move-up'?'up':'down',parser));
-        if(encoded===current.encoded){request.resolve({ok:true,encoded});return;}
+        if(encoded===current.encoded){setMutationError(undefined);request.resolve({ok:true,encoded});return;}
         validateCanvasV2ScreenAssets(parseCanvasV2Screen(encoded),revision.evidence);
         const next=reviseCanvasV2NativeScreen(scene,request.nodeId,encoded),node=next.nodes.find(item=>(item.sourceNodeId??item.id)===request.nodeId)!;
         node.userEdited=true;node.lastAuthor='user';node.attributes['data-canvas-v2-user-edited']='content';node.attributes['data-canvas-v2-last-author']='user';
@@ -3469,6 +3469,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           setSelectedElements(current=>current.length===1&&current[0].nodeId===request.nodeId?current:[]);
           setSelectionTarget(request.nodeId);
         }
+        setMutationError(undefined);
         request.resolve({ok:true,encoded,...(design?{selectors:design.selectors}:{})});
       }catch(error){request.resolve({ok:false,error:error instanceof Error?error.message:'This item changed. Select it again.'})}
     };
@@ -3786,34 +3787,40 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     }
   };
 
-  const undoCanvas = () => {
-    if(collaboration?.enabled){void flushScreenDirectEdits().then(()=>collaboration.undo());return;}
-    const restored = engine.undo();
-    const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
-    const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
-    setEditingNodeId(undefined);
-    setSelectedElements([]);
-    setSelectionTarget(undefined);
-    setToolbarMenu(undefined);
-    setHistorySelectionRestore(restored&&restoredIds.length ? {
-      revisionId: restored.revisionId,
-      nodeIds: restoredIds,
-    } : undefined);
+  const undoCanvas = async () => {
+    try {
+      await flushScreenDirectEdits();
+      if(collaboration?.enabled){await collaboration.undo();return;}
+      const restored = engine.undo();
+      const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
+      const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
+      setEditingNodeId(undefined);
+      setSelectedElements([]);
+      setSelectionTarget(undefined);
+      setToolbarMenu(undefined);
+      setHistorySelectionRestore(restored&&restoredIds.length ? {
+        revisionId: restored.revisionId,
+        nodeIds: restoredIds,
+      } : undefined);
+    } catch (error) { setMutationError(error instanceof Error ? error.message : 'Your last edit could not be saved before undo.'); }
   };
 
-  const redoCanvas = () => {
-    if(collaboration?.enabled){void flushScreenDirectEdits().then(()=>collaboration.redo());return;}
-    const restored = engine.redo();
-    const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
-    const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
-    setEditingNodeId(undefined);
-    setSelectedElements([]);
-    setSelectionTarget(undefined);
-    setToolbarMenu(undefined);
-    setHistorySelectionRestore(restored&&restoredIds.length ? {
-      revisionId: restored.revisionId,
-      nodeIds: restoredIds,
-    } : undefined);
+  const redoCanvas = async () => {
+    try {
+      await flushScreenDirectEdits();
+      if(collaboration?.enabled){await collaboration.redo();return;}
+      const restored = engine.redo();
+      const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
+      const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
+      setEditingNodeId(undefined);
+      setSelectedElements([]);
+      setSelectionTarget(undefined);
+      setToolbarMenu(undefined);
+      setHistorySelectionRestore(restored&&restoredIds.length ? {
+        revisionId: restored.revisionId,
+        nodeIds: restoredIds,
+      } : undefined);
+    } catch (error) { setMutationError(error instanceof Error ? error.message : 'Your last edit could not be saved before redo.'); }
   };
 
   const selectedPlayableMedia = selectedElements.length === 1 && engine.nativeScene?.nodes.find(node => node.sourceNodeId === selectedElement?.nodeId)?.attributes[MEDIA_ATTRIBUTE];
@@ -4929,7 +4936,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       {((canvasView==='design'&&!screenEditNodeId)||(canvasView==='preview'&&layersOpen))&&<CanvasV2RenderProfiler id="Layers" enabled={renderProfiling}><CanvasV2ObjectLayers docked={canvasView==='design'} covered={canvasView==='design'&&editChatOpen} onChat={()=>{setPanel('chat');setEditChatOpen(true)}} nodes={sourceNodes} selectedNodeIds={selectionNodeIds} onHover={nodeId=>hoverElement(sceneElements.find(item=>item.nodeId===nodeId))} onSelect={(nodeId,intent)=>{const element=sceneElements.find(item=>item.nodeId===nodeId);if(element)selectElement(element,{...intent,directEdit:false},true);else{setSelectedElements([]);setSelectionTarget(nodeId);}setLayersOpen(false);}} onVisibility={node=>submitMutation({kind:'visibility',nodeId:node.nodeId,hidden:!node.hidden})} onLock={node=>submitMutation({kind:'lock',nodeId:node.nodeId,locked:!node.locked})}/></CanvasV2RenderProfiler>}
       {canvasView==='design'&&!screenEditNodeId&&<BoardDesignInspector selected={selectedElements} onMutation={mutation=>{submitMutation(mutation)}} readOnly={collaborationReadOnly} onOpen={editSelectedText}/>}
 
-      <div aria-label="Canvas tools" style={canvasView==='design'?{left:"calc(50% - 24px)",maxWidth:"calc(100% - 576px)"}:{maxWidth:"calc(100% - 32px)"}} className="absolute bottom-[18px] left-1/2 z-[1002] flex overflow-x-auto [&>button]:shrink-0 [&>div]:shrink-0 -translate-x-1/2 items-center gap-0.5 rounded-[18px] border border-[#dedee8]/90 bg-white/92 p-1.5 shadow-[0_10px_34px_rgba(50,45,100,.15)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_14px_38px_rgba(0,0,0,.34)]">
+      <div aria-label="Canvas tools" style={canvasView==='design'?{left:editChatOpen?"calc(50% + 38px)":"calc(50% - 24px)",maxWidth:editChatOpen?"calc(100% - 700px)":"calc(100% - 576px)"}:{maxWidth:"calc(100% - 32px)"}} className="absolute bottom-[18px] left-1/2 z-[1002] flex overflow-x-auto [&>button]:shrink-0 [&>div]:shrink-0 -translate-x-1/2 items-center gap-0.5 rounded-[18px] border border-[#dedee8]/90 bg-white/92 p-1.5 shadow-[0_10px_34px_rgba(50,45,100,.15)] backdrop-blur-2xl dark:border-white/[.1] dark:bg-[#1c1b23]/92 dark:shadow-[0_14px_38px_rgba(0,0,0,.34)]">
         <button onClick={undoCanvas} disabled={collaboration?.enabled?!collaboration.canUndo():!engine.canUndo} title="Undo" aria-label="Undo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Undo2 className="h-[18px] w-[18px]" /></button>
         <button onClick={redoCanvas} disabled={collaboration?.enabled?!collaboration.canRedo():!engine.canRedo} title="Redo" aria-label="Redo canvas action" className="grid h-10 w-10 place-items-center rounded-[11px] text-[#696979] transition hover:bg-[#f3f2f8] disabled:opacity-25 dark:text-[#aaa6b4] dark:hover:bg-white/[.06]"><Redo2 className="h-[18px] w-[18px]" /></button>
         <div className="mx-0.5 h-6 w-px bg-[#e4e3eb] dark:bg-white/[.09]" />

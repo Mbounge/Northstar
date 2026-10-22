@@ -53,7 +53,16 @@ export async function canvasV2ScreenPixelAppearance(pixels: string) {
   const count=data.length/4;
   return {lightAreaFraction:Number((light/count).toFixed(2)),darkAreaFraction:Number((dark/count).toFixed(2)),predominantAppearance:light/count>.6?'light':dark/count>.6?'dark':'mixed',note:'Measured rendered pixels; infer the actual product palette from these pixels and the brief, not from the surrounding canvas theme.'};
 }
-type ScreenController = { encoded: string; removedSectionKeys?: Set<string>; readSource?: (signal: AbortSignal) => Promise<SimulationSource>; revisionReady?: { encoded: string; done: Promise<void> }; capture?: (signal: AbortSignal) => Promise<{ image: string; state: ScreenResult }>; run: (command: ScreenAction, signal: AbortSignal) => Promise<ScreenResult> };
+type ScreenController = { encoded: string; liveUpdates?: Promise<void>; livePatchFailed?: boolean; removedSectionKeys?: Set<string>; readSource?: (signal: AbortSignal) => Promise<SimulationSource>; revisionReady?: { encoded: string; done: Promise<void> }; capture?: (signal: AbortSignal) => Promise<{ image: string; state: ScreenResult }>; run: (command: ScreenAction, signal: AbortSignal) => Promise<ScreenResult> };
+
+function screenLivePatch(before: ReturnType<typeof parseCanvasV2Screen>, after: ReturnType<typeof parseCanvasV2Screen>, controller: ScreenController): CanvasV2ScreenLiveEdit | undefined {
+  const parser = new DOMParser();
+  const structural = screenStructureLivePatch(before, after, parser);
+  const structurePatch = structural && (structural.action !== 'insert' || structural.nativeInsert || controller.removedSectionKeys?.has(structural.key)) ? structural : undefined;
+  const assets = screenAssetLivePatches(before, after, parser);
+  const edit = structurePatch ? { selector: '', styles: {}, structurePatch } : assets ? { selector: '', styles: {}, assetEdits: assets } : canvasV2ScreenLiveEdit(before, after, parser);
+  return edit && (edit.assetEdits || edit.structurePatch || JSON.stringify(canvasV2ScreenBoundAssets(before).sort()) === JSON.stringify(canvasV2ScreenBoundAssets(after).sort())) ? edit : undefined;
+}
 // Fast Refresh can retain a managed-client closure while replacing this
 // module. Both the retained caller and mounted frames must use one registry;
 // exact encoded-source checks and unmount cleanup still enforce ownership.
@@ -121,13 +130,23 @@ export async function inspectCanvasV2Screen(nodeId: string, encoded: string, com
     signal.throwIfAborted(); controller = controllers.get(nodeId);
   }
   if (controller?.revisionReady?.encoded === encoded) {
+    const revisionDone = controller.revisionReady.done;
     await new Promise<void>((resolve, reject) => {
       const abort = () => { cleanup(); reject(signal.reason); };
       const cleanup = () => signal.removeEventListener('abort', abort);
       signal.addEventListener('abort', abort, { once: true });
-      controller.revisionReady!.done.then(() => { cleanup(); resolve(); }, error => { cleanup(); reject(error); });
+      revisionDone.then(() => { cleanup(); resolve(); }, error => { cleanup(); reject(error); });
     });
     signal.throwIfAborted();
+    // A failed live patch can replace its runtime with the same saved source.
+    // Follow that bounded render boundary, while still rejecting another
+    // revision or a removed object.
+    const replacementStarted = Date.now();
+    controller = controllers.get(nodeId);
+    while ((!controller || controller.encoded !== encoded) && Date.now() - replacementStarted < 500) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      signal.throwIfAborted(); controller = controllers.get(nodeId);
+    }
   }
   if (!controller || controllers.get(nodeId) !== controller || controller.encoded !== encoded) throw new Error('This screen is not ready or was revised/deleted. Read the canvas again.');
   return runCanvasV2ScreenCommandWithControllerRetry(() => controllers.get(nodeId), encoded, command, signal);
@@ -534,11 +553,9 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   if (previousSource.current !== encoded) {
     const before=parseCanvasV2Screen(previousSource.current);
     if(before.productIdentityId!==screen.productIdentityId || !screenMockDataEqual(before.mockData,screen.mockData) || before.referenceNodeId!==screen.referenceNodeId){retainedState.current=undefined;clearCanvasV2ScreenRuntimeState(nodeId);}
-    const assetEdits = typeof DOMParser !== 'undefined' && controllers.has(nodeId) ? screenAssetLivePatches(before, screen, new DOMParser()) : undefined;
-    const structural = typeof DOMParser !== 'undefined' && controllers.has(nodeId) ? screenStructureLivePatch(before,screen,new DOMParser()) : undefined;
-    const structurePatch = structural && (structural.action!=='insert' || structural.nativeInsert || controllers.get(nodeId)?.removedSectionKeys?.has(structural.key)) ? structural : undefined;
-    const edit = structurePatch ? {selector:'',styles:{},structurePatch} : assetEdits ? { selector: '', styles: {}, assetEdits } : typeof DOMParser !== 'undefined' && controllers.has(nodeId) ? canvasV2ScreenLiveEdit(before, screen, new DOMParser()) : undefined;
-    if (edit && (edit.assetEdits || edit.structurePatch || JSON.stringify(canvasV2ScreenBoundAssets(before).sort()) === JSON.stringify(canvasV2ScreenBoundAssets(screen).sort()))) pendingLiveEdit.current = { encoded, edit };
+    const controller = controllers.get(nodeId);
+    const edit = typeof DOMParser !== 'undefined' && controller ? screenLivePatch(before, screen, controller) : undefined;
+    if (edit) pendingLiveEdit.current = { encoded, edit };
     else { runtimeSource.current = encoded; runtimeGeneration.current+=1; pendingLiveEdit.current = undefined; }
     previousSource.current = encoded;
   }
@@ -547,37 +564,67 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const pending = pendingLiveEdit.current, controller = controllers.get(nodeId);
     if (!pending || pending.encoded !== encoded || !controller) return;
     const aborter = new AbortController();
-    const done = (async () => {
-      if (pending.edit.presentationOnly) return {};
-      if (pending.edit.structurePatch) {
-        if(pending.edit.structurePatch.action==='remove'){
-          const keys=controller.removedSectionKeys??=new Set();keys.add(pending.edit.structurePatch.key);
+    let superseded = false, dispatched = false, acknowledged = false;
+    const current = () => !superseded && controllers.get(nodeId) === controller && previousSource.current === encoded;
+    const recover = async () => {
+      if (!current()) return;
+      // Capture a just-typed field before replacing the frame; its batched
+      // input checkpoint may not have reached the host yet. A broken runtime
+      // must not hold recovery indefinitely.
+      await controller.run({ action: 'inspect' }, AbortSignal.timeout(750)).catch(() => undefined);
+      if (!current()) return;
+      // The saved revision remains authoritative. A rejected/partial DOM patch
+      // is a preview recovery, not a document conflict or a reason to lose art.
+      // Rebuild only this runtime, retaining its checkpointed private inputs.
+      pendingLiveEdit.current = undefined;
+      runtimeSource.current = encoded;
+      runtimeGeneration.current++;
+      setReload(value => value + 1);
+    };
+    const run = async (command: ScreenAction) => { aborter.signal.throwIfAborted(); dispatched = true; const result = await controller.run(command, aborter.signal); acknowledged = true; return result; };
+    // Never overlap DOM mutations. Cancelling an already-dispatched command
+    // cannot undo its DOM changes; let it settle before planning the next diff
+    // against the source actually acknowledged by this frame.
+    const done = (controller.liveUpdates ?? Promise.resolve()).then(async () => {
+      if (superseded || controllers.get(nodeId) !== controller || controller.encoded === encoded) return;
+      if (controller.livePatchFailed) { await recover(); return; }
+      const edit = screenLivePatch(parseCanvasV2Screen(controller.encoded), screen, controller);
+      if (!edit) { await recover(); return; }
+      if (edit.presentationOnly) { acknowledged = true; return; }
+      if (edit.structurePatch) {
+        if(edit.structurePatch.action==='remove'){
+          const keys=controller.removedSectionKeys??=new Set();keys.add(edit.structurePatch.key);
           if(keys.size>24)keys.delete(keys.values().next().value!);
         }
-        const patch=pending.edit.structurePatch;
+        const patch=edit.structurePatch;
         const bytes = new Map(await Promise.all((patch.action==='insert'&&patch.nativeInsert?canvasV2ScreenBoundAssets(screen):[]).map(async id=>{
           const asset=evidence.find(item=>item.id===id);if(!asset)throw new Error('The image is unavailable.');
           return [id,await (asset.mediaType === 'model' ? readCanvasV2ScreenModelBytes(asset.url, aborter.signal) : readCanvasV2ScreenAssetPixels(asset.url, aborter.signal))] as const;
         })));
-        return controller.run({action:'patch-structure',structurePatch:{...patch,...(patch.action==='insert'&&patch.nativeInsert?{markup:bindCanvasV2ScreenAssetSource(patch.html,screen.referenceAssetIds,bytes)}:{})}},aborter.signal);
+        return run({action:'patch-structure',structurePatch:{...patch,...(patch.action==='insert'&&patch.nativeInsert?{markup:bindCanvasV2ScreenAssetSource(patch.html,screen.referenceAssetIds,bytes)}:{})}});
       }
-      if (pending.edit.assetEdits) {
-        // Compare against the source actually mounted, including any earlier
-        // edit still decoding. Separate rapid drops must retain both changes.
-        const assetEdits = screenAssetLivePatches(parseCanvasV2Screen(controller.encoded), screen, new DOMParser()) ?? pending.edit.assetEdits;
+      if (edit.assetEdits) {
+        const assetEdits = edit.assetEdits;
         const bytes = new Map(await Promise.all(canvasV2ScreenBoundAssets(screen).map(async id => {
           const asset = evidence.find(item => item.id === id);
           if (!asset) throw new Error('The image is unavailable.');
           return [id, await (asset.mediaType === 'model' ? readCanvasV2ScreenModelBytes(asset.url, aborter.signal) : readCanvasV2ScreenAssetPixels(asset.url, aborter.signal))] as const;
         })));
-        return controller.run({ action: 'patch-assets', assetEdits: assetEdits.map(edit => ({ ...edit, value: bindCanvasV2ScreenAssetSource(edit.value, screen.referenceAssetIds, bytes) })), assetSources: [...bytes].map(([id, bytes]) => ({id, bytes})) }, aborter.signal);
+        return run({ action: 'patch-assets', assetEdits: assetEdits.map(edit => ({ ...edit, value: bindCanvasV2ScreenAssetSource(edit.value, screen.referenceAssetIds, bytes) })), assetSources: [...bytes].map(([id, bytes]) => ({id, bytes})) });
       }
-      return controller.run({ action: pending.edit.designPatch ? 'patch-design' : pending.edit.edits ? 'patch-elements' : pending.edit.stylesheet === undefined ? 'patch-element' : 'patch-stylesheet', ...pending.edit }, aborter.signal);
-    })().then(() => {
-      if (!aborter.signal.aborted && controllers.get(nodeId) === controller) { controller.encoded = encoded; pendingLiveEdit.current = undefined; }
-    }).catch(() => { if (!aborter.signal.aborted) setError('This element changed while it was being edited. Choose the current version in History to start fresh.'); });
+      return run({ action: edit.designPatch ? 'patch-design' : edit.edits ? 'patch-elements' : edit.stylesheet === undefined ? 'patch-element' : 'patch-stylesheet', ...edit });
+    }).then(() => {
+      if (!aborter.signal.aborted && controllers.get(nodeId) === controller && acknowledged) {
+        controller.encoded = encoded;
+        if (pendingLiveEdit.current?.encoded === encoded) pendingLiveEdit.current = undefined;
+      }
+    }).catch(() => {
+      if (dispatched) controller.livePatchFailed = true;
+      if (!aborter.signal.aborted) return recover();
+    });
+    controller.liveUpdates = done;
     controller.revisionReady = { encoded, done };
-    return () => aborter.abort();
+    return () => { superseded = true; if (!dispatched) aborter.abort(); };
   }, [nodeId, encoded, screen, evidence]);
   useEffect(() => registerCanvasV2ScreenCapture(nodeId, { encoded, image: async (signal, overview = false) => {
     const release = pinCanvasV2ScreenCaptureLayout(frame.current?.parentElement);

@@ -9,6 +9,10 @@ const object = (page: Page, id: string) => scene(page).locator(`[data-canvas-v2-
 const cursor = (page: Page, peer: string) => page.locator(`[data-collaborator-cursor^="${peer}-"]`);
 const state = async (page: Page) => JSON.parse(await page.getByTestId('multiplayer-fixture-status').innerText());
 const camera = (page: Page) => page.getByTestId('canvas-v2-workspace-surface').evaluate(element => getComputedStyle(element).transform);
+const geometry = (page: Page, id: string) => object(page, id).evaluate(element => {
+  const style = getComputedStyle(element);
+  return ['x','y','width','height','rotation','preview-x','preview-y','delta-x','delta-y'].map(key => style.getPropertyValue('--canvas-v2-native-'+key));
+});
 test.use({ viewport: { width: 1512, height: 790 } });
 
 async function openPeer(context: BrowserContext, room: string, peer: 'alice' | 'bob' | 'quinn') {
@@ -65,13 +69,12 @@ test('HTTP peers share colored world-space cursors, selections and in-progress m
   test.setTimeout(180_000);
   const room = 'awareness-' + randomUUID(), alice = await openPeer(context, room, 'alice'), bob = await openPeer(context, room, 'bob');
   try {
-    const aliceCamera = await camera(alice), bobCamera = await camera(bob);
-    expect(aliceCamera).not.toBe(bobCamera);
+    expect(await camera(alice)).not.toBe(await camera(bob));
     await alice.mouse.move(700, 650);
-    await expect(cursor(bob, 'alice')).toBeVisible();
+    await expect(cursor(bob, 'alice').locator('svg')).toBeVisible();
     await expect(cursor(bob, 'alice').locator('span')).toHaveText('Alice');
     await bob.mouse.move(1100, 650);
-    await expect(cursor(alice, 'bob')).toBeVisible();
+    await expect(cursor(alice, 'bob').locator('svg')).toBeVisible();
     const aliceColor = await cursor(bob, 'alice').locator('path').getAttribute('stroke');
     const bobColor = await cursor(alice, 'bob').locator('path').getAttribute('stroke');
     expect(aliceColor).toMatch(/^#[0-9A-Fa-f]{6}$/); expect(bobColor).not.toBe(aliceColor);
@@ -93,6 +96,7 @@ test('HTTP peers share colored world-space cursors, selections and in-progress m
     })).toBeLessThan(2);
 
     await design(alice); await design(bob);
+    const aliceCamera = await camera(alice), bobCamera = await camera(bob);
     await object(alice, 'note-alice').click();
     await expect(bob.locator('[data-collaborator-selection="note-alice"]')).toBeVisible();
     const source = await object(alice, 'note-alice').boundingBox(), before = await object(bob, 'note-alice').boundingBox();
@@ -104,18 +108,31 @@ test('HTTP peers share colored world-space cursors, selections and in-progress m
       await expect.poll(async () => Math.abs((await object(bob, 'note-alice').boundingBox())!.x - before!.x)).toBeGreaterThan(25);
     } finally { await alice.mouse.up(); }
     await waitSaved(alice);
-    await expect.poll(async () => object(bob, 'note-alice').getAttribute('style')).toContain('--canvas-v2-native');
+    // The native CSS variables already exist in the seed. Wait for Bob's
+    // actual final geometry, including transient-drag cleanup, before taking
+    // the steady-state render counter baseline.
+    await expect.poll(async () => geometry(bob, 'note-alice')).toEqual(await geometry(alice, 'note-alice'));
     expect(await camera(alice)).toBe(aliceCamera); expect(await camera(bob)).toBe(bobCamera);
 
     // Empty-space pointer updates do not change selection, hover target or UI.
-    await alice.mouse.move(700, 670); await expect(cursor(bob, 'alice')).toBeVisible();
-    const renders = Number(await bob.getByTestId('multiplayer-workspace-body-renders').innerText());
+    await bob.mouse.move(700, 670);
+    await bob.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await alice.mouse.move(700, 670); await expect(cursor(bob, 'alice').locator('svg')).toBeVisible();
+    // Drag completion and presence membership are separate asynchronous deliveries.
+    // Establish a stable baseline before measuring cursor-only updates.
+    let observedRenders=-1,stableSince=Date.now();
+    await expect.poll(async()=>{
+      const next=Number(await bob.getByTestId('multiplayer-workspace-body-renders').innerText());
+      if(next!==observedRenders){observedRenders=next;stableSince=Date.now();}
+      return Date.now()-stableSince;
+    }).toBeGreaterThan(500);
+    const renders = observedRenders;
     for (let index = 0; index < 100; index++) await alice.mouse.move(700 + index % 70, 670 + index % 8);
-    await expect.poll(async () => cursor(bob, 'alice').evaluate(element => {
-      const surface = element.ownerDocument.querySelector('[data-testid="canvas-v2-workspace-surface"]')!;
-      const transform = new DOMMatrix(getComputedStyle(surface).transform);
-      return Math.abs(transform.e + Number((element as HTMLElement).dataset.worldX) * transform.a - 500 - (729 - 450) / .7 * .6);
-    })).toBeLessThan(2);
+    const finalWorldX = await alice.getByTestId('canvas-v2-workspace-surface').evaluate(element => {
+      const transform = new DOMMatrix(getComputedStyle(element).transform);
+      return (729 - transform.e) / transform.a;
+    });
+    await expect.poll(async () => Math.abs(Number(await cursor(bob, 'alice').getAttribute('data-world-x')) - finalWorldX)).toBeLessThan(2);
     expect(Number(await bob.getByTestId('multiplayer-workspace-body-renders').innerText())).toBe(renders);
     await bob.getByRole('button', { name: 'Read fixture server receipt', exact: true }).click();
     const receipt = JSON.parse(await bob.getByRole('textbox', { name: 'Fixture public server receipt', exact: true }).inputValue());
@@ -135,6 +152,9 @@ test('HTTP peers keep distinct edits and runtime state, recover same-element con
     await a.getByRole('textbox', { name: 'Your draft', exact: true }).fill('Private Alice runtime draft');
     await a.getByRole('button', { name: 'Save draft', exact: true }).click();
     await a.getByRole('textbox', { name: 'Your draft', exact: true }).fill('Retain this unsaved runtime draft');
+    // Entering Design may reveal the selected object around the new rails.
+    // Measure stability after that local mode transition, before peer edits.
+    await design(alice); await design(bob);
     const aliceCamera = await camera(alice), bobCamera = await camera(bob);
 
     await bob.getByRole('button', { name: 'Disconnect fixture network', exact: true }).click();
@@ -186,7 +206,8 @@ test('a known teammate reservation prevents entering a trapped inline editor and
   const room = 'claims-' + randomUUID(), alice = await openPeer(context, room, 'alice'), bob = await openPeer(context, room, 'bob');
   try {
     await design(alice); await design(bob);
-    await object(alice, 'note-alice').click();
+    await object(alice, 'note-alice').dblclick();
+    await expect(alice.getByRole('textbox', { name: 'Edit note-alice on canvas', exact: true })).toBeVisible();
     await object(bob, 'note-alice').click();
     await expect.poll(async () => (await state(bob)).busyObjects).toContain('note-alice');
     await object(bob, 'note-alice').dblclick();
@@ -228,6 +249,88 @@ test('a shared in-app text/style edit preserves each peer private input and Java
       await expect(frame.locator('#status')).toHaveText('Saved 2 · ' + name + ' private unsaved runtime draft');
     }
     await info.attach('Interactive screen continuity', { body: JSON.stringify({ heading: await b.getByRole('heading', { level: 1 }).textContent(), alice: await a.locator('#status').textContent(), bob: await b.locator('#status').textContent() }), contentType: 'application/json' });
+  } finally { await alice.close(); await bob.close(); }
+});
+
+test('a rejected peer preview patch rebuilds the saved design and permits further edits without a History detour', async ({ context }, info) => {
+  test.setTimeout(180_000);
+  const room = 'preview-recovery-' + randomUUID(), alice = await openPeer(context, room, 'alice'), bob = await openPeer(context, room, 'bob');
+  const a = alice.frameLocator('iframe[title="Shared journal A"]'), b = bob.frameLocator('iframe[title="Shared journal A"]');
+  try {
+    const bobCamera = await camera(bob);
+    await b.getByRole('textbox', { name: 'Your draft', exact: true }).fill('Bob keeps his private input through preview recovery');
+    // Simulate a generated app changing its live DOM after the source was
+    // saved. A precise text patch must reject this missing target; the host
+    // must recover the committed source rather than blanking the artwork.
+    await b.locator('#heading').evaluate(element => element.remove());
+    await design(alice); await object(alice, 'journal-a').click();
+    await alice.getByRole('treeitem', { name: 'Select layer heading', exact: true }).click();
+    await alice.getByRole('textbox', { name: 'Element text', exact: true }).fill('The shared design survives a failed preview patch.');
+    await alice.getByRole('button', { name: 'Close appearance editor', exact: true }).click();
+    await expect(b.locator('#heading')).toHaveText('The shared design survives a failed preview patch.');
+    await expect(bob.getByRole('button', { name: 'Retry preview', exact: true })).toHaveCount(0);
+    await expect(b.getByRole('textbox', { name: 'Your draft', exact: true })).toHaveValue('Bob keeps his private input through preview recovery');
+    expect(await camera(bob)).toBe(bobCamera);
+    await waitSaved(alice);
+    await alice.getByRole('button', { name: 'Back to canvas', exact: true }).click();
+    await object(alice, 'note-bob').click();
+    await design(bob); await object(bob, 'journal-a').click();
+    await bob.getByRole('treeitem', { name: 'Select layer heading', exact: true }).click();
+    await bob.getByRole('textbox', { name: 'Element text', exact: true }).fill('Bob can keep designing after automatic recovery.');
+    await bob.getByRole('button', { name: 'Close appearance editor', exact: true }).click();
+    await expect(a.locator('#heading')).toHaveText('Bob can keep designing after automatic recovery.');
+    await waitSaved(bob);
+    await bob.reload();
+    await expect(b.locator('#heading')).toHaveText('Bob can keep designing after automatic recovery.');
+    await expect(bob.getByRole('button', { name: 'Retry preview', exact: true })).toHaveCount(0);
+    await info.attach('Recovered shared design', { body: JSON.stringify({ alice: await state(alice), bob: await state(bob) }), contentType: 'application/json' });
+  } finally { await alice.close(); await bob.close(); }
+});
+
+test('a slow peer patch cannot overwrite a newer committed text edit', async ({ context }) => {
+  test.setTimeout(180_000);
+  const room = 'preview-order-' + randomUUID(), alice = await openPeer(context, room, 'alice');
+  // Install before app boot so the original handler cannot also run this
+  // command. Hold it until a second edit is durably saved on the other peer.
+  await context.addInitScript(() => {
+    if (window === parent) return;
+    const win = window as typeof window & { delayedPeerPatch?: { started: boolean; released: boolean }; releasePeerPatch?: () => void };
+    win.delayedPeerPatch = { started: false, released: false };
+    const delay = (event: MessageEvent) => {
+      if (event.source !== parent || !event.data?.command?.action?.startsWith('patch-')) return;
+      window.removeEventListener('message', delay, true);
+      event.stopImmediatePropagation(); win.delayedPeerPatch!.started = true;
+      win.releasePeerPatch = () => {
+        if (!win.delayedPeerPatch!.released) {
+          win.delayedPeerPatch!.released = true;
+          window.dispatchEvent(new MessageEvent('message', { data: event.data, source: event.source, origin: event.origin }));
+        }
+      };
+    };
+    window.addEventListener('message', delay, true);
+  });
+  const bob = await openPeer(context, room, 'bob'), b = bob.frameLocator('iframe[title="Shared journal A"]');
+  try {
+    await design(alice); await object(alice, 'journal-a').click();
+    const change = async (text: string) => {
+      await alice.getByRole('treeitem', { name: 'Select layer heading', exact: true }).click();
+      await alice.getByRole('textbox', { name: 'Element text', exact: true }).fill(text);
+      await alice.getByRole('button', { name: 'Close appearance editor', exact: true }).click();
+      await expect(alice.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText(text);
+      await waitSaved(alice);
+    };
+    await change('First edit waits for a slow preview.');
+    await expect.poll(() => b.locator('body').evaluate(() => (window as typeof window & { delayedPeerPatch?: { started: boolean } }).delayedPeerPatch?.started)).toBe(true);
+    await change('The newest edit is the one both people see.');
+    await b.locator('body').evaluate(() => (window as typeof window & { releasePeerPatch?: () => void }).releasePeerPatch!());
+    await expect.poll(() => b.locator('body').evaluate(() => (window as typeof window & { delayedPeerPatch?: { released: boolean } }).delayedPeerPatch?.released)).toBe(true);
+    await expect(b.locator('#heading')).toHaveText('The newest edit is the one both people see.');
+    await expect(bob.getByRole('button', { name: 'Retry preview', exact: true })).toHaveCount(0);
+    await alice.getByRole('button', { name: 'Undo canvas action', exact: true }).click();
+    await expect(b.locator('#heading')).toHaveText('First edit waits for a slow preview.');
+    await alice.getByRole('button', { name: 'Redo canvas action', exact: true }).click();
+    await expect(b.locator('#heading')).toHaveText('The newest edit is the one both people see.');
+    await waitSaved(alice);
   } finally { await alice.close(); await bob.close(); }
 });
 

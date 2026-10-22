@@ -9,6 +9,15 @@ export const dynamic = 'force-dynamic';
 const fixture = globalThis as typeof globalThis & { northstarCodexFixtureHost?: CodexSessionHost; northstarCodexFixtureFactory?: typeof fixtureCodex; northstarCodexFixtureVersion?: number };
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === 'production' || process.env.NORTHSTAR_E2E !== '1') return new Response(null, { status: 404 });
+  const body = object(await request.json());
+  // Browser contexts close without reliably delivering pagehide/keepalive.
+  // Separate deterministic tests share the fixture account, but never its
+  // abandoned processes. This operation cannot exist on the production route.
+  if (body.op === 'reset-fixture') {
+    fixture.northstarCodexFixtureHost?.dispose();
+    fixture.northstarCodexFixtureHost = undefined;
+    return Response.json({ reset: true });
+  }
   // Replace the pre-hot-reload factory once; subsequent module reloads update
   // the factory indirection while already-running fixture sessions stay intact.
   if (fixture.northstarCodexFixtureVersion !== 17) {
@@ -24,6 +33,6 @@ export async function POST(request: Request) {
     const name = url.slice(base.length);
     if (!url.startsWith(base) || !['reference.png','motion.gif'].includes(name)) throw new Error('Fixture allows only its known source page and images.');
     return { url, mimeType: name.endsWith('.gif') ? 'image/gif' : 'image/png', bytes: await readFile(join(process.cwd(),'app/canvas-v2-e2e/codex/media-assets',name)) };
-  }))).handle(object(await request.json()), { owner: 'fixture', key: 'not-a-real-key', signal: request.signal }); }
+  }))).handle(body, { owner: 'fixture', key: 'not-a-real-key', signal: request.signal }); }
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'Fixture failed' }, { status: 400 }); }
 }

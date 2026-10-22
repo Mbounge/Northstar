@@ -14,6 +14,11 @@ const html = '<main data-canvas-v2-node-id="board"><p data-canvas-v2-node-id="a"
 const revision = (id: string, source = html): CanvasV2ArtifactRevision => ({ schema: CANVAS_V2_ARTIFACT_SCHEMA, id, state: 'committed', createdAt: '2026-10-20T00:00:00Z', document: { html: source, css: '' }, evidence: [] });
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; };
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
+function mockTimers(t: import('node:test').TestContext, apis: string[]) {
+  const timers = t.mock.timers as unknown as { enable(options: { apis: string[] } | string[]): void; tick(ms: number): void; reset(): void };
+  try { timers.enable({ apis }); } catch { timers.enable(apis); }
+  return timers;
+}
 
 /** Exercise the actual controller and operation bytes. Only network delivery,
  * server rejection and ACK loss are controlled; no controller is reimplemented. */
@@ -239,8 +244,7 @@ test('continuous pointer packets cannot postpone durable reauthentication after 
   let now = 100_000; t.mock.method(Date, 'now', () => now);
   // This repository executes on Node20.9, whose timer API accepts an array;
   // current @types/node also supports newer Node20 options objects.
-  const timers = t.mock.timers as unknown as { enable(apis: string[]): void; tick(ms: number): void; reset(): void };
-  timers.enable(['setInterval']);
+  const timers = mockTimers(t, ['setInterval']);
   // Node20.9 MockTimers incorrectly cancels the next future interval when
   // clearInterval(undefined) runs. Native timers correctly treat it as a no-op.
   const clear = globalThis.clearInterval;
@@ -260,8 +264,7 @@ test('continuous pointer packets cannot postpone durable reauthentication after 
 
 test('member polling removes revoked presence before its TTL while unchanged directories reuse their array', async t => {
   let now = 100_000; t.mock.method(Date, 'now', () => now);
-  const timers = t.mock.timers as unknown as { enable(apis: string[]): void; tick(ms: number): void; reset(): void };
-  timers.enable(['setInterval']);
+  const timers = mockTimers(t, ['setInterval']);
   const clear = globalThis.clearInterval;
   t.mock.method(globalThis, 'clearInterval', (id: Parameters<typeof clearInterval>[0]) => { if (id !== undefined) clear(id); });
   const f = room(), a = await f.client('alice'); t.after(() => { a.value.close(); timers.reset(); });
@@ -277,8 +280,7 @@ test('member polling removes revoked presence before its TTL while unchanged dir
 
 test('the final throttled pointer packet arrives within40ms and queued packets never publish after close', async t => {
   let now = 100_000; t.mock.method(Date, 'now', () => now);
-  const timers = t.mock.timers as unknown as { enable(apis: string[]): void; tick(ms: number): void; reset(): void };
-  timers.enable(['setInterval', 'setTimeout']);
+  const timers = mockTimers(t, ['setInterval', 'setTimeout']);
   const clearIntervalTimer = globalThis.clearInterval, clearTimeoutTimer = globalThis.clearTimeout;
   t.mock.method(globalThis, 'clearInterval', (id: Parameters<typeof clearInterval>[0]) => { if (id !== undefined) clearIntervalTimer(id); });
   t.mock.method(globalThis, 'clearTimeout', (id: Parameters<typeof clearTimeout>[0]) => { if (id !== undefined) clearTimeoutTimer(id); });

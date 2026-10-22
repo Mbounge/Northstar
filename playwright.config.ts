@@ -19,6 +19,9 @@ export default defineConfig({
     timeout: 120_000,
     env: {
       NORTHSTAR_E2E: "1",
+      // Canonical /canvas tests use deterministic model endpoints too. Live
+      // account/model verification has its own explicitly configured harness.
+      CANVAS_V2_DETERMINISTIC_EVALUATION: "1",
       NEXT_DIST_DIR: ".next/e2e",
       WATCHPACK_POLLING: "true",
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",

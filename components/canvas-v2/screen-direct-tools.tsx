@@ -197,12 +197,18 @@ export function ScreenAppearanceEditor({target,position,fontFamilies=[],docked=f
     finally{pendingSave.current=undefined;busy.current=false;setSaving(false);}
   };
   saveRef.current=save;
-  useEffect(()=>{
+  useLayoutEffect(()=>{
     version.current=sourceVersion;lastAttempt.current='';saveFailure.current='';setError('');
     if(ownCommit.current){
       setDraftText(current=>current===pendingText.current||current===savedText.current?textValue:current);
       ownCommit.current=false;
-    }else{setDraftText(textValue);setChanges({});}
+    }else{
+      // History/peer revisions replace the inspector's baseline atomically.
+      // Its unmount drain can run before state setters render; leaving these
+      // refs on the old draft would save that draft over the restored source.
+      draft.current={styles:{},text:textValue};dirty.current=false;
+      setDraftText(textValue);setChanges({});
+    }
     savedText.current=textValue;
   },[sourceVersion,textValue]);
   useEffect(()=>{
