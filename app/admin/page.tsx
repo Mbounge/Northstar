@@ -404,7 +404,7 @@ export default function AdminDashboard() {
             North Star <span className="font-[300] opacity-50">/ Admin</span>
           </h1>
         </div>
-        <ThemeToggle />
+        <div className="flex items-center gap-4"><Link href="/admin/waitlist" className="text-sm text-violet-700 dark:text-violet-300">Waitlist ↗</Link><ThemeToggle /></div>
       </header>
 
       {/* ── TABS ── */}

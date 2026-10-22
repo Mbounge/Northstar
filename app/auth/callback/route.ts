@@ -25,14 +25,14 @@ export async function GET(request: Request) {
   const next = getSafeNextPath(requestUrl.searchParams.get("next"));
 
   if (error) {
-    const loginUrl = new URL("/login", origin);
+    const loginUrl = new URL("/signin", origin);
     loginUrl.searchParams.set("error", errorDescription || error);
 
     return NextResponse.redirect(loginUrl);
   }
 
   if (!code) {
-    return NextResponse.redirect(`${origin}/login`);
+    return NextResponse.redirect(`${origin}/signin`);
   }
 
   const supabase = await createClient();
@@ -40,7 +40,7 @@ export async function GET(request: Request) {
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
 
   if (exchangeError) {
-    const loginUrl = new URL("/login", origin);
+    const loginUrl = new URL("/signin", origin);
     loginUrl.searchParams.set("error", exchangeError.message);
 
     return NextResponse.redirect(loginUrl);

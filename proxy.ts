@@ -6,6 +6,10 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { canvasV2LocalEvaluationEnabled } from '@/lib/canvas-v2/local-evaluation'
 
 export async function proxy(request: NextRequest) {
+  // The waitlist is public; it never creates an account or grants canvas access.
+  if (["/waitlist", "/waitlist/privacy", "/waitlist/opengraph-image", "/api/waitlist"].includes(request.nextUrl.pathname)) {
+    return NextResponse.next({ request })
+  }
   // The optimized-build performance harness has no account data. It is
   // reachable only from this machine when explicitly enabled for local E2E.
   if (process.env.NODE_ENV === "production"
@@ -75,7 +79,7 @@ export async function proxy(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
 
   const url = request.nextUrl.clone()
-  const isLoginPath = url.pathname.startsWith('/login')
+  const isLoginPath = url.pathname === '/login' || url.pathname === '/signin'
   const isAuthCallback = url.pathname.startsWith('/auth')
   const isVerificationPath = url.pathname.startsWith('/verification')
   const isAdminPath = url.pathname.startsWith('/admin')
@@ -85,10 +89,14 @@ export async function proxy(request: NextRequest) {
     if (isApiPath) {
       return NextResponse.json({ error: 'Sign in to access Northstar account data.' }, { status: 401 })
     }
+    if (url.pathname === '/') {
+      url.pathname = '/waitlist'
+      return NextResponse.redirect(url)
+    }
     // The invitation fragment is client-only. Let this exact public landing
     // retain it before login; joining and all canvas data remain authenticated.
     if (!isLoginPath && !isAuthCallback && url.pathname !== '/canvas/join') {
-      url.pathname = '/login'
+      url.pathname = '/signin'
       return NextResponse.redirect(url)
     }
     return supabaseResponse
@@ -111,7 +119,7 @@ export async function proxy(request: NextRequest) {
   // RULE 3: Routing based on Status
   if (status === 'rejected') {
     await supabase.auth.signOut()
-    url.pathname = '/login'
+    url.pathname = '/signin'
     return NextResponse.redirect(url)
   }
 

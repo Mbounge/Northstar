@@ -10,7 +10,7 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
   title: "Northstar",
-  description: "Automated Surveillance Platform",
+  description: "Your creative studio. On one canvas. Create with AI, refine by hand, and work together in Northstar.",
 };
 
 export default function RootLayout({
