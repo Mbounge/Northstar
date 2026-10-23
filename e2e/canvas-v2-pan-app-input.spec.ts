@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
 
-test('Pan and held Space drag across a live iframe, then Select restores native app input', async ({ page }) => {
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('/canvas-v2-e2e/codex/agent', { data: { op: 'reset-fixture' } });
+  expect(response.ok()).toBe(true);
+});
+
+test('Pan and held Space drag across a live iframe, then Preview restores native app input', async ({ page }) => {
   test.setTimeout(90_000);
   await page.goto('/canvas-v2-e2e/codex');
   await page.getByRole('textbox', { name: 'Message North Star' }).fill('screen journey');
@@ -42,6 +47,11 @@ test('Pan and held Space drag across a live iframe, then Select restores native 
   try { await expect(iframe).toHaveCSS('pointer-events', 'none'); await dragAcrossFrame(); }
   finally { await page.keyboard.up('Space'); }
   await expect(iframe).toHaveCSS('pointer-events', 'auto');
+  // Select now enters Design. Preview explicitly restores the app's controls.
+  const design = page.getByRole('button', { name: 'Design view', exact: true });
+  await expect(design).toHaveAttribute('aria-pressed', 'true');
+  await design.click();
+  await expect(design).toHaveAttribute('aria-pressed', 'false');
   // Preserve app keyboard input and use its saved state after navigation.
   const clickAppButton = async (name: string) => {
     const point = await app.getByRole('button', { name, exact: true }).evaluate(element => {

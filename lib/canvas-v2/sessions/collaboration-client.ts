@@ -30,6 +30,7 @@ export interface CollaborationTransport {
 export interface RecoveredBranch { label: string; revision: CanvasV2ArtifactRevision; changes?: CellChange[]; at: number }
 export interface RecoveredEdit extends RecoveredBranch { alternatives?: RecoveredBranch[] }
 export interface CollaborationJournal { pending: SharedOperation[]; recovery?: RecoveredEdit }
+interface HistoryEntry { original: CellChange[]; inverse: CellChange[] }
 export interface CollaborationStatus {
   phase: 'off' | 'connecting' | 'live' | 'reconnecting' | 'blocked'; role: CanvasMember['role']; pending: number;
   error?: string; recovery?: RecoveredEdit; members: CanvasMember[]; busyObjects: string[];
@@ -73,9 +74,11 @@ export class CanvasCollaborationClient {
   private known = new Set<string>();
   private material = new Map<string, SharedCells>();
   private observedBasis?: { id: string; cells: SharedCells };
-  private undoHistory: Array<{ original: CellChange[]; inverse: CellChange[] }> = [];
-  private redoHistory: Array<{ original: CellChange[]; inverse: CellChange[] }> = [];
-  private historyIntent = new Map<string, 'undo' | 'redo'>();
+  private undoHistory: HistoryEntry[] = [];
+  private redoHistory: HistoryEntry[] = [];
+  private historyIntent = new Map<string, { direction: 'undo' | 'redo'; entry: HistoryEntry; generation: number }>();
+  private historyQueue = Promise.resolve();
+  private editGeneration = 0;
   private watchStop?: () => void;
   private timer?: ReturnType<typeof setInterval>;
   private pumping?: Promise<void>;
@@ -236,7 +239,7 @@ export class CanvasCollaborationClient {
       const sameBasis = basis.size === this.visible.size && [...basis].every(([key, value]) => this.visible.get(key) === value);
       this.revision = revision; if (sameBasis) this.visible = cells; this.remember(revision.id, cells); this.observedBasis = { id: revision.id, cells };
       this.pending.push({ id: crypto.randomUUID(), clientId: this.clientId, changes, label: label.slice(0, 160) });
-      this.redoHistory = []; this.update({ error: undefined }); await this.rebase(); void this.sync();
+      this.redoHistory = []; this.editGeneration++; this.update({ error: undefined }); await this.rebase(); void this.sync();
     }).catch(error => this.update({ error: error instanceof Error ? error.message : 'The shared edit could not be prepared.' }));
     return this.observing;
   }
@@ -274,6 +277,7 @@ export class CanvasCollaborationClient {
       const conflicts = await conflictingSharedCells(next, operation.changes);
       if (conflicts.length) {
         conflicted = true;
+        this.historyIntent.delete(operation.id);
       } else { next = applySharedChanges(next, operation.changes); retained.push(operation); }
     }
     if (conflicted) {
@@ -303,7 +307,15 @@ export class CanvasCollaborationClient {
             if (local) {
               this.pending = this.pending.filter(item => item.id !== local.id);
               const intent = this.historyIntent.get(local.id); this.historyIntent.delete(local.id);
-              if (!intent) {
+              if (intent) {
+                // A reservation or peer conflict can reject an optimistic
+                // undo. Move history only when its operation is accepted.
+                const from = intent.direction === 'undo' ? this.undoHistory : this.redoHistory;
+                const index = from.indexOf(intent.entry);
+                if (index >= 0) from.splice(index, 1);
+                if (intent.direction === 'redo') this.undoHistory.push(intent.entry);
+                else if (intent.generation === this.editGeneration) this.redoHistory.push(intent.entry);
+              } else {
                 const inverse = await diffSharedCells(this.accepted, previous);
                 this.undoHistory.push({ original: operation.changes, inverse });
               }
@@ -319,6 +331,7 @@ export class CanvasCollaborationClient {
             this.accepted = room.cells; this.version = room.version; this.update({ role: room.role, members: room.members });
             this.recoverPending(operation.label);
             this.pending.shift();
+            this.historyIntent.delete(operation.id);
             this.update({ error: 'This element changed or is being edited by a teammate. Your version is kept in recovery.' });
             await this.rebase(true); break;
           }
@@ -341,14 +354,23 @@ export class CanvasCollaborationClient {
   }
   async undo(): Promise<boolean> { return this.history('undo'); }
   async redo(): Promise<boolean> { return this.history('redo'); }
-  private async history(direction: 'undo' | 'redo'): Promise<boolean> {
+  private history(direction: 'undo' | 'redo'): Promise<boolean> {
+    // Keyboard repeats must read history after the previous request settles,
+    // never enqueue the same inverse twice while its hashes are being checked.
+    const result = this.historyQueue.then(() => this.applyHistory(direction));
+    this.historyQueue = result.then(() => {}, () => {});
+    return result;
+  }
+  private async applyHistory(direction: 'undo' | 'redo'): Promise<boolean> {
     await this.observing; await this.sync();
+    if (this.closed) return false;
     if (!this.writable || this.pending.length) { this.update({ error: 'Wait for your edits to finish saving before using undo.' }); return false; }
-    const from = direction === 'undo' ? this.undoHistory : this.redoHistory, to = direction === 'undo' ? this.redoHistory : this.undoHistory;
+    const from = direction === 'undo' ? this.undoHistory : this.redoHistory;
     const entry = from.at(-1); if (!entry) return false;
     const changes = direction === 'undo' ? entry.inverse : entry.original;
     if ((await conflictingSharedCells(this.visible, changes)).length) { this.update({ error: 'A teammate changed this element after your edit. Undo would overwrite their work.' }); return false; }
-    const id = crypto.randomUUID(); from.pop(); to.push(entry); this.historyIntent.set(id, direction);
+    if (this.closed || !this.writable || this.pending.length) return false;
+    const id = crypto.randomUUID(); this.historyIntent.set(id, { direction, entry, generation: this.editGeneration });
     this.pending.push({ id, clientId: this.clientId, label: direction === 'undo' ? 'Undid my edit' : 'Redid my edit', changes });
     this.visible = applySharedChanges(this.visible, changes); this.emitRevision(this.visible); this.update({}); await this.journal(); void this.sync(); return true;
   }

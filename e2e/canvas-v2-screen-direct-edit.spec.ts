@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { clickScreen as pointerScreen } from './canvas-v2-screen-input-helpers';
+import { clickScreen as pointerScreen, screenPoint } from './canvas-v2-screen-input-helpers';
 import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ request }) => {
@@ -105,8 +105,8 @@ test('app selection, Back and three mode roundtrips preserve rails, full tools a
   await page.getByRole('treeitem',{name:'Select layer A little space for your ideas.',exact:true}).click();
   await page.getByRole('spinbutton',{name:'Text size',exact:true}).fill('36');await mode.click();
   await expect(frame.locator('h1')).toHaveCSS('font-size','36px');
-  const hero=await frame.locator('#hero').boundingBox();expect(hero).not.toBeNull();
-  await page.mouse.move(hero!.x+hero!.width/2,hero!.y+hero!.height/2);await page.mouse.wheel(0,900);
+  const hero=await screenPoint(page,'#hero');
+  await page.mouse.move(hero.x,hero.y);await page.mouse.wheel(0,900);
   await expect.poll(()=>frame.locator('#feed').evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
   const baseline={box:await page.locator('iframe[title="Fieldnotes · studio editing"]').boundingBox(),scroll:await frame.locator('#feed').evaluate(el=>el.scrollTop)};
   for(let cycle=0;cycle<3;cycle++){

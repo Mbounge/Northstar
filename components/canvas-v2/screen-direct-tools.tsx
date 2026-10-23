@@ -14,7 +14,9 @@ import { SCREEN_DIRECT_SAVE_FAILURE_EVENT, registerScreenDirectFlush, flushScree
 
 /** Drain an in-flight save and any typing that arrived while it committed. */
 function useScreenEditFlush(save: RefObject<() => Promise<void>>, pending: RefObject<Promise<ScreenDirectResult> | undefined>, dirty: RefObject<boolean>, failure: RefObject<string>) {
+  const subscription = useRef(0);
   useEffect(() => {
+    const generation = ++subscription.current;
     const drain=async()=>{
       for (let attempt = 0; attempt < 90; attempt++) {
         await pending.current;
@@ -28,7 +30,13 @@ function useScreenEditFlush(save: RefObject<() => Promise<void>>, pending: RefOb
     const unregister=registerScreenDirectFlush(drain);
     // Keep participating in a chat handoff until the unmounted editor's last
     // draft has drained. Pending work lives in refs, independent of rerenders.
-    return()=>{void drain().catch(error=>window.dispatchEvent(new CustomEvent(SCREEN_DIRECT_SAVE_FAILURE_EVENT,{detail:error instanceof Error?error.message:'Your last edit could not be saved. Select the element and try again.'}))).finally(unregister)};
+    return()=>{queueMicrotask(()=>{
+      // React's development effect replay is not a completed human edit.
+      // Its abandoned drain must not save keystrokes from the live remount.
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- Compare the live generation; this is not a DOM ref captured for cleanup.
+      if(subscription.current!==generation){unregister();return;}
+      void drain().catch(error=>window.dispatchEvent(new CustomEvent(SCREEN_DIRECT_SAVE_FAILURE_EVENT,{detail:error instanceof Error?error.message:'Your last edit could not be saved. Select the element and try again.'}))).finally(unregister);
+    })};
   }, [save, pending, dirty, failure]);
 }
 

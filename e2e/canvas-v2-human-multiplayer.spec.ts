@@ -220,6 +220,43 @@ test('a known teammate reservation prevents entering a trapped inline editor and
   } finally { await alice.close(); await bob.close(); }
 });
 
+test('board position drafts survive peer movement and Escape restores the current shared value', async ({ context }) => {
+  test.setTimeout(120_000);
+  const room = 'board-draft-' + randomUUID(), alice = await openPeer(context, room, 'alice'), bob = await openPeer(context, room, 'bob');
+  try {
+    await design(alice); await design(bob);
+    await object(alice, 'note-alice').click(); await object(bob, 'note-alice').click();
+    const ax = alice.getByRole('textbox', { name: 'Object X', exact: true });
+    const bx = bob.getByRole('textbox', { name: 'Object X', exact: true });
+    const original = Number(await bx.inputValue()), peerX = original + 30, ownX = original + 60;
+    await ax.fill(String(ownX));
+    await bx.fill(String(peerX)); await bx.press('Enter'); await waitSaved(bob);
+    await expect.poll(async () => parseFloat((await geometry(alice, 'note-alice'))[0])).toBe(peerX);
+    await expect(ax).toHaveValue(String(ownX));
+    await ax.press('Escape'); await expect(ax).toHaveValue(String(peerX));
+    await waitSaved(alice); await expect(bx).toHaveValue(String(peerX));
+
+    // Commit an absolute X against the newest shared geometry, preserving Y.
+    await ax.fill(String(ownX));
+    const by = bob.getByRole('textbox', { name: 'Object Y', exact: true });
+    const peerY = Number(await by.inputValue()) + 25;
+    await by.fill(String(peerY)); await by.press('Enter'); await waitSaved(bob);
+    await expect.poll(async () => parseFloat((await geometry(alice, 'note-alice'))[1])).toBe(peerY);
+    await ax.press('Enter'); await waitSaved(alice);
+    await expect(bx).toHaveValue(String(ownX)); await expect(by).toHaveValue(String(peerY));
+    await alice.getByRole('button', { name: 'Undo canvas action', exact: true }).click(); await waitSaved(alice);
+    await expect(bx).toHaveValue(String(peerX)); await expect(by).toHaveValue(String(peerY));
+    // Merely focusing a rounded display must not round the shared geometry.
+    await bx.fill(String(peerX + 0.12345)); await bx.press('Enter'); await waitSaved(bob);
+    await expect.poll(async () => geometry(alice, 'note-alice')).toEqual(await geometry(bob, 'note-alice'));
+    const precise = await geometry(alice, 'note-alice');
+    await ax.focus(); await ax.press('Tab'); await waitSaved(alice);
+    expect(await geometry(alice, 'note-alice')).toEqual(precise);
+    expect(await geometry(bob, 'note-alice')).toEqual(precise);
+    await expect(alice.getByRole('button', { name: 'Retry preview', exact: true })).toHaveCount(0);
+  } finally { await alice.close(); await bob.close(); }
+});
+
 test('a shared in-app text/style edit preserves each peer private input and JavaScript closure', async ({ context }, info) => {
   test.setTimeout(180_000);
   const room = 'screens-' + randomUUID(), alice = await openPeer(context, room, 'alice'), bob = await openPeer(context, room, 'bob');
@@ -362,11 +399,15 @@ test('real private sync and blob codec restore each account chat on cache-empty 
     expect(after.aliceCopies).toBe(before.aliceCopies); expect(after.bobCopies).toBe(before.bobCopies);
     expect(await bob.getByTestId('multiplayer-workspace-body-renders').innerText()).toBe(bodyRenders);
     expect(await camera(bob)).toBe(bobCamera);
-    const personalCamera = await camera(alice);
+    const writesBeforeEditing = Number(await alice.getByTestId('multiplayer-camera-writes').innerText());
     await editNote(alice, 'note-alice', 'Shared team edit; personal chats stay private');
     await expect(object(bob, 'note-alice')).toHaveText('Shared team edit; personal chats stay private');
     if (await alice.getByRole('button', { name: 'Design view', exact: true }).getAttribute('aria-pressed') === 'true') await alice.getByRole('button', { name: 'Design view', exact: true }).click();
     await ownChat(alice, 'Alice'); await ownChat(bob, 'Bob');
+    // Entering Design deliberately reveals the selection around its rails.
+    // Reload restores that latest local camera, not the pre-edit camera.
+    const personalCamera = await camera(alice);
+    await expect.poll(async () => Number(await alice.getByTestId('multiplayer-camera-writes').innerText())).toBeGreaterThan(writesBeforeEditing);
     await alice.reload(); await bob.reload();
     await ownChat(alice, 'Alice'); await ownChat(bob, 'Bob');
     await expect.poll(() => camera(alice)).toBe(personalCamera);

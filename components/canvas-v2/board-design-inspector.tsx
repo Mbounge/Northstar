@@ -8,17 +8,25 @@ import type { CanvasV2ManualMutation } from '@/lib/canvas-v2/manual-mutations';
 function Property({ label, value, disabled, positive, onCommit }: { label: string; value: number; disabled?: boolean; positive?: boolean; onCommit: (value: number) => void }) {
   const formatted = String(Math.round(value * 100) / 100);
   const [draft, setDraft] = useState(formatted);
-  useEffect(() => setDraft(formatted), [formatted]);
+  const dirty = useRef(false);
+  useEffect(() => {
+    if (disabled) dirty.current = false;
+    // Remote movement refreshes the accepted value, not a human's unfinished
+    // number. Escape still returns to that newest accepted position.
+    if (!dirty.current) setDraft(formatted);
+  }, [formatted, disabled]);
   const cancelled = useRef(false);
   const commit = () => {
     if(cancelled.current){cancelled.current=false;return;}
+    if (!dirty.current) return;
+    dirty.current = false;
     const next = Number(draft);
-    if (!draft.trim() || !Number.isFinite(next) || (positive && next <= 0)) { setDraft(formatted); return; }
+    if (disabled || !draft.trim() || !Number.isFinite(next) || (positive && next <= 0)) { setDraft(formatted); return; }
     if (next !== value) onCommit(next);
   };
   return <label className="flex h-9 items-center gap-3 rounded-lg bg-black/[.035] px-3 text-[11px] dark:bg-white/[.04]">
     <span className="w-4 shrink-0 text-[#968aa3]">{label}</span>
-    <input aria-label={`Object ${label}`} inputMode="decimal" value={draft} disabled={disabled} onChange={event => setDraft(event.target.value)} onBlur={commit} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { cancelled.current=true;setDraft(formatted); event.currentTarget.blur(); } }} className="min-w-0 w-full bg-transparent text-right tabular-nums outline-none disabled:opacity-40" />
+    <input aria-label={`Object ${label}`} inputMode="decimal" value={draft} disabled={disabled} onChange={event => { dirty.current = true; setDraft(event.target.value); }} onBlur={commit} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { cancelled.current=true;dirty.current=false;setDraft(formatted); event.currentTarget.blur(); } }} className="min-w-0 w-full bg-transparent text-right tabular-nums outline-none disabled:opacity-40" />
   </label>;
 }
 

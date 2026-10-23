@@ -7,6 +7,11 @@ const frameFor = (page: Page) => page.frameLocator(`iframe[title="${title}"]`);
 const row = (page: Page, selector: string) => page.getByRole('tree', { name: 'Editable layers' }).locator(`[data-layer-selector="${selector}"]`);
 const studio = (page: Page) => page.locator('[aria-label="Design studio controls"]');
 
+test.beforeEach(async ({ request }) => {
+  const response = await request.post('/canvas-v2-e2e/codex/agent', { data: { op: 'reset-fixture' } });
+  expect(response.ok()).toBe(true);
+});
+
 async function source(page: Page) {
   const encoded = await page.locator(`iframe[title="${title}"]`).evaluate(el => el.closest('[data-canvas-v2-screen]')!.getAttribute('data-canvas-v2-screen'));
   return JSON.parse(Buffer.from(encoded!, 'base64').toString('utf8')) as { html: string; css: string; javascript: string; width: number; height: number; design?: { styles: unknown[]; components: unknown[] } };
@@ -23,7 +28,7 @@ async function open(page: Page) {
   await page.getByRole('textbox', { name: 'Message North Star' }).fill('designer studio fixture');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByText('The designer studio fixture is ready.', { exact: true })).toBeVisible({ timeout: 60000 });
-  await page.getByRole('button', { name: 'Show on canvas', exact: true }).click();
+  await page.getByRole('button', { name: 'Show latest work on canvas', exact: true }).click();
   const frame = frameFor(page);
   await frame.locator('#draft').fill('Retain this human draft');
   await frame.locator('#save').click();
@@ -32,6 +37,19 @@ async function open(page: Page) {
   await page.getByTestId('canvas-v2-native-scene').getByText(title, { exact: true }).click();
   await expect(page.getByRole('button',{name:'Back to canvas',exact:true})).toBeVisible();
   return frame;
+}
+
+// Layer inspection is asynchronous. Wait for the new inspector before opening
+// a section; otherwise the click can target the outgoing layer's open section.
+async function selectLayer(page: Page, selector: string, add = false) {
+  const item = row(page, selector);
+  await item.click(add ? { modifiers: ['Meta'] } : undefined);
+  await expect(item).toHaveAttribute('aria-selected', 'true');
+  if (add) await expect(page.getByRole('complementary', { name: 'Selected layers', exact: true })).toBeVisible();
+  else {
+    const label = (await item.getAttribute('aria-label'))!.replace('Select layer ', '');
+    await expect(page.getByTestId('screen-inspector-header').getByRole('heading', { name: label, exact: true })).toBeVisible();
+  }
 }
 
 async function section(page: Page, name: string) {
@@ -77,8 +95,8 @@ test('focused Studio values drain behind an in-flight save before a source read,
 test('bulk edits, layer structure, lock failures and keyboard cancellation retain exact history and a running app', async ({ page }) => {
   test.setTimeout(180000);
   const frame = await open(page);
-  await row(page, '#label-one').click();
-  await row(page, '#label-two').click({ modifiers: ['Meta'] });
+  await selectLayer(page, '#label-one');
+  await selectLayer(page, '#label-two', true);
   const bulk = await section(page, 'Shared properties');
   await bulk.getByRole('textbox', { name: 'Shared font size', exact: true }).fill('30');
   await bulk.getByRole('textbox', { name: 'Shared font size', exact: true }).press('Tab');
@@ -96,7 +114,7 @@ test('bulk edits, layer structure, lock failures and keyboard cancellation retai
   await arrange.getByRole('spinbutton', { name: 'Move X by', exact: true }).fill('80');
   await arrange.getByRole('spinbutton', { name: 'Move X by', exact: true }).press('Escape');
   expect((await source(page)).html).toBe(beforeCancel.html);
-  await row(page, '#card-one').click();
+  await selectLayer(page, '#card-one');
   const layers = await section(page, 'Layer actions');
   await layers.getByRole('textbox', { name: 'Layer name', exact: true }).fill('Human card');
   await layers.getByRole('textbox', { name: 'Layer name', exact: true }).press('Tab');
@@ -104,8 +122,10 @@ test('bulk edits, layer structure, lock failures and keyboard cancellation retai
   await layers.getByRole('button', { name: 'Lock', exact: true }).click();
   await expect(frame.locator('#card-one')).toHaveAttribute('data-northstar-locked', 'true');
   const locked = await source(page);
+  const duplicateBeforeError = await layers.getByRole('button', { name: 'Duplicate', exact: true }).boundingBox();
   await layers.getByRole('button', { name: 'Duplicate', exact: true }).click();
   await expect(studio(page).getByRole('alert')).toContainText('Unlock');
+  expect((await layers.getByRole('button', { name: 'Duplicate', exact: true }).boundingBox())!.y).toBeCloseTo(duplicateBeforeError!.y, 0);
   expect((await source(page)).html).toBe(locked.html);
   await layers.getByRole('button', { name: 'Unlock', exact: true }).click();
   await layers.getByRole('button', { name: 'Duplicate', exact: true }).click();
@@ -116,8 +136,8 @@ test('bulk edits, layer structure, lock failures and keyboard cancellation retai
   await page.getByRole('button', { name: 'Redo canvas action', exact: true }).click();
   await expect(frame.locator('#card-one-copy')).toHaveCount(1);
   await expect(row(page, '#card-one-copy')).toHaveAttribute('aria-selected', 'true');
-  await row(page, '#card-one').click();
-  await row(page, '#card-one-copy').click({ modifiers: ['Meta'] });
+  await selectLayer(page, '#card-one');
+  await selectLayer(page, '#card-one-copy', true);
   await (await section(page, 'Layer actions')).getByRole('button', { name: 'Group', exact: true }).click();
   const grouped = page.getByRole('tree', { name: 'Editable layers' }).locator('[aria-selected="true"]');
   await expect(grouped).toHaveCount(1);
@@ -135,17 +155,17 @@ test('bulk edits, layer structure, lock failures and keyboard cancellation retai
 test('shared styles, responsive rules and component variants retain descendant identity and live closures', async ({ page }) => {
   test.setTimeout(180000);
   const frame = await open(page);
-  await row(page, '#label-one').click();
+  await selectLayer(page, '#label-one');
   const shared = await section(page, 'Shared styles');
   await shared.getByRole('textbox', { name: 'New style name', exact: true }).fill('Card typography');
   await shared.getByRole('button', { name: 'Save selected style', exact: true }).click();
-  await row(page, '#label-two').click();
+  await selectLayer(page, '#label-two');
   await (await section(page, 'Shared styles')).getByRole('button', { name: 'Use Card typography', exact: true }).click();
   await expect(frame.locator('#label-two')).toHaveAttribute('data-northstar-style', /style-/);
-  await row(page, '#card-grid').click();
+  await selectLayer(page, '#card-grid');
   await (await section(page, 'Responsive layout')).getByRole('button', { name: 'Stack vertically', exact: true }).click();
   await expect.poll(async () => (await source(page)).css).toContain('@media(max-width:640px)');
-  await row(page, '#card-one').click();
+  await selectLayer(page, '#card-one');
   const components = await section(page, 'Components & variants');
   await components.getByRole('textbox', { name: 'Component or variant name', exact: true }).fill('Note card');
   await components.getByRole('button', { name: 'Create component', exact: true }).click();
@@ -165,18 +185,18 @@ test('shared styles, responsive rules and component variants retain descendant i
 test('immediate Studio actions use the newest manual colour and a dirty draft stays with its original native layer', async ({ page }) => {
   test.setTimeout(180000);
   const frame = await open(page);
-  await row(page, '#label-one').click();
+  await selectLayer(page, '#label-one');
   const shared = await section(page, 'Shared styles');
   await shared.getByRole('textbox', { name: 'New style name', exact: true }).fill('Quick colour');
   await shared.getByRole('button', { name: 'Save selected style', exact: true }).click();
   for (const selector of ['#label-two', '#label-three']) {
-    await row(page, selector).click();
+    await selectLayer(page, selector);
     await (await section(page, 'Shared styles')).getByRole('button', { name: 'Use Quick colour', exact: true }).click();
   }
-  await row(page, '#label-two').click();
+  await selectLayer(page, '#label-two');
   await page.getByRole('textbox', { name: 'Text colour', exact: true }).fill('#CC5533');
   await page.getByRole('textbox', { name: 'Text colour', exact: true }).press('Tab');
-  await row(page, '#label-one').click();
+  await selectLayer(page, '#label-one');
   await section(page, 'Shared styles');
   await page.getByRole('textbox', { name: 'Text colour', exact: true }).fill('#228866');
   await page.getByRole('button', { name: 'Update Quick colour', exact: true }).click();
@@ -197,15 +217,18 @@ test('immediate Studio actions use the newest manual colour and a dirty draft st
   await page.getByRole('button', { name: /^Review 1 comments?$/ }).click();
   await expect(page.getByTestId('canvas-feedback-comments')).toContainText('Review only the currently selected second label.');
   await expect(page.getByTestId('canvas-feedback-comments').getByRole('img')).toHaveCount(1);
+  await expect(page.getByRole('textbox', { name: 'Message North Star' })).toHaveValue('');
+  // Chat deliberately makes the covered layer panel inert. Closing it must
+  // return to the same selection and its edited source.
+  await page.getByRole('button', { name: 'Collapse North Star panel', exact: true }).click();
   await expect(row(page, '#label-two')).toHaveAttribute('aria-selected', 'true');
   await expect(row(page, '#label-one')).toHaveAttribute('aria-selected', 'false');
-  await expect(page.getByRole('textbox', { name: 'Message North Star' })).toHaveValue('');
 });
 
 test('native transformed artwork moves in world coordinates and masks preserve the original image and crop', async ({ page }) => {
   test.setTimeout(180000);
   const frame = await open(page);
-  await row(page, '#curve-part').click();
+  await selectLayer(page, '#curve-part');
   const before = await frame.locator('#curve-part').evaluate(el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y }; });
   await (await section(page, 'Arrange')).getByRole('spinbutton', { name: 'Move X by', exact: true }).fill('20');
   await studio(page).getByRole('spinbutton', { name: 'Move X by', exact: true }).press('Tab');
@@ -216,7 +239,7 @@ test('native transformed artwork moves in world coordinates and masks preserve t
   await artwork.getByRole('spinbutton', { name: 'Path x 1', exact: true }).press('Tab');
   await expect.poll(() => frame.locator('#curve-part').getAttribute('d')).not.toBe(geometry);
   await expect(frame.locator('#studio-gradient')).toHaveCount(1);
-  await row(page, '#studio-photo').click();
+  await selectLayer(page, '#studio-photo');
   const image = await frame.locator('#studio-photo').evaluate(el => ({ src: el.getAttribute('src'), fit: getComputedStyle(el).objectFit, crop: getComputedStyle(el).objectPosition }));
   const imageArtwork = await section(page, 'Artwork');
   await imageArtwork.getByRole('button', { name: 'Image mask', exact: true }).click();
@@ -225,7 +248,7 @@ test('native transformed artwork moves in world coordinates and masks preserve t
   await imageArtwork.getByRole('button', { name: 'Image mask', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Original image', exact: true }).click();
   expect(await frame.locator('#studio-photo').evaluate(el => ({ src: el.getAttribute('src'), fit: getComputedStyle(el).objectFit, crop: getComputedStyle(el).objectPosition }))).toEqual(image);
-  await row(page, '#vector-photo').click();
+  await selectLayer(page, '#vector-photo');
   const originalClip = await frame.locator('#vector-photo').evaluate(el => getComputedStyle(el).clipPath);
   const svgImageArtwork = await section(page, 'Artwork');
   await svgImageArtwork.getByRole('button', { name: 'Image mask', exact: true }).click();
@@ -239,7 +262,7 @@ test('native transformed artwork moves in world coordinates and masks preserve t
 test('delivery downloads actual PNG, retained SVG and standalone HTML without changing the running screen', async ({ page }) => {
   test.setTimeout(180000);
   const frame = await open(page);
-  await row(page, '#vector-stage').click();
+  await selectLayer(page, '#vector-stage');
   const original = await source(page);
   const panel = await section(page, 'Export');
   const downloads: Record<string, Buffer> = {};

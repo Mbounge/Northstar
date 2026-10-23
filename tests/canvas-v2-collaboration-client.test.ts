@@ -156,6 +156,107 @@ test('undo refuses to overwrite a peers later edit to the same cell', async t =>
   assert.match(a.value.getStatus().error!, /overwrite|teammate/i);
 });
 
+for (const direction of ['undo', 'redo'] as const) {
+  test(`a server-rejected ${direction} preserves history so the author can retry after the reservation clears`, async t => {
+    const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+    await a.value.observe(revision('own-before-rejection', html.replace('First', 'My saved edit'))); await a.value.sync();
+    if (direction === 'redo') { await a.value.undo(); await a.value.sync(); }
+    const before = f.html();
+    f.faults.rejectNext = true;
+    assert.equal(await a.value[direction](), true); await a.value.sync();
+    assert.equal(f.html(), before); assert.equal(a.revision().document.html, before);
+    assert.equal(direction === 'undo' ? a.value.canUndo() : a.value.canRedo(), true, 'rejected history must remain available');
+    assert.equal(direction === 'undo' ? a.value.canRedo() : a.value.canUndo(), false, 'a rejected edit must not create inverse history');
+    assert.equal(await a.value[direction](), true); await a.value.sync();
+    assert.equal(f.html(), direction === 'undo' ? html : html.replace('First', 'My saved edit'));
+  });
+}
+
+test('rapid undo requests undo separate edits in order instead of submitting the same inverse twice', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  await a.value.observe(revision('rapid-first', html.replace('First', 'First edit'))); await a.value.sync();
+  await a.value.observe(revision('rapid-second', html.replace('First', 'First edit').replace('Second', 'Second edit'))); await a.value.sync();
+  assert.deepEqual(await Promise.all([a.value.undo(), a.value.undo()]), [true, true]); await a.value.sync();
+  assert.equal(f.html(), html); assert.equal(a.value.getStatus().recovery, undefined);
+  assert.equal(a.value.canUndo(), false);
+  await a.value.redo(); await a.value.sync(); await a.value.redo(); await a.value.sync();
+  assert.equal(f.html(), html.replace('First', 'First edit').replace('Second', 'Second edit'));
+});
+
+test('typing a new edit while undo is saving invalidates redo without losing author undo order', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  await a.value.observe(revision('original-before-undo', html.replace('First', 'Original edit'))); await a.value.sync();
+  const hold = f.hold('alice-tab');
+  await a.value.undo(); await hold.entered;
+  await a.value.observe({ ...revision('new-during-undo', html.replace('Second', 'New direction')), parentId: a.revision().id });
+  hold.release(); await a.value.sync();
+  assert.equal(f.html(), html.replace('Second', 'New direction'));
+  assert.equal(a.value.canRedo(), false, 'late undo acceptance must not revive discarded redo');
+  await a.value.undo(); await a.value.sync();
+  assert.equal(f.html(), html); assert.equal(a.value.canUndo(), false);
+});
+
+test('rapid redo requests restore separate accepted edits in order', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  await a.value.observe(revision('redo-first', html.replace('First', 'First edit'))); await a.value.sync();
+  await a.value.observe(revision('redo-second', html.replace('First', 'First edit').replace('Second', 'Second edit'))); await a.value.sync();
+  await a.value.undo(); await a.value.sync(); await a.value.undo(); await a.value.sync();
+  assert.deepEqual(await Promise.all([a.value.redo(), a.value.redo()]), [true, true]); await a.value.sync();
+  assert.equal(f.html(), html.replace('First', 'First edit').replace('Second', 'Second edit'));
+  assert.equal(a.value.getStatus().recovery, undefined); assert.equal(a.value.canRedo(), false);
+});
+
+test('ten collaborators converge through repeated concurrent edits and author-only undo redo with delayed delivery', async t => {
+  const f = room();
+  for (let i = 2; i < 10; i++) f.members.push({ userId: `designer-${i}`, name: `Designer ${i}`, role: 'editor' });
+  const a = await f.client('alice'), clients = [a];
+  t.after(() => { for (const client of clients) client.value.close(); });
+  const start = '<main data-canvas-v2-node-id="board">' + Array.from({ length: 10 }, (_, i) => `<p data-canvas-v2-node-id="design-${i}">Designer ${i} revision 0</p>`).join('') + '</main>';
+  await a.value.enable(revision('ten-person-board', start));
+  for (const id of ['bob', ...Array.from({ length: 8 }, (_, i) => `designer-${i + 2}`)]) clients.push(await f.client(id));
+  for (let round = 1; round <= 8; round++) {
+    const hold = f.hold(clients[round % 10].value.clientId);
+    await Promise.all(clients.map((client, i) => {
+      const before = client.revision();
+      return client.value.observe({ ...revision(`concurrent-${round}-${i}`, before.document.html.replace(`Designer ${i} revision ${round - 1}`, `Designer ${i} revision ${round}`)), parentId: before.id });
+    }));
+    await hold.entered; hold.release();
+    await Promise.all(clients.map(client => client.value.sync()));
+    // Each author can have read before another's last commit. Catch every
+    // client up to the accepted room before checking identical source bytes.
+    await Promise.all(clients.map(client => client.value.sync()));
+    for (const client of clients) {
+      assert.equal(client.revision().document.html, f.html());
+      assert.equal(client.value.getStatus().pending, 0); assert.equal(client.value.getStatus().recovery, undefined);
+    }
+    for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision ${round}`));
+  }
+  await Promise.all(clients.map(client => client.value.undo()));
+  await Promise.all(clients.map(client => client.value.sync())); await Promise.all(clients.map(client => client.value.sync()));
+  for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision 7`));
+  await Promise.all(clients.map(client => client.value.redo()));
+  await Promise.all(clients.map(client => client.value.sync())); await Promise.all(clients.map(client => client.value.sync()));
+  for (const client of clients) { assert.equal(client.revision().document.html, f.html()); assert.equal(client.value.getStatus().recovery, undefined); }
+  for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision 8`));
+  assert.equal(f.log.length, 100);
+});
+
+for (const direction of ['undo', 'redo'] as const) {
+  test(`a lost ${direction} acknowledgement moves history exactly once on reconnect`, async t => {
+    const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+    await a.value.observe(revision('before-history-ack-loss', html.replace('First', 'My saved edit'))); await a.value.sync();
+    if (direction === 'redo') { await a.value.undo(); await a.value.sync(); }
+    f.faults.loseNextAck = true;
+    await a.value[direction](); await a.value.sync();
+    assert.equal(a.value.getStatus().phase, 'reconnecting'); assert.equal(a.value.getStatus().pending, 1);
+    const acceptedCount = f.log.length;
+    await a.value.sync(); assert.equal(f.log.length, acceptedCount); assert.equal(a.value.getStatus().pending, 0);
+    assert.equal(direction === 'undo' ? a.value.canRedo() : a.value.canUndo(), true);
+    await a.value[direction === 'undo' ? 'redo' : 'undo'](); await a.value.sync();
+    assert.equal(f.html(), direction === 'undo' ? html.replace('First', 'My saved edit') : html);
+  });
+}
+
 test('viewer changes do not enter the durable queue and local UI fields never enter operations', async t => {
   const f = room(), viewer = await f.client('viewer'), a = await f.client('alice'); t.after(() => { viewer.value.close(); a.value.close(); });
   await viewer.value.observe(revision('forbidden', html.replace('First', 'Viewer edit'))); await viewer.value.sync(); assert.equal(f.log.length, 0); assert.equal(viewer.value.getStatus().pending, 0);
