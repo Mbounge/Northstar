@@ -1725,6 +1725,23 @@ test("crop frames retain exact image bytes and provenance while persisting compo
   assert.throws(() => applyCanvasV2NativeSceneMutation(source, { kind: "image-crop", nodeId: "note", x: 0, y: 0, zoom: 2 }), /analysis copy/);
 });
 
+test("replacing cropped upload pixels clears old retained identity without changing its crop", () => {
+  const source = scene();
+  Object.assign(source.nodes[0], { kind: "image", tagName: "img", evidence: { id: "old-photo" } });
+  Object.assign(source.nodes[0].attributes, { src: "blob:old", "data-canvas-v2-local-image": "true", "data-canvas-v2-evidence-id": "old-photo" });
+  const cropped = applyCanvasV2NativeSceneMutation(source, { kind: "image-crop", nodeId: "note", x: 75, y: 20, zoom: 2 });
+  const before = cropped.nodes.find(node => node.tagName === "img")!;
+  const replaced = applyCanvasV2NativeSceneMutation(cropped, { kind: "image-source", nodeId: "note", src: "blob:new", alt: "New photo" });
+  const after = replaced.nodes.find(node => node.tagName === "img")!;
+  assert.equal(after.attributes.src, "blob:new");
+  assert.equal(after.evidence, undefined);
+  assert.equal(replaced.nodes[0].evidence, undefined);
+  assert.ok(replaced.nodes.every(node => node.attributes["data-canvas-v2-evidence-id"] === undefined));
+  assert.deepEqual(after.inlineStyle, before.inlineStyle);
+  assert.deepEqual(replaced.nodes[0].geometry, cropped.nodes[0].geometry);
+  assert.equal(before.attributes.src, "blob:old");
+});
+
 test("connector labels remain native SVG text after endpoint movement", () => {
   let connected = applyCanvasV2NativeSceneMutation(scene(), { kind: "create", primitive: "connector", nodeId: "connector", x: 100, y: 100, endX: 400, endY: 100 });
   connected = applyCanvasV2NativeSceneMutation(connected, { kind: "connector-label", nodeId: "connector", text: "Validates" });

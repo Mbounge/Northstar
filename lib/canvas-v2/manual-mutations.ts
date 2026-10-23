@@ -402,6 +402,10 @@ export function applyCanvasV2ManualMutation(
   } else if (mutation.kind === "image-source") {
     if (element.tagName !== "IMG" || element.dataset.canvasV2LocalImage !== "true") throw new Error("Replace is available only for a user image object.");
     element.setAttribute("src", safeLocalImageSource(mutation.src));
+    // A new upload is not the retained asset previously bound to this node.
+    element.removeAttribute("data-canvas-v2-evidence-id");
+    element.removeAttribute("data-canvas-v2-evidence-role");
+    element.removeAttribute("data-canvas-v2-source-node-id");
     if (mutation.alt !== undefined) element.setAttribute("alt", mutation.alt.trim().slice(0, 500));
     markUserEdit(element, mutation.kind);
   } else if (mutation.kind === "connector-endpoint") {

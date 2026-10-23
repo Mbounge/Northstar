@@ -3442,6 +3442,14 @@ function applyAtomicNativeMutation(
     if (node.kind !== "image" || node.attributes["data-canvas-v2-local-image"] !== "true") throw new Error("Replace is available only for a user image object.");
     const imageTarget = node.attributes["data-canvas-v2-crop-frame"] === "true" ? scene.nodes.find((item) => node.childIds.includes(item.id) && item.tagName === "img") ?? node : node;
     imageTarget.attributes.src = mutation.src;
+    delete imageTarget.attributes['data-canvas-v2-evidence-id'];
+    delete imageTarget.attributes['data-canvas-v2-evidence-role'];
+    delete imageTarget.attributes['data-canvas-v2-source-node-id'];
+    delete imageTarget.evidence;
+    delete node.attributes['data-canvas-v2-evidence-id'];
+    delete node.attributes['data-canvas-v2-evidence-role'];
+    delete node.attributes['data-canvas-v2-source-node-id'];
+    delete node.evidence;
     if (mutation.alt !== undefined) node.attributes.alt = mutation.alt;
   } else if (mutation.kind === "connector-endpoint") {
     if (node.kind !== "connector") throw new Error("Endpoints are available only for a connector object.");

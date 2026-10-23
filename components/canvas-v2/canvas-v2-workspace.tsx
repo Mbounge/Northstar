@@ -2573,10 +2573,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           : selectedElements.map((item) => item.nodeId);
       const accepted = engine.applyManualDocument(document, describeCanvasV2ManualMutation(mutation), undefined, nextNativeScene, {
         // Model turns must retain their grounded sources. An explicit human
-        // delete is different: user ownership wins, including for a canonical
-        // screenshot or an entire selected set of screenshots.
-        allowEvidenceRemoval: mutation.kind === "delete"
-          || (mutation.kind === "batch" && mutation.mutations.some((item) => item.kind === "delete")),
+        // delete or image replacement is different: user ownership wins.
+        // Replacing uploaded pixels must also release the old evidence binding.
+        allowEvidenceRemoval: atomicMutations.some(item => item.kind === 'delete' || item.kind === 'image-source'),
         selectionNodeIds: historySelectionNodeIds,
         fastNativeTransaction: Boolean(nextNativeScene && geometryOnly),
       });

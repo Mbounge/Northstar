@@ -193,6 +193,10 @@ test("distribution, paste and image replacement primitives remain atomic native 
     src: "blob:first",
     alt: "First",
   });
+  const original = image.nodes.find(candidate => candidate.sourceNodeId === 'local-image')!;
+  original.attributes['data-canvas-v2-evidence-id'] = 'previous-generated-photo';
+  original.evidence = { id: 'previous-generated-photo' };
+  const geometry = { ...original.geometry };
   const replaced = applyCanvasV2NativeSceneMutation(image, {
     kind: "image-source",
     nodeId: "local-image",
@@ -202,5 +206,9 @@ test("distribution, paste and image replacement primitives remain atomic native 
   const node = replaced.nodes.find((candidate) => candidate.sourceNodeId === "local-image")!;
   assert.equal(node.attributes.src, "blob:replacement");
   assert.equal(node.attributes.alt, "Replacement");
+  assert.equal(node.attributes['data-canvas-v2-evidence-id'], undefined);
+  assert.equal(node.evidence, undefined, 'replacement pixels cannot keep the previous retained asset identity');
+  assert.deepEqual(node.geometry, geometry);
+  assert.equal(original.evidence?.id, 'previous-generated-photo', 'the prior scene remains available for Undo');
   assert.match(node.attributes["data-canvas-v2-user-edited"], /image-source/);
 });
