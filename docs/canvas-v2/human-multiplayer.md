@@ -57,7 +57,11 @@ opening a room, but the tab must remain open while edits are unsaved.
 Recovery retains the whole queued human branch across multiple conflicts and
 reloads, including exact field deltas when structural changes prevent rendering.
 Earlier revision-only recovery branches remain in the downloaded recovery file.
-Failed local journal writes retry even when no new edit occurs. Authoritative
+Failed local journal writes retry even when no new edit occurs. Journal checkpoints
+are serialized, including recovery dismissal, so a slower earlier write cannot
+replace the newest branch. Closing a client cancels late startup/catch-up
+delivery and prevents subscriptions from restarting; already-requested recovery
+checkpoints still finish. Authoritative
 roster refreshes update editor/viewer controls while preserving room ownership.
 An open human edit pins its actual source basis independently of the bounded
 peer-history cache. If an explicit parent is unavailable, the edit is retained

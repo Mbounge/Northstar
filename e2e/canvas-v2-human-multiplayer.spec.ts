@@ -519,7 +519,7 @@ test('repeated mixed multiplayer editing reconnects and releases held drags with
   await b.getByRole('textbox',{name:'Your draft',exact:true}).fill('Bob private runtime input');
   await a.getByRole('button',{name:'Save draft',exact:true}).click();await b.getByRole('button',{name:'Save draft',exact:true}).click();
   await design(alice);await design(bob);
-  for(let round=0;round<8;round++){
+  for(let round=0;round<20;round++){
    if(round%2===1)await bob.getByRole('button',{name:'Disconnect fixture network',exact:true}).click();
    await Promise.all([editNote(alice,'note-alice','Alice round '+round),editNote(bob,'note-bob','Bob round '+round)]);
    if(round%2===1)await bob.getByRole('button',{name:'Reconnect fixture network',exact:true}).click();
@@ -536,7 +536,7 @@ test('repeated mixed multiplayer editing reconnects and releases held drags with
    await expect(object(bob,'note-alice')).toHaveText('Alice round '+round);
    const rect=await object(alice,'note-alice').boundingBox();expect(rect).not.toBeNull();
    await alice.mouse.move(rect!.x+rect!.width/2,rect!.y+rect!.height/2);await alice.mouse.down();
-   await alice.mouse.move(rect!.x+rect!.width/2+18,rect!.y+rect!.height/2+8,{steps:5});await alice.mouse.up();
+   await alice.mouse.move(rect!.x+rect!.width/2+(round%2===0?18:-18),rect!.y+rect!.height/2+(round%2===0?8:-8),{steps:5});await alice.mouse.up();
    await waitSaved(alice);
    // Source geometry is rounded to hundredths; transient presence offsets
    // can retain sub-hundredth rounding residue. Compare at source precision.
@@ -549,7 +549,7 @@ test('repeated mixed multiplayer editing reconnects and releases held drags with
    await expect(a.locator('#status')).toHaveText('Saved 1 · Alice private runtime input');
    await expect(b.locator('#status')).toHaveText('Saved 1 · Bob private runtime input');
   }
-  await bob.reload();await expect(object(bob,'note-alice')).toHaveText('Alice round 7');await expect(object(bob,'note-bob')).toHaveText('Bob round 7');
-  await info.attach('Mixed workflow receipt',{body:JSON.stringify({rounds:8,alice:await state(alice),bob:await state(bob)}),contentType:'application/json'});
+  await bob.reload();await expect(object(bob,'note-alice')).toHaveText('Alice round 19');await expect(object(bob,'note-bob')).toHaveText('Bob round 19');
+  await info.attach('Mixed workflow receipt',{body:JSON.stringify({rounds:20,alice:await state(alice),bob:await state(bob)}),contentType:'application/json'});
  }finally{await alice.close();await bob.close();}
 });

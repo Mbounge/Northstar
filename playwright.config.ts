@@ -14,7 +14,9 @@ export default defineConfig({
   },
   webServer: {
     command: "npm run dev -- --webpack --hostname 127.0.0.1 --port 3100",
-    url: "http://127.0.0.1:3100/__northstar-e2e",
+    // Warm the active canvas route. The legacy underscore-prefixed folder is
+    // not a public App Router route and falls through to the old dashboard.
+    url: "http://127.0.0.1:3100/canvas-v2-e2e",
     reuseExistingServer: false,
     timeout: 120_000,
     env: {

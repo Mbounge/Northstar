@@ -57,7 +57,7 @@ function room() {
     return { value, revision: () => value.getRevision() ?? current, journal: () => journal };
   };
   const hold = (clientId: string) => { const gate = deferred(), start = deferred(); gates.set(clientId, gate); entered.set(clientId, start); return { entered: start.promise, release() { gates.delete(clientId); gate.resolve(); } }; };
-  return { client, faults, hold, calls, commits, log, presence, seeds, members, signals, document: () => revisionFromSharedCells(cells, seed, 'server').document, html: () => revisionFromSharedCells(cells, seed, 'server').document.html };
+  return { client, transport, faults, hold, calls, commits, log, presence, seeds, members, signals, document: () => revisionFromSharedCells(cells, seed, 'server').document, html: () => revisionFromSharedCells(cells, seed, 'server').document.html };
 }
 
 test('two optimistic disjoint edits converge after delayed delivery without overwriting either object', async t => {
@@ -214,7 +214,7 @@ test('ten collaborators converge through repeated concurrent edits and author-on
   const start = '<main data-canvas-v2-node-id="board">' + Array.from({ length: 10 }, (_, i) => `<p data-canvas-v2-node-id="design-${i}">Designer ${i} revision 0</p>`).join('') + '</main>';
   await a.value.enable(revision('ten-person-board', start));
   for (const id of ['bob', ...Array.from({ length: 8 }, (_, i) => `designer-${i + 2}`)]) clients.push(await f.client(id));
-  for (let round = 1; round <= 8; round++) {
+  for (let round = 1; round <= 40; round++) {
     const hold = f.hold(clients[round % 10].value.clientId);
     await Promise.all(clients.map((client, i) => {
       const before = client.revision();
@@ -233,12 +233,12 @@ test('ten collaborators converge through repeated concurrent edits and author-on
   }
   await Promise.all(clients.map(client => client.value.undo()));
   await Promise.all(clients.map(client => client.value.sync())); await Promise.all(clients.map(client => client.value.sync()));
-  for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision 7`));
+  for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision 39`));
   await Promise.all(clients.map(client => client.value.redo()));
   await Promise.all(clients.map(client => client.value.sync())); await Promise.all(clients.map(client => client.value.sync()));
   for (const client of clients) { assert.equal(client.revision().document.html, f.html()); assert.equal(client.value.getStatus().recovery, undefined); }
-  for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision 8`));
-  assert.equal(f.log.length, 100);
+  for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision 40`));
+  assert.equal(f.log.length, 420);
 });
 
 for (const direction of ['undo', 'redo'] as const) {
@@ -743,4 +743,91 @@ test('rapid queued manual revisions resolve their real parent chain before eithe
   assert.equal(f.html(), second.document.html); assert.equal(f.log.length, 2); assert.equal(a.value.getStatus().pending, 0);
   assert.equal(await a.value.undo(), true); await a.value.sync(); assert.equal(f.html(), first.document.html);
   assert.equal(await a.value.undo(), true); await a.value.sync(); assert.equal(f.html(), html);
+});
+
+
+test('a delayed recovery checkpoint cannot overwrite a newer retained branch', async t => {
+  const f = room(), gate = deferred();
+  let durable: CollaborationJournal | undefined, held = false;
+  const client = new CanvasCollaborationClient({ clientId: 'alice-tab', userId: 'alice', name: 'Alice', transport: f.transport('alice'),
+    saveJournal: async value => {
+      const snapshot = structuredClone(value);
+      if (snapshot.recovery?.revision.id === 'older-recovery') { held = true; await gate.promise; }
+      durable = snapshot;
+    },
+  });
+  t.after(() => { gate.resolve(); client.close(); });
+  await client.connect(); await client.sync();
+  client.retainLocalRevision(revision('older-recovery', html.replace('First', 'Older unsaved idea')), 'Older');
+  await turn(); assert.equal(held, true);
+  client.retainLocalRevision(revision('newer-recovery', html.replace('Second', 'Newest unsaved idea')), 'Newest');
+  await turn(); gate.resolve(); await turn(); await turn();
+  assert.equal(durable?.recovery?.revision.id, 'newer-recovery');
+  assert.ok(JSON.stringify(durable).includes('Older unsaved idea'));
+  assert.ok(JSON.stringify(durable).includes('Newest unsaved idea'));
+});
+
+test('dismissing recovery while its checkpoint is in flight does not restore it on reload', async t => {
+  const f = room(), gate = deferred(); let durable: CollaborationJournal | undefined;
+  const client = new CanvasCollaborationClient({ clientId: 'alice-tab', userId: 'alice', name: 'Alice', transport: f.transport('alice'),
+    saveJournal: async value => {
+      const snapshot = structuredClone(value);
+      if (snapshot.recovery) await gate.promise;
+      durable = snapshot;
+    },
+  });
+  t.after(() => { gate.resolve(); client.close(); });
+  await client.connect(); await client.sync();
+  client.retainLocalRevision(revision('dismiss-me'), 'Old recovery'); await turn();
+  client.dismissRecovery(); await turn(); gate.resolve(); await turn(); await turn();
+  assert.equal(durable?.recovery, undefined);
+});
+
+for (const stage of ['room', 'journal'] as const) {
+  test(`closing during a delayed ${stage} read cannot revive the old canvas connection`, async t => {
+    const f = room(), gate = deferred(), entered = deferred(), transport = f.transport('alice');
+    if (stage === 'room') { const read = transport.read; transport.read = async () => { entered.resolve(); await gate.promise; return read(); }; }
+    const client = new CanvasCollaborationClient({ clientId: 'closed-tab', userId: 'alice', name: 'Alice', transport,
+      loadJournal: async () => { if (stage === 'journal') { entered.resolve(); await gate.promise; } return undefined; },
+    });
+    t.after(() => { gate.resolve(); client.close(); });
+    let emitted = 0; client.subscribeRevision(() => emitted++);
+    const connecting = client.connect(); await entered.promise; client.close(); gate.resolve(); await connecting;
+    assert.equal(f.signals.size, 0, 'closed canvas must not subscribe again');
+    assert.equal(emitted, 0, 'closed canvas must not deliver a late document');
+    assert.equal(client.getStatus().phase, 'off');
+  });
+}
+
+test('closing during catch-up ignores a late peer document without discarding the local offline journal', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob'), gate = deferred(), entered = deferred();
+  t.after(() => { gate.resolve(); a.value.close(); b.value.close(); });
+  f.faults.offline = true;
+  await a.value.observe(revision('offline-before-navigation', html.replace('First', 'Unsent before navigation'))); await a.value.sync();
+  f.faults.offline = false;
+  await b.value.observe(revision('late-peer-update', html.replace('Second', 'Peer update during navigation'))); await b.value.sync();
+  const since = a.value.transport.since;
+  a.value.transport.since = async version => { entered.resolve(); await gate.promise; return since(version); };
+  let emitted = 0; a.value.subscribeRevision(() => emitted++);
+  const syncing = a.value.sync(); await entered.promise; a.value.close(); gate.resolve(); await syncing;
+  assert.equal(emitted, 0);
+  assert.equal(a.journal()?.pending.length, 1);
+  assert.ok(JSON.stringify(a.journal()).includes('Unsent before navigation'));
+  assert.equal(await a.value.connect(), false, 'a closed client cannot be reused by a stale effect');
+  const reopened = await f.client('alice', { journal: a.journal() }); t.after(() => reopened.value.close());
+  assert.equal(reopened.revision().document.html, html.replace('First', 'Unsent before navigation').replace('Second', 'Peer update during navigation'));
+  assert.equal(reopened.value.getStatus().pending, 0);
+});
+
+test('closing still drains the latest already-requested recovery checkpoint', async t => {
+  const f = room(), gate = deferred(); let durable: CollaborationJournal | undefined;
+  const client = new CanvasCollaborationClient({ clientId: 'alice-tab', userId: 'alice', name: 'Alice', transport: f.transport('alice'),
+    saveJournal: async value => { if (value.recovery) await gate.promise; durable = structuredClone(value); },
+  });
+  t.after(() => { gate.resolve(); client.close(); });
+  await client.connect(); await client.sync();
+  client.retainLocalRevision(revision('navigation-first'), 'First'); await turn();
+  client.retainLocalRevision(revision('navigation-final'), 'Final');
+  client.close(); gate.resolve(); await turn(); await turn();
+  assert.equal(durable?.recovery?.revision.id, 'navigation-final');
 });

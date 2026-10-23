@@ -97,6 +97,7 @@ export class CanvasCollaborationClient {
   private claimPump?: Promise<void>;
   private claimBusy: string[] = [];
   private journalSignature?: string;
+  private journalQueue = Promise.resolve();
   constructor(private options: { clientId: string; userId: string; name: string; transport: CollaborationTransport; saveJournal?: (journal: CollaborationJournal) => Promise<void>; loadJournal?: () => Promise<CollaborationJournal | undefined> }) {
     this.clientId = options.clientId; this.userId = options.userId; this.transport = options.transport;
     this.local = { clientId: this.clientId, userId: this.userId, name: options.name.slice(0, 48) || 'Teammate', sequence: 0, cursor: null, selection: [], mode: 'preview', activity: 'viewing', at: Date.now() };
@@ -118,29 +119,40 @@ export class CanvasCollaborationClient {
     if (same) return;
     this.status = status; for (const listener of this.listeners) listener();
   }
-  private async journal() {
-    const signature=this.pending.map(operation=>operation.id).join('|')+':'+(this.status.recovery?.revision.id??'');
-    if(signature===this.journalSignature)return;
-    try { await this.options.saveJournal?.({ pending: this.pending.map(op => ({ ...op, changes: op.changes.map(change => ({ ...change })) })), recovery: this.status.recovery }); this.journalSignature=signature; }
-    catch { this.update({ error: 'Your changes are in memory, but local recovery storage is unavailable. Keep this tab open until they are saved.' }); }
+  private journal(): Promise<void> {
+    const signature = this.pending.map(operation => operation.id).join('|') + ':' + (this.status.recovery?.revision.id ?? '');
+    const snapshot = { pending: this.pending.map(op => ({ ...op, changes: op.changes.map(change => ({ ...change })) })), recovery: this.status.recovery };
+    // IndexedDB opening and writes can finish out of order. Serialize the
+    // snapshots, including clears, so an older checkpoint cannot resurrect
+    // dismissed recovery or replace a newer unsaved branch on reload.
+    this.journalQueue = this.journalQueue.then(async () => {
+      if (signature === this.journalSignature) return;
+      try { await this.options.saveJournal?.(snapshot); this.journalSignature = signature; }
+      catch { this.update({ error: 'Your changes are in memory, but local recovery storage is unavailable. Keep this tab open until they are saved.' }); }
+    });
+    return this.journalQueue;
   }
   async connect(): Promise<boolean> {
-    const room = await this.transport.read(); if (!room) return false;
-    await this.start(room); return true;
+    if (this.closed) return false;
+    const room = await this.transport.read(); if (!room || this.closed) return false;
+    await this.start(room); return !this.closed;
   }
   async enable(revision: CanvasV2ArtifactRevision) {
+    if (this.closed) return;
     revision = { ...revision, document: normalizeCanvasV2NativeGeometryDocument(revision.document) };
     const seed: CanvasV2ArtifactRevision = { schema: revision.schema, id: revision.id, state: 'committed', createdAt: revision.createdAt, document: { html: '', css: '' }, evidence: [] };
     const room = await this.transport.enable(sharedCellsFromRevision(revision), seed);
     await this.start(room, revision);
   }
   private async start(room: SharedRoom, existing?: CanvasV2ArtifactRevision) {
+    if (this.closed) return;
     this.accepted = new Map(room.cells); this.visible = new Map(room.cells); this.version = room.version;
     this.revision = existing ?? room.seed; this.pending = [];
     if (existing) this.material.set(existing.id, new Map(room.cells));
     let saved: CollaborationJournal | undefined;
     try { saved = await this.options.loadJournal?.(); }
     catch { this.update({ error: "Local recovery storage is unavailable. Keep this tab open until your edits are saved." }); }
+    if (this.closed) return;
     this.pending = saved?.pending.filter(op => op.clientId === this.clientId) ?? [];
     // A response may have been lost immediately before reload. Replaying the
     // same operation identity asks the durable log for its original receipt;
@@ -150,17 +162,20 @@ export class CanvasCollaborationClient {
       for (const operation of [...this.pending]) {
         try {
           const result = await this.transport.commit(operation);
+          if (this.closed) return;
           if (!result.ok) break;
           this.pending = this.pending.filter(item => item.id !== operation.id); acknowledged = true;
         } catch { break; }
       }
       if (acknowledged) {
         const latest = await this.transport.read();
+        if (this.closed) return;
         if (latest) { room = latest; this.accepted = new Map(room.cells); this.visible = new Map(room.cells); this.version = room.version; }
       }
     }
     this.update({ phase: 'connecting', role: room.role, members: room.members, recovery: saved?.recovery });
     await this.rebase(true);
+    if (this.closed) return;
     this.watchStop?.();
     this.watchStop = this.transport.watch(this.clientId, event => {
       if (event.kind === 'changed') { void this.sync(); return; }
@@ -189,6 +204,7 @@ export class CanvasCollaborationClient {
     this.lastMembers = Date.now();
     try {
       const members = await this.transport.members();
+      if (this.closed) return;
       const same = members.length === this.status.members.length && members.every(member => this.status.members.some(previous => previous.userId === member.userId && previous.name === member.name && previous.role === member.role));
       // Owner authority comes from the room read, not its editor membership
       // row. Other users must adopt role changes before another edit queues.
@@ -245,7 +261,7 @@ export class CanvasCollaborationClient {
   }
   private remember(id: string, cells?: SharedCells) { this.known.add(id); if (cells) this.material.set(id, cells); if (this.known.size > 300) this.known.delete(this.known.values().next().value!); if (this.material.size > 20) this.material.delete(this.material.keys().next().value!); }
   private emitRevision(cells: SharedCells) {
-    if (!this.revision) return;
+    if (!this.revision || this.closed) return;
     const revision = revisionFromSharedCells(cells, this.revision, `collab-${this.version}-${crypto.randomUUID()}`);
     this.revision = revision; this.remember(revision.id, cells);
     for (const listener of this.revisionListeners) listener(revision);
@@ -298,6 +314,7 @@ export class CanvasCollaborationClient {
         await this.observing;
         for (let round = 0; round < 30 && !this.closed; round++) {
           const operations = await this.transport.since(this.version);
+          if (this.closed) return;
           for (const operation of operations) {
             if (operation.version <= this.version) continue;
             if (operation.version !== this.version + 1) throw new Error('The connection is catching up.');
