@@ -76,7 +76,7 @@ type FixtureBundle = { client: CanvasCollaborationClient; snapshot: NorthstarSna
 
 /** Isolated HTTP peers use the exact production client and workspace. The
  * explicit Alice/Bob/Quinn identities test behavior, never real-account auth. */
-export function HumanMultiplayerFixture({ room, peer, device = 'first', personal = false }: { room: string; peer: FixturePeer; device?: string; personal?: boolean }) {
+export function HumanMultiplayerFixture({ room, peer, device = 'first', personal = false, legacyAuthoring = false }: { room: string; peer: FixturePeer; device?: string; personal?: boolean; legacyAuthoring?: boolean }) {
   const [bundle, setBundle] = useState<FixtureBundle>();
   const [error, setError] = useState(''), [online, setOnline] = useState(true), [receipt, setReceipt] = useState('');
   const [privateReceipt, setPrivateReceipt] = useState('');
@@ -135,8 +135,8 @@ export function HumanMultiplayerFixture({ room, peer, device = 'first', personal
         if (!cameraTimer.current) cameraTimer.current = setTimeout(() => { cameraTimer.current = undefined; const current = latest.current;
           if (current) void bundle.view.writeCamera(current.viewport).then(() => { cameraWrites.current++; if (cameraOutput.current) cameraOutput.current.textContent = String(cameraWrites.current); });
         }, 900);
-      }} accountEndpoint="/canvas-v2-e2e/codex/account" agentEndpoint="/canvas-v2-e2e/human-multiplayer/api" designEndpoint="/canvas-v2-e2e/human-multiplayer/api" researchEndpoint="/canvas-v2-e2e/human-multiplayer/api" routerEndpoint="/canvas-v2-e2e/human-multiplayer/api" />
-  </Profiler>, [bundle, room]);
+      }} accountEndpoint="/canvas-v2-e2e/codex/account" agentEndpoint={legacyAuthoring ? undefined : '/canvas-v2-e2e/human-multiplayer/api'} designEndpoint="/canvas-v2-e2e/human-multiplayer/api" researchEndpoint="/canvas-v2-e2e/human-multiplayer/api" routerEndpoint="/canvas-v2-e2e/human-multiplayer/api" />
+  </Profiler>, [bundle, room, legacyAuthoring]);
   const reconnect = async () => {
     if (!bundle) return;
     bundle.http.setOnline(!online); setOnline(!online);

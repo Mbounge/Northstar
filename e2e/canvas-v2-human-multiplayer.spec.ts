@@ -15,10 +15,10 @@ const geometry = (page: Page, id: string) => object(page, id).evaluate(element =
 });
 test.use({ viewport: { width: 1512, height: 790 } });
 
-async function openPeer(context: BrowserContext, room: string, peer: 'alice' | 'bob' | 'quinn', prepare?: (page:Page)=>Promise<unknown>) {
+async function openPeer(context: BrowserContext, room: string, peer: 'alice' | 'bob' | 'quinn', prepare?: (page:Page)=>Promise<unknown>, authoring?: 'legacy') {
   const page = await context.newPage();
   await prepare?.(page);
-  await page.goto(`/canvas-v2-e2e/human-multiplayer?room=${room}&peer=${peer}&hardening=1`);
+  await page.goto(`/canvas-v2-e2e/human-multiplayer?room=${room}&peer=${peer}&hardening=1${authoring ? `&authoring=${authoring}` : ''}`);
   await expect.poll(async () => (await state(page)).phase).toBe('live');
   await expect(object(page, 'note-alice')).toBeVisible();
   await expect(page.frameLocator('iframe[title="Shared journal A"]').getByRole('button', { name: 'Save draft', exact: true })).toBeVisible();
@@ -552,4 +552,66 @@ test('repeated mixed multiplayer editing reconnects and releases held drags with
   await bob.reload();await expect(object(bob,'note-alice')).toHaveText('Alice round 19');await expect(object(bob,'note-bob')).toHaveText('Bob round 19');
   await info.attach('Mixed workflow receipt',{body:JSON.stringify({rounds:20,alice:await state(alice),bob:await state(bob)}),contentType:'application/json'});
  }finally{await alice.close();await bob.close();}
+});
+
+test('an AI response prepared before a teammate reconnects preserves the offline human edit and private runtime', async ({ context }, info) => {
+ test.setTimeout(120_000);
+ let releaseDesign!: () => void;
+ const held = new Promise<void>(resolve => { releaseDesign = resolve; });
+ let designRequests = 0;
+ const designParents: string[] = [];
+ const room = 'ai-reconnect-' + randomUUID();
+ const alice = await openPeer(context, room, 'alice', async page => {
+  // Compile the deterministic model before either fixture has human work.
+  for (const endpoint of ['route', 'research', 'design']) expect((await page.request.get(`/canvas-v2-e2e/${endpoint}`)).status()).toBe(405);
+  await page.route('**/canvas-v2-e2e/human-multiplayer/api', async route => {
+   const body = route.request().postDataJSON();
+   if (body.room) { await route.continue(); return; }
+   const isDesign = Boolean(body.run);
+   if (isDesign) designParents.push(body.revision.id);
+   if (isDesign && ++designRequests === 1) { await held; }
+   const endpoint = isDesign ? 'design' : 'route';
+   const response = await route.fetch({ url: new URL(`/canvas-v2-e2e/${endpoint}`, route.request().url()).toString() });
+   await route.fulfill({ response });
+  });
+ }, 'legacy');
+ const bob = await openPeer(context, room, 'bob');
+ try {
+  const a = alice.frameLocator('iframe[title="Shared journal A"]'), b = bob.frameLocator('iframe[title="Shared journal A"]');
+  await a.getByRole('textbox', { name: 'Your draft', exact: true }).fill('Alice private input during AI edit');
+  await b.getByRole('textbox', { name: 'Your draft', exact: true }).fill('Bob private input during AI edit');
+  await a.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await b.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await design(alice); await object(alice, 'note-alice').click();
+  await alice.getByRole('button', { name: 'Open North Star panel', exact: true }).click();
+  await alice.getByRole('textbox', { name: 'Message North Star', exact: true }).fill('Exercise collaboration continuation closure');
+  await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => designRequests, { timeout: 60_000 }).toBeGreaterThan(0);
+  await bob.getByRole('button', { name: 'Disconnect fixture network', exact: true }).click();
+  await editNote(bob, 'note-bob', 'Human edit created offline while AI was preparing');
+  await bob.getByRole('button', { name: 'Reconnect fixture network', exact: true }).click();
+  await waitSaved(bob);
+  await expect(object(alice, 'note-bob')).toHaveText('Human edit created offline while AI was preparing');
+  // The held response still contains its original pre-reconnect parent.
+  // The engine must reread shared truth before accepting its authored result.
+  releaseDesign();
+  await expect(object(alice, 'note-alice')).toHaveText('Northstar partial draft.', { timeout: 60_000 });
+  await expect(alice.getByTestId('canvas-v2-loop-status')).toContainText('completed', { timeout: 60_000 });
+  expect(designRequests).toBeGreaterThanOrEqual(3);
+  expect(designParents[1]).not.toBe(designParents[0]);
+  for (const page of [alice, bob]) {
+   await waitSaved(page);
+   await expect(object(page, 'note-alice')).toHaveText('Northstar partial draft.');
+   await expect(object(page, 'note-bob')).toHaveText('Human edit created offline while AI was preparing');
+   await expect(page.getByRole('button', { name: 'Retry preview', exact: true })).toHaveCount(0);
+  }
+  await expect(a.getByRole('textbox', { name: 'Your draft', exact: true })).toHaveValue('Alice private input during AI edit');
+  await expect(b.getByRole('textbox', { name: 'Your draft', exact: true })).toHaveValue('Bob private input during AI edit');
+  await expect(a.locator('#status')).toHaveText('Saved 1 · Alice private input during AI edit');
+  await expect(b.locator('#status')).toHaveText('Saved 1 · Bob private input during AI edit');
+  await bob.reload();
+  await expect(object(bob, 'note-alice')).toHaveText('Northstar partial draft.');
+  await expect(object(bob, 'note-bob')).toHaveText('Human edit created offline while AI was preparing');
+  await info.attach('AI and reconnect receipt', { body: JSON.stringify({ designRequests, designParents, alice: await state(alice), bob: await state(bob) }), contentType: 'application/json' });
+ } finally { releaseDesign(); await alice.close(); await bob.close(); }
 });

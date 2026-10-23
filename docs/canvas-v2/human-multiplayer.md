@@ -176,6 +176,16 @@ CUA, without sending model requests or modifying the GoodLife canvas.
 
 Focused tests cover codec round trips, pending replay, conflicts, own undo,
 private-state exclusion, scoped source authoring and parent-placement safety.
+The AI/reconnect browser regression explicitly selects legacy loop authoring,
+holds a deterministic response across an offline peer edit, and verifies a
+fresh shared-parent read, both final edits, private iframe inputs/closure state,
+and reload. The default fixture remains on the managed entry path.
+A hosted two-account check on 2026-10-23 used three real managed-model heading
+edits with a teammate's open note draft, own undo/redo, an offline note edit,
+reconnect, reload/private-chat isolation, and following a teammate's Design mode
+and 100% camera. Both edits survived. This is a bounded live check, not an
+extended real-team soak or proof of every editing/model scenario.
+
 A disposable PostgreSQL cluster executes the migration and actual RLS, concurrent
 commit, graph validation, invitation and removal paths. Production transport and
 entry tests inject account/channel services to exercise the actual modules.
