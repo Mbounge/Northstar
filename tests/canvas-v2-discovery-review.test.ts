@@ -290,7 +290,7 @@ async function setup(review: DiscoveryReviewer, maxRounds = 6, toolOutput: unkno
   const host = new CodexSessionHost(async () => peer, undefined, undefined, review, maxRounds);
   const calls: string[] = [];
   const client = new ManagedAgentClient({ endpoint: '/codex', fetcher: async (_url, init) => host.handle(object(JSON.parse(String(init?.body))), { owner: 'alice', key: 'fake', signal: init?.signal || new AbortController().signal }),
-    onView: () => {}, execute: async action => { calls.push(string(action.name)); return toolOutput; } });
+    onView: () => {}, execute: async action => { calls.push(string(action.name)); return typeof toolOutput === 'function' ? toolOutput(action) : toolOutput; } });
   const snapshot = async () => (await host.handle({ op: 'snapshot', token: client.token }, { owner: 'alice', key: 'fake', signal: new AbortController().signal })).json();
   return { peer, host, client, calls, snapshot, close() { client.dispose(); host.dispose(); } };
 }
@@ -386,6 +386,75 @@ test('three successive drafts are assessed in one public turn; only the satisfac
     assert.match(packets[2], /Unresolved mechanism 1/); assert.match(packets[2], /Unresolved mechanism 2/);
     assert.equal(t.client.view.texts.at(-1)?.text, 'Resolved answer');
   } finally { t.close(); }
+});
+
+test('confirmed selection blockers end review promptly as unfinished without retrying the protected write', async () => {
+  let reviews = 0;
+  const feedback = JSON.parse(feedbackFor('Select the protected shoe to apply the retained repair.'));
+  Object.assign(feedback.work[0], { blockedBy: 'user_selection', blockedNodeId: 'shoe' });
+  const t = await setup(async packet => {
+    reviews++;
+    assert.equal(JSON.parse(packet.text).executionBlockers[0].nodeId, 'shoe');
+    return JSON.stringify(feedback);
+  }, 6, (action: JsonObject) => {
+    if (action.name === 'canvas_edit') throw new Error('Human-authored node shoe is protected. Compose around it or target an unedited sibling.');
+    return { screens: [], selectedNodeIds: [], workingContext: { protectedNodeIds: ['shoe'], editableNodeIds: [], focusObjects: [{ nodeId: 'shoe', locked: false, hidden: false, canonicalEvidence: false }] } };
+  });
+  try {
+    // Keep this protocol fixture manual after the deliberate tool failure.
+    t.peer.reply = (id, result) => { t.peer.replies.push({ id, result: object(result) }); };
+    await t.client.send('Fix the shoe seam', [], 'gpt-5.6-luna', 'r1');
+    t.peer.tool('canvas_edit', { patch: '{}', selectionPolicy: 'modify', summary: 'Apply retained repair' }); await tick();
+    t.peer.tool('canvas_read', {}); await tick();
+    t.peer.finish('The repair is retained. Select the shoe photograph to apply it in place; the canvas is unchanged.'); await tick();
+    const report = (await t.snapshot()).review;
+    assert.equal(reviews, 1);
+    assert.equal(report.status, 'awaiting_user_selection');
+    assert.equal(report.rounds.length, 1);
+    assert.equal(t.peer.calls.filter(call => call.method === 'turn/start').length, 1);
+    assert.match(t.client.view.texts.at(-1)?.text || '', /so far[\s\S]*\n[\s\S]*Select the shoe/);
+    assert.match(report.feedback, /user_selection/);
+  } finally { t.close(); }
+});
+
+test('a reviewer cannot invent a selection blocker to suppress real unfinished work', async () => {
+  const feedback = JSON.parse(feedbackFor('A real edit remains.'));
+  Object.assign(feedback.work[0], { blockedBy: 'user_selection', blockedNodeId: 'shoe' });
+  const t = await setup(async () => JSON.stringify(feedback), 2);
+  try {
+    await t.client.send('Edit the shoe', [], 'gpt-5.6-luna', 'r1');
+    t.peer.finish('Draft'); await tick();
+    assert.equal(t.client.view.status, 'running');
+    assert.equal((await t.snapshot()).review.status, 'continuing');
+    assert.equal(t.peer.calls.filter(call => call.method === 'turn/start').length, 2);
+  } finally { t.close(); }
+});
+
+test('selection blocker proof requires a real permission rejection and later current readback', () => {
+  const text = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });
+  const failure = [{ type: 'inputText', text: 'Human-authored node shoe is protected. Compose around it or target an unedited sibling.' }];
+  const context = new DiscoveryReviewContext();
+  const feedback = JSON.parse(feedbackFor('Select shoe'));
+  Object.assign(feedback.work[0], { blockedBy: 'user_selection', blockedNodeId: 'shoe' });
+  const blocked = () => context.onlyUserSelectionWork(JSON.stringify(feedback));
+  const read = (selected: string[] = []) => context.tool('canvas_read', {}, [text({ selectedNodeIds: selected, workingContext: { protectedNodeIds: ['shoe'], editableNodeIds: [], focusObjects: [{ nodeId: 'shoe', locked: false, hidden: false, canonicalEvidence: false }] } })]);
+  read(); context.tool('canvas_edit', {}, failure, false);
+  assert.equal(blocked(), false, 'a pre-rejection readback is not current proof');
+  read(); assert.equal(blocked(), true);
+  feedback.work.push({ ...feedback.work[0], id: 'another', blockedBy: 'none', blockedNodeId: '' });
+  assert.equal(blocked(), false, 'other executable work must continue'); feedback.work.pop();
+  read(['shoe']); assert.equal(blocked(), false, 'selection invalidates the blocker');
+  for (const protection of ['locked','hidden','canonicalEvidence']) {
+    context.tool('canvas_edit', {}, failure, false);
+    context.tool('canvas_read', {}, [text({ selectedNodeIds: [], workingContext: { protectedNodeIds: ['shoe'], editableNodeIds: [], focusObjects: [{ nodeId: 'shoe', locked: false, hidden: false, canonicalEvidence: false, [protection]: true }] } })]);
+    assert.equal(blocked(), false, 'selection alone cannot resolve ' + protection);
+  }
+  context.tool('canvas_edit', {}, failure, false); read(); assert.equal(blocked(), true);
+  context.tool('canvas_edit', {}, [text({ committed: true })]); assert.equal(blocked(), false, 'a successful write invalidates the blocker');
+  context.tool('canvas_edit', {}, failure, false); read();
+  context.user([{ type: 'text', text: 'Another request', text_elements: [] }]); assert.equal(blocked(), false);
+  context.tool('canvas_edit', {}, [{ type: 'inputText', text: 'The canvas changed. Read again.' }], false); read();
+  assert.equal(blocked(), false, 'a transient revision conflict is not an authorization boundary');
 });
 
 test('review ceiling releases the latest draft as unfinished, never as reviewer approval', async () => {

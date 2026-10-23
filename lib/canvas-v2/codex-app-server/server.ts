@@ -250,6 +250,7 @@ export class CodexSessionHost {
       const rounds = [...(s.reviewReport?.rounds ?? []), { draft: run.draft, feedback, rawFeedback, durationMs, activity: s.reviewContext.activity() }];
       s.reviewReport = { ...s.reviewReport, status: 'reviewing', durationMs, feedback, rounds, completedActivity: s.reviewContext.activity() };
       s.reviewContext.reviewed(run.draft, feedback);
+      if (s.reviewContext.onlyUserSelectionWork(feedback)) { s.reviewReport.status = 'awaiting_user_selection'; this.finishReviewedDraft(s, run, true); return; }
       if (!remainingWork) { s.reviewReport.status = 'completed'; this.finishReviewedDraft(s, run); return; }
       if (run.rounds >= this.maxReviewRounds) {
         s.reviewReport.status = 'budget_exhausted';
