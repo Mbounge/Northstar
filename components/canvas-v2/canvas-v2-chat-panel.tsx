@@ -289,7 +289,7 @@ const ChatTurn = memo(function ChatTurn({
           <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-[#6d59ed] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"><RotateCw className="h-3.5 w-3.5" />Resume the work</button>
         </div>}
         {turn.status === "stopped" && !turn.earlierSegment && <div data-testid="canvas-v2-turn-stopped" className="mt-3 text-xs text-[#777789]">Stopped.{turn.canvasInstruction && turn.loop && <button type="button" onClick={() => onContinue(turn.id)} disabled={busy} className="ml-3 text-[#6d59ed] hover:underline disabled:opacity-40 dark:text-[#b3a8ff]">Continue</button>}</div>}
-        {turn.error && <div data-testid="canvas-v2-turn-error" className="mt-3 text-[13px] leading-5 text-[#777085] dark:text-[#aaa3b5]">Send a follow-up to pick up from here.</div>}
+        {turn.error && <div role="alert" data-testid="canvas-v2-turn-error" className="mt-3 text-[13px] leading-5 text-[#777085] dark:text-[#aaa3b5]"><p>{readable(turn.error)||'Northstar couldn’t finish that request. Your latest canvas is unchanged.'}</p><p className="mt-1">Send a follow-up to pick up from here.</p></div>}
       </div>
     </div>}
   </article>;

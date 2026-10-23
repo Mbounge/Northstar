@@ -1,7 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 
+test.beforeEach(async({request})=>{
+ const reset=await request.post('/canvas-v2-e2e/codex/agent',{data:{op:'reset-fixture'}});expect(reset.ok()).toBe(true);
+});
+
 async function storage(page: Page) {
+ // This is a solo-storage fixture. Production now checks for a shared room
+ // before leasing the legacy session; represent that authoritative empty read.
+ await page.route('**/rest/v1/rpc/northstar_canvas_read',route=>route.fulfill({json:null}));
  const rows:Record<string,any>={}; const blobs=new Map<string,string>();
  await page.route('**/rest/v1/northstar_sessions*',async route=>{
   const req=route.request(),url=new URL(req.url());
@@ -29,7 +36,8 @@ async function storage(page: Page) {
   if(req.method()==='POST'){
    const body=new Response(new Uint8Array(req.postDataBuffer() || []),{headers:req.headers()});
    const type=req.headers()['content-type']||'';
-   const text=type.includes('multipart')?await((await body.formData()).get('file') as File).text():await body.text();
+   const file=type.includes('multipart')?Array.from((await body.formData()).values()).find(value=>value instanceof Blob):undefined;
+   const text=file instanceof Blob?await file.text():await body.text();
    blobs.set(key,text);await route.fulfill({json:{Key:`northstar-sessions/${key}`}});return;
   }
   if(req.method()==='DELETE'){await route.fulfill({json:[]});return;}
@@ -78,10 +86,36 @@ test('switching sessions keeps a running native loop mounted and isolates anothe
  await menu(page);await page.getByRole('button',{name:'New session',exact:true}).click();
  await send(page,'Put it on the canvas');
  await expect(active(page).getByTestId('canvas-v2-native-scene').locator('[data-canvas-v2-node-id="codex-finding"]')).toHaveText('The evidence changes the explanation.');
- await menu(page);await page.getByRole('button',{name:'hold first session',exact:true}).click();
+ await menu(page);await page.getByRole('button').filter({has:page.getByText('hold first session',{exact:true})}).click();
  await expect(active(page).getByRole('button',{name:'Stop current response'})).toBeVisible();
  await expect(active(page).getByTestId('canvas-v2-native-scene').locator('[data-canvas-v2-node-id="codex-finding"]')).toHaveCount(0);
  await active(page).getByRole('button',{name:'Stop current response'}).click();
  await expect(active(page).getByRole('button',{name:'Stop current response'})).toHaveCount(0);
  expect(await page.locator('iframe[title^="Canvas:"]').count()).toBe(2);
+});
+
+
+test('a direct workspace link opens session navigation without restarting its canvas or running prompt',async({page,request})=>{
+ test.setTimeout(150_000);
+ await request.post('/canvas-v2-e2e/codex/agent',{data:{op:'reset-fixture'}});
+ const db=await storage(page),id=randomUUID();
+ db.rows[id]={id,owner_id:'11111111-1111-4111-8111-111111111111',title:'Shared entry check',version:0,snapshot_path:null,model:'gpt-5.6-luna',effort:'high',archived:false,updated_at:new Date().toISOString()};
+ await page.goto('/canvas?sessionTest=1&workspace='+id);;
+ const host=page.locator('iframe[aria-hidden="false"]');
+ await expect(active(page).getByLabel('Message North Star',{exact:true})).toBeVisible();
+ await expect(host).toHaveAttribute('src',/embedded=1/);
+ const initial=await host.elementHandle();
+ await send(page,'hold first session');;
+ await expect(active(page).getByRole('button',{name:'Stop current response'})).toBeVisible();
+ await menu(page);await expect(page.getByRole('complementary',{name:'Canvas sessions',exact:true})).toBeVisible();;
+ expect(await initial!.evaluate(element=>element.isConnected)).toBe(true);
+ await page.getByRole('button',{name:'Close sessions sidebar',exact:true}).click();
+ await expect(active(page).getByRole('button',{name:'Stop current response'})).toBeVisible();
+ await menu(page);await page.getByRole('button',{name:'New temporary session',exact:true}).click();;
+ await expect(active(page).getByLabel('Message North Star',{exact:true})).toHaveValue('');;
+ expect(await initial!.evaluate(element=>element.isConnected)).toBe(true);
+ await menu(page);await expect(page.getByRole('complementary',{name:'Canvas sessions',exact:true})).toBeVisible();await page.getByRole('button').filter({has:page.getByText('Shared entry check',{exact:true})}).click();
+ await expect(active(page).getByRole('button',{name:'Stop current response'})).toBeVisible();
+ await expect(page).toHaveURL(new RegExp('workspace='+id));
+ await active(page).getByRole('button',{name:'Stop current response'}).click();
 });

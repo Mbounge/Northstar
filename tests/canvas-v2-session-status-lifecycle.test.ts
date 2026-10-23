@@ -8,7 +8,7 @@ type Element = { type: unknown; props: Record<string, unknown> };
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
 /** Run SessionShell's actual component, refs, mount effects and message handler.
  * Only React scheduling and external account/list services are substituted. */
-async function shell() {
+async function shell(options: { shared?: boolean; listFails?: boolean } = {}) {
   const slots: unknown[] = []; let cursor = 0, listCalls = 0;
   const effects: Array<() => unknown> = [], cleanups: Array<() => void> = [];
   const equal = (a: unknown[] | undefined, b: unknown[] | undefined) => Boolean(a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i])));
@@ -23,7 +23,7 @@ async function shell() {
     react,
     'react/jsx-runtime': { Fragment: 'fragment', jsx: (type: unknown, props: Record<string, unknown>) => ({ type, props }), jsxs: (type: unknown, props: Record<string, unknown>) => ({ type, props }) },
     './canvas-invitation': { PendingCanvasInvitation: () => null }, 'lucide-react': {},
-    '@/lib/canvas-v2/sessions/store': { listSessions: async () => { listCalls++; return [{ id: 'room', title: 'Canvas', archived: false }]; }, createSession: () => { throw new Error('Unexpected session creation'); } },
+    '@/lib/canvas-v2/sessions/store': { listSessions: async () => { listCalls++; if(options.listFails)throw new Error('Listing unavailable'); return options.shared?[]:[{ id: 'room', title: 'Canvas', archived: false }]; }, createSession: () => { throw new Error('Unexpected session creation'); } },
     '@/lib/supabase/client': { createClient: () => { throw new Error('No auth calls in isolated test mode'); } },
     '@/lib/canvas-v2/gateway-handoff': { CANVAS_V2_GATEWAY_HANDOFF_KEY: 'test-handoff' },
   };
@@ -36,7 +36,7 @@ async function shell() {
   });
   const nodes = (tree: unknown): Element[] => { if (Array.isArray(tree)) return tree.flatMap(nodes); if (!tree || typeof tree !== 'object' || !('props' in tree)) return []; const element = tree as Element; return [element, ...nodes(element.props.children)]; };
   const render = () => {
-    cursor = 0; const tree = exports.SessionShell!({ owner: 'owner', initialId: 'room', testMode: true });
+    cursor = 0; const tree = exports.SessionShell!({ owner: 'owner', ...(options.shared?{initialWorkspaceId:'room'}:{initialId:'room'}), testMode: true });
     for (const node of nodes(tree).filter(node => node.type === 'iframe')) {
       if (!frameWindows.has('room')) frameWindows.set('room', {});
       (node.props.ref as (node: unknown) => void)({ contentWindow: frameWindows.get('room') });
@@ -83,4 +83,21 @@ test('an in-flight saved report cannot reopen a view that the person just closed
   // packet is validly sourced, but cannot resurrect its removed view.
   f.send({ saveStatus: 'saved' });
   assert.equal(f.nodes(f.render()).filter(node => node.type === 'iframe').length, 0);
+});
+
+for(const listFails of [false,true])test(`a direct shared entry retains its live frame while opening session navigation (list failure: ${listFails})`,async t=>{
+  const f=await shell({shared:true,listFails});t.after(f.close);
+  let frame=f.nodes(f.render()).find(node=>node.type==='iframe');assert.ok(frame);
+  assert.equal(frame.props.src,'/canvas?sessionTest=1&workspace=room&embedded=1');
+  assert.equal(f.locations.at(-1),'/canvas?sessionTest=1&workspace=room');
+  f.send({title:'Shared poster',busy:true,multiplayer:true,saveStatus:'saved'});f.render();
+  f.send({menu:true});let tree=f.render();
+  assert.ok(f.nodes(tree).some(node=>node.props['aria-label']==='Canvas sessions'));
+  frame=f.nodes(tree).find(node=>node.type==='iframe');assert.equal(frame?.props.title,'Canvas: Shared poster');
+  assert.equal(frame?.props['aria-hidden'],false);
+  assert.ok(f.nodes(tree).some(node=>node.type==='span'&&node.props.children==='Shared'));
+  const dismiss=f.nodes(tree).find(node=>node.props['aria-label']==='Close sessions sidebar');assert.ok(dismiss);
+  (dismiss.props.onClick as ()=>void)();tree=f.render();
+  assert.equal(f.nodes(tree).filter(node=>node.type==='iframe').length,1);
+  assert.equal(f.nodes(tree).some(node=>node.props['aria-label']==='Canvas sessions'),false);
 });

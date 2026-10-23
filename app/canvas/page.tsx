@@ -11,7 +11,7 @@ import { canvasV2DeterministicEvaluationEnabled } from "@/e2e/canvas-v2-determin
 
 export const dynamic = "force-dynamic";
 
-export default async function CanvasPage({ searchParams }: { searchParams: Promise<{ interactionProbe?: string; workspace?: string; temporary?: string; s?: string; sessionTest?: string }> }) {
+export default async function CanvasPage({ searchParams }: { searchParams: Promise<{ interactionProbe?: string; workspace?: string; temporary?: string; s?: string; sessionTest?: string; embedded?: string }> }) {
   const agentEndpoint = canvasV2DeterministicEvaluationEnabled() ? undefined
     : northstarDiscoveryEndpoint(process.env.NORTHSTAR_DISCOVERY_RUNTIME);
   // Playwright exercises the real /canvas entry point with deterministic
@@ -21,7 +21,9 @@ export default async function CanvasPage({ searchParams }: { searchParams: Promi
   if (process.env.NODE_ENV !== "production" && process.env.NORTHSTAR_E2E === "1") {
     const params = await searchParams;
     if (params.sessionTest === '1') {
-      if (params.workspace) return <SessionWorkspace id={params.workspace} temporary={params.temporary === '1'} owner="11111111-1111-4111-8111-111111111111" agentEndpoint="/canvas-v2-e2e/codex/agent"/>;
+      if (params.workspace) return params.embedded==='1'
+        ? <SessionWorkspace id={params.workspace} temporary={params.temporary === '1'} owner="11111111-1111-4111-8111-111111111111" agentEndpoint="/canvas-v2-e2e/codex/agent"/>
+        : <SessionShell owner="11111111-1111-4111-8111-111111111111" initialWorkspaceId={params.workspace} temporary={params.temporary === '1'} testMode/>;
       return <SessionShell owner="11111111-1111-4111-8111-111111111111" initialId={params.s} temporary={params.temporary === '1'} testMode/>;
     }
     const probe = (await searchParams).interactionProbe === "1";
@@ -47,7 +49,9 @@ export default async function CanvasPage({ searchParams }: { searchParams: Promi
   if (params.workspace) {
     const temporary = params.temporary === '1' && /^tmp-[0-9a-f-]{36}$/.test(params.workspace);
     if (!temporary && !/^[0-9a-f-]{36}$/.test(params.workspace)) redirect('/canvas');
-    return <SessionWorkspace id={params.workspace} temporary={temporary} owner={user.id} agentEndpoint={agentEndpoint}/>;
+    return params.embedded==='1'
+      ? <SessionWorkspace id={params.workspace} temporary={temporary} owner={user.id} agentEndpoint={agentEndpoint}/>
+      : <SessionShell owner={user.id} initialWorkspaceId={params.workspace} temporary={temporary}/>;
   }
   return <SessionShell owner={user.id} initialId={params.s} temporary={params.temporary === '1'}/>;
 }

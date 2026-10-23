@@ -115,8 +115,8 @@ test('native tool results return once to the exact pending Codex request', async
   const t = await setup(async a => { seen.push(String(a.name)); return a.name === 'canvas_read' ? { baseRevisionId: 'rev1', document: { html: '<main data-canvas-v2-node-id="root"></main>' } } : { committed: true }; });
   try {
     await t.client.send('Create on canvas', [], 'gpt-5.6-luna', 'r1'); await tick();
-    assert.deepEqual(seen, ['canvas_read', 'canvas_edit']); assert.equal(t.client.view.status, 'completed'); assert.equal(t.peers[0].replies.length, 2);
-    assert.deepEqual(t.peers[0].replies[1].result, { success: true, contentItems: [{ type: 'inputText', text: '{"committed":true}' }] });
+    assert.deepEqual(seen, ['canvas_read', 'canvas_plan', 'canvas_edit']); assert.equal(t.client.view.status, 'completed'); assert.equal(t.peers[0].replies.length, 3);
+    assert.deepEqual(t.peers[0].replies[2].result, { success: true, contentItems: [{ type: 'inputText', text: '{"committed":true}' }] });
   } finally { t.close(); }
 });
 test('session capabilities are owner bound and repeated inputs are idempotent', async () => {

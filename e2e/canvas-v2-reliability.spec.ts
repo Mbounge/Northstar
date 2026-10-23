@@ -44,11 +44,15 @@ test("exhausted retries fail without publishing a candidate", async ({ page }) =
 });
 
 test("Stop during backoff cancels all later routing attempts", async ({ page }) => {
+  let attempts=0;page.on("request",request=>{if(new URL(request.url()).pathname==="/canvas-v2-e2e/route")attempts++;});
+  const before=await canvasApp(page).getByTestId("canvas-v2-committed-revision").textContent();
   await page.getByLabel("Message North Star").fill("Keep retrying until I stop");
   await page.getByRole("button", { name: "Send message" }).click();
   await page.getByRole("button", { name: "Stop current response" }).click();
-  await expect(page.getByText("Stopped. The latest committed canvas remains visible.")).toBeVisible();
-  await page.waitForTimeout(1_000);
+  await expect(page.getByTestId("canvas-v2-turn-stopped")).toContainText("Stopped.");
+  const stoppedAttempts=attempts;await page.waitForTimeout(1_000);
+  expect(attempts).toBe(stoppedAttempts);
+  await expect(canvasApp(page).getByTestId("canvas-v2-committed-revision")).toHaveText(before??"");
   await expect(page.getByLabel("Message North Star")).toBeEnabled();
   await expect(page.getByText(/retrying request/)).toHaveCount(0);
 });

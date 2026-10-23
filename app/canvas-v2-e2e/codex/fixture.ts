@@ -148,10 +148,15 @@ export class FixtureCodex implements CodexTransport {
     }
     if (this.parity) { this.parityReply(String(id), r); return; }
     if (String(id).endsWith(':canvas_read')) {
-      const part = object((r.contentItems as unknown[])[0]); const canvas = object(JSON.parse(string(part.text)));
-      const target = /data-canvas-v2-node-id="([^"]+)"/.exec(string(object(canvas.document).html))?.[1];
-      this.tool('canvas_edit', { baseRevisionId: canvas.baseRevisionId, summary: 'Created a native comparison', patch: JSON.stringify({ operations: [{ op: 'append-html', targetNodeId: target, html: '<section data-canvas-v2-node-id="codex-comparison" style="width:720px;padding:32px;background:#fff;color:#171721"><h2 data-canvas-v2-node-id="codex-title" style="color:#173247">A useful comparison</h2><p data-canvas-v2-node-id="codex-finding">The evidence changes the explanation.</p></section>' }] }) });
-    } else if (String(id).endsWith(':canvas_edit')) this.finish(r.success ? 'Created the comparison on the canvas. Each part is editable.' : 'The edit could not be committed.');
+      const part = object((r.contentItems as unknown[])[0]); this.canvas = object(JSON.parse(string(part.text)));
+      this.tool('canvas_plan', {action:'create',storyRole:'title',direction:{designIntent:'Create an editable native comparison for session continuity',visualThesis:'One clear finding with its explanation',compositionStrategy:'A single compact typographic island',visualLanguage:'Neutral readable typography',evidenceStrategy:'No external factual claims or invented evidence'},readingOrder:['A useful comparison','The evidence changes the explanation.'],evidenceIds:[],relation:'none',anchorNodeId:'',footprint:'720 units wide, natural content height'});
+    } else if(String(id).endsWith(':canvas_plan')) {
+      const part=object((r.contentItems as unknown[])[0]);
+      if(!r.success){this.finish('Session fixture planning failed: '+string(part.text));return;}
+      const value=object(JSON.parse(string(part.text))),plan=object(value.plan),execution=object(plan.execution),target=object(execution.target),territory=object(execution.territory);
+      const root=/data-canvas-v2-node-id="([^"]+)"/.exec(string(object(this.canvas.document).html))?.[1];
+      this.tool('canvas_edit',{baseRevisionId:this.canvas.baseRevisionId,summary:'Created a native comparison',patch:JSON.stringify({operations:[{op:'append-html',targetNodeId:root,html:`<section data-canvas-v2-node-id="${target.islandId}" data-canvas-v2-island-id="${target.islandId}" data-canvas-v2-design-region data-canvas-v2-story-role="${target.storyRole}" data-canvas-v2-territory-relation="${territory.relation}" data-canvas-v2-territory-anchor="${territory.anchorNodeId}" style="width:720px;display:flex;flex-direction:column;gap:20px;padding:32px;background:transparent;color:var(--canvas-ink)"><h2 data-canvas-v2-node-id="codex-title" style="font-size:32px;margin:0">A useful comparison</h2><p data-canvas-v2-node-id="codex-finding" style="font-size:20px;margin:0">The evidence changes the explanation.</p></section>`}]})});
+    } else if (String(id).endsWith(':canvas_edit')) this.finish(r.success ? 'Created the comparison on the canvas. Each part is editable.' : 'The edit could not be committed: '+string(object((r.contentItems as unknown[])[0]).text));
   }
   private mediaReply(id: string, r: JsonObject) {
     const parts = Array.isArray(r.contentItems) ? r.contentItems.map(object) : [];

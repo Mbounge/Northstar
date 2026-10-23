@@ -4095,7 +4095,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const selectionIsText = selectionAppearance.isText;
   const selectionIsImage = selectedElements.length === 1 && selectedElement?.kind === "image";
   const selectionHasStroke = selectionAppearance.hasStroke;
-  const selectedScreen = selectedElements.length === 1 && engine.nativeScene?.nodes.find(node => node.sourceNodeId === selectedElement?.nodeId)?.attributes[SCREEN_ATTRIBUTE];
+  // A peer revision temporarily invalidates measured native geometry. The
+  // committed source still owns screen identity during that compile boundary;
+  // losing it here closes the inspector and drains a still-typing draft.
+  const selectedScreen = useMemo(()=>{
+    if(selectedElements.length!==1)return;
+    if(engine.nativeScene)return engine.nativeScene.nodes.find(node=>node.sourceNodeId===selectedElement?.nodeId)?.attributes[SCREEN_ATTRIBUTE];
+    return readCanvasV2Screens(engine.committed.document.html).find(screen=>screen.nodeId===selectedElement?.nodeId)?.encoded;
+  },[selectedElements.length,selectedElement?.nodeId,engine.nativeScene,engine.committed.document.html]);
   const selectedScreenDescriptor=useMemo(()=>selectedScreen?parseCanvasV2Screen(selectedScreen):undefined,[selectedScreen]);
   useEffect(()=>{
     if(canvasView!=='design')return;

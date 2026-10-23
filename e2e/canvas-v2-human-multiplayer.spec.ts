@@ -15,8 +15,9 @@ const geometry = (page: Page, id: string) => object(page, id).evaluate(element =
 });
 test.use({ viewport: { width: 1512, height: 790 } });
 
-async function openPeer(context: BrowserContext, room: string, peer: 'alice' | 'bob' | 'quinn') {
+async function openPeer(context: BrowserContext, room: string, peer: 'alice' | 'bob' | 'quinn', prepare?: (page:Page)=>Promise<unknown>) {
   const page = await context.newPage();
+  await prepare?.(page);
   await page.goto(`/canvas-v2-e2e/human-multiplayer?room=${room}&peer=${peer}&hardening=1`);
   await expect.poll(async () => (await state(page)).phase).toBe('live');
   await expect(object(page, 'note-alice')).toBeVisible();
@@ -377,4 +378,137 @@ test('real private sync and blob codec restore each account chat on cache-empty 
     }
     await info.attach('Private account history and camera isolation', { body: JSON.stringify({ before, after, scope: 'Production private sync/codec/cache over DEV HTTP account-service fixture; hosted Auth/Realtime not claimed' }, null, 2), contentType: 'application/json' });
   } finally { for (const page of devices) await page.close(); }
+});
+
+
+test('typing in a screen inspector survives a peer editing a different layer before autosave',async({context})=>{
+ test.setTimeout(120_000);
+ const room='inspector-draft-'+randomUUID(),alice=await openPeer(context,room,'alice'),bob=await openPeer(context,room,'bob',page=>page.addInitScript(()=>{
+  // Hold only the inspector's debounce until explicit close flushes it.
+  // Network polling and preview ACKs retain their real clocks.
+  const schedule=window.setTimeout.bind(window);
+  window.setTimeout=((handler:TimerHandler,delay?:number,...args:unknown[])=>schedule(handler,delay===350?60000:delay,...args)) as typeof window.setTimeout;
+ }));
+ try{
+  await design(alice);await design(bob);
+  await object(alice,'journal-a').click();await object(bob,'journal-a').click();
+  await alice.getByRole('treeitem',{name:'Select layer description',exact:true}).click();
+  await bob.getByRole('treeitem',{name:'Select layer heading',exact:true}).click();
+  const draft=bob.getByRole('textbox',{name:'Element text',exact:true});
+  await draft.fill('Bob is still typing this heading');
+  await alice.getByRole('textbox',{name:'Element text',exact:true}).fill('Alice refined the supporting description.');
+  await alice.getByRole('button',{name:'Close appearance editor',exact:true}).click();await waitSaved(alice);
+  await expect(alice.frameLocator('iframe[title="Shared journal A"]').locator('#description')).toHaveText('Alice refined the supporting description.');
+  // The delayed local autosave must not lose its draft on peer delivery.
+  await expect(bob.frameLocator('iframe[title="Shared journal A"]').locator('#description')).toHaveText('Alice refined the supporting description.');
+  await expect(draft).toHaveValue('Bob is still typing this heading');
+  await bob.getByRole('button',{name:'Close appearance editor',exact:true}).click();await waitSaved(bob);
+  for(const page of [alice,bob]){
+   const frame=page.frameLocator('iframe[title="Shared journal A"]');
+   await expect(frame.locator('#heading')).toHaveText('Bob is still typing this heading');
+   await expect(frame.locator('#description')).toHaveText('Alice refined the supporting description.');
+   await expect(page.getByRole('button',{name:'Retry preview',exact:true})).toHaveCount(0);
+  }
+ }finally{await alice.close();await bob.close();}
+});
+
+test('a pending same-field edit retains its draft and Undo returns to the delivered teammate value',async({context})=>{
+ test.setTimeout(120_000);
+ const room='same-field-draft-'+randomUUID(),alice=await openPeer(context,room,'alice'),bob=await openPeer(context,room,'bob',page=>page.addInitScript(()=>{
+  const schedule=window.setTimeout.bind(window);
+  window.setTimeout=((handler:TimerHandler,delay?:number,...args:unknown[])=>schedule(handler,delay===350?60000:delay,...args)) as typeof window.setTimeout;
+ }));
+ try{
+  await design(alice);await design(bob);
+  for(const page of [alice,bob]){await object(page,'journal-a').click();await page.getByRole('treeitem',{name:'Select layer heading',exact:true}).click();}
+  const draft=bob.getByRole('textbox',{name:'Element text',exact:true});await draft.fill('Bob pending final headline');
+  await alice.getByRole('textbox',{name:'Element text',exact:true}).fill('Alice delivered headline');
+  await alice.getByRole('button',{name:'Close appearance editor',exact:true}).click();await waitSaved(alice);
+  await expect(bob.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Alice delivered headline');
+  await expect(draft).toHaveValue('Bob pending final headline');
+  await bob.getByRole('button',{name:'Close appearance editor',exact:true}).click();await waitSaved(bob);
+  for(const page of [alice,bob])await expect(page.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Bob pending final headline');
+  await bob.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+  for(const page of [alice,bob])await expect(page.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Alice delivered headline');
+  await bob.getByRole('button',{name:'Redo canvas action',exact:true}).click();
+  for(const page of [alice,bob]){await expect(page.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Bob pending final headline');await expect(page.getByRole('button',{name:'Retry preview',exact:true})).toHaveCount(0);}
+ }finally{await alice.close();await bob.close();}
+});
+
+test('inline text keeps typing across an unrelated peer revision before its debounce',async({context})=>{
+ test.setTimeout(120_000);
+ const room='inline-draft-'+randomUUID(),alice=await openPeer(context,room,'alice',page=>page.addInitScript(()=>{
+  const schedule=window.setTimeout.bind(window);
+  window.setTimeout=((handler:TimerHandler,delay?:number,...args:unknown[])=>schedule(handler,delay===350?60000:delay,...args)) as typeof window.setTimeout;
+ })),bob=await openPeer(context,room,'bob',page=>page.addInitScript(()=>{
+  const schedule=window.setTimeout.bind(window);
+  window.setTimeout=((handler:TimerHandler,delay?:number,...args:unknown[])=>schedule(handler,delay===300?60000:delay,...args)) as typeof window.setTimeout;
+  // Keep the draft active while the test controls a second browser window.
+  // Normal focus changes finish inline editing, which would save before the
+  // incoming revision rather than exercising the unsaved-draft boundary.
+  for(const type of ['blur','focusout'])window.addEventListener(type,event=>{if((event.target as Element|null)?.matches?.('[aria-label="Screen text"]'))event.stopImmediatePropagation();},true);
+ }));
+ try{
+  await design(alice);await design(bob);
+  await object(alice,'journal-a').click();await object(bob,'journal-a').click();
+  await alice.getByRole('treeitem',{name:'Select layer description',exact:true}).click();
+  await bob.getByRole('treeitem',{name:'Select layer heading',exact:true}).click();
+  await alice.getByRole('textbox',{name:'Element text',exact:true}).fill('Alice peer description during inline typing');
+  await bob.getByRole('button',{name:'Edit text on canvas',exact:true}).click();
+  const draft=bob.getByRole('textbox',{name:'Screen text',exact:true});await draft.fill('Bob inline typing survives');
+  // Deliver the peer's real UI commit without focusing Alice's window:
+  // switching windows intentionally finishes Bob's inline edit on blur.
+  await alice.getByRole('button',{name:'Close appearance editor',exact:true}).evaluate(button=>(button as HTMLButtonElement).click());await waitSaved(alice);
+  await expect(alice.frameLocator('iframe[title="Shared journal A"]').locator('#description')).toHaveText('Alice peer description during inline typing');
+  await expect(bob.frameLocator('iframe[title="Shared journal A"]').locator('#description')).toHaveText('Alice peer description during inline typing');
+  await expect(draft).toHaveText('Bob inline typing survives');await draft.press('Enter');await waitSaved(bob);
+  for(const page of [alice,bob]){
+   await expect(page.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Bob inline typing survives');
+   await expect(page.frameLocator('iframe[title="Shared journal A"]').locator('#description')).toHaveText('Alice peer description during inline typing');
+  }
+ }finally{await alice.close();await bob.close();}
+});
+
+test('repeated mixed multiplayer editing reconnects and releases held drags without corrupting live objects',async({context},info)=>{
+ test.setTimeout(300_000);
+ const room='mixed-soak-'+randomUUID(),alice=await openPeer(context,room,'alice'),bob=await openPeer(context,room,'bob');
+ try{
+  const a=alice.frameLocator('iframe[title="Shared journal A"]'),b=bob.frameLocator('iframe[title="Shared journal A"]');
+  await a.getByRole('textbox',{name:'Your draft',exact:true}).fill('Alice private runtime input');
+  await b.getByRole('textbox',{name:'Your draft',exact:true}).fill('Bob private runtime input');
+  await a.getByRole('button',{name:'Save draft',exact:true}).click();await b.getByRole('button',{name:'Save draft',exact:true}).click();
+  await design(alice);await design(bob);
+  for(let round=0;round<8;round++){
+   if(round%2===1)await bob.getByRole('button',{name:'Disconnect fixture network',exact:true}).click();
+   await Promise.all([editNote(alice,'note-alice','Alice round '+round),editNote(bob,'note-bob','Bob round '+round)]);
+   if(round%2===1)await bob.getByRole('button',{name:'Reconnect fixture network',exact:true}).click();
+   await waitSaved(alice);await waitSaved(bob);
+   for(const page of [alice,bob]){
+    await expect(object(page,'note-alice')).toHaveText('Alice round '+round);
+    await expect(object(page,'note-bob')).toHaveText('Bob round '+round);
+    await expect(page.getByRole('button',{name:'Retry preview',exact:true})).toHaveCount(0);
+   }
+   await alice.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+   await expect(object(bob,'note-alice')).not.toHaveText('Alice round '+round);
+   await expect(object(bob,'note-bob')).toHaveText('Bob round '+round);
+   await alice.getByRole('button',{name:'Redo canvas action',exact:true}).click();
+   await expect(object(bob,'note-alice')).toHaveText('Alice round '+round);
+   const rect=await object(alice,'note-alice').boundingBox();expect(rect).not.toBeNull();
+   await alice.mouse.move(rect!.x+rect!.width/2,rect!.y+rect!.height/2);await alice.mouse.down();
+   await alice.mouse.move(rect!.x+rect!.width/2+18,rect!.y+rect!.height/2+8,{steps:5});await alice.mouse.up();
+   await waitSaved(alice);
+   // Source geometry is rounded to hundredths; transient presence offsets
+   // can retain sub-hundredth rounding residue. Compare at source precision.
+   const precise=async(page:Page)=>(await geometry(page,'note-alice')).map(value=>Math.round(parseFloat(value)*100)/100||0);
+   await expect.poll(()=>precise(bob)).toEqual(await precise(alice));
+   const released=await geometry(alice,'note-alice');
+   await alice.mouse.move(900,620,{steps:6});expect(await geometry(alice,'note-alice')).toEqual(released);
+   await expect(a.getByRole('textbox',{name:'Your draft',exact:true})).toHaveValue('Alice private runtime input');
+   await expect(b.getByRole('textbox',{name:'Your draft',exact:true})).toHaveValue('Bob private runtime input');
+   await expect(a.locator('#status')).toHaveText('Saved 1 · Alice private runtime input');
+   await expect(b.locator('#status')).toHaveText('Saved 1 · Bob private runtime input');
+  }
+  await bob.reload();await expect(object(bob,'note-alice')).toHaveText('Alice round 7');await expect(object(bob,'note-bob')).toHaveText('Bob round 7');
+  await info.attach('Mixed workflow receipt',{body:JSON.stringify({rounds:8,alice:await state(alice),bob:await state(bob)}),contentType:'application/json'});
+ }finally{await alice.close();await bob.close();}
 });

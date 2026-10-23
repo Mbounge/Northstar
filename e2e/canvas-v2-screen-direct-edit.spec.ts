@@ -148,6 +148,7 @@ test('direct text and section edits preserve native app behavior, history and ch
   await expect(frame.locator('#status')).toHaveText('Saved 1 · My everyday notes');
   await enterEdit(page);await clickScreen(page,'h1',{clickCount:2});
   await expect(page.getByRole('textbox',{name:'Screen text',exact:true})).toBeVisible();
+  await expect(page.getByRole('textbox',{name:'Screen text',exact:true})).toHaveText(originalTitle);
   await page.getByRole('textbox',{name:'Screen text',exact:true}).fill(editedTitle);
   await page.getByRole('textbox',{name:'Screen text',exact:true}).press('Enter');
   await expect(frame.getByRole('heading',{name:editedTitle})).toBeVisible();
@@ -190,6 +191,7 @@ test('direct text and section edits preserve native app behavior, history and ch
   await expect(frame.getByRole('heading',{name:'Make room for your next idea.'})).toBeVisible();await expect(frame.locator('#chapter-1')).toHaveCount(0);
   await preview(page);await clickScreen(page,'#save');await expect(frame.locator('#status')).toHaveText('Saved 4 · My everyday notes');
   expect(errors).toEqual([]);
+  const openChat=page.getByRole('button',{name:'Open North Star panel',exact:true});if(await openChat.isVisible())await openChat.click();
   await page.getByRole('button',{name:'assets',exact:true}).click();
   const screenshot=testInfo.outputPath('text-and-section-editing.png');
   await page.screenshot({path:screenshot});

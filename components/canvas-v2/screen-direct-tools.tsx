@@ -202,6 +202,15 @@ export function ScreenAppearanceEditor({target,position,fontFamilies=[],docked=f
     if(ownCommit.current){
       setDraftText(current=>current===pendingText.current||current===savedText.current?textValue:current);
       ownCommit.current=false;
+    }else if(dirty.current){
+      // A delivered revision is a new baseline, not permission to discard
+      // typing. Retain only the fields this person is actively changing;
+      // their next save uses the current version and leaves other fields
+      // alone. Same-field edits follow normal last-writer ordering, with
+      // Undo based on the delivered peer value rather than the old source.
+      const text=draft.current.text!==savedText.current?draft.current.text:textValue;
+      draft.current={styles:draft.current.styles,text};
+      setDraftText(text);
     }else{
       // History/peer revisions replace the inspector's baseline atomically.
       // Its unmount drain can run before state setters render; leaving these
@@ -270,7 +279,7 @@ export function ScreenAppearanceEditor({target,position,fontFamilies=[],docked=f
 export function ScreenTextEditor({target,html,sourceVersion,frame,screenWidth,fonts,onSave,onCancel,selectionRect}:{target:CanvasV2ScreenFeedbackTarget;html:string;sourceVersion:string;frame:RefObject<HTMLIFrameElement|null>;screenWidth:number;fonts:CanvasV2EditorFonts;onSave:(html:string,version?:string)=>Promise<ScreenDirectResult>;selectionRect?:RefObject<CanvasV2ScreenFeedbackTarget['rect']|undefined>;onCancel:()=>void}) {
   const editor=useRef<HTMLDivElement>(null),[editable,setEditable]=useState<HTMLDivElement|null>(null),[tick,setTick]=useState(0),[error,setError]=useState('');
   const [inlineFontRules,setInlineFontRules]=useState('');
-  const version=useRef(sourceVersion);
+  const version=useRef(sourceVersion),initialized=useRef(false);
   const busy=useRef(false),saved=useRef(html),ownCommit=useRef(false),saveAgain=useRef(false),lastAttempt=useRef('');
   const saveRef=useRef<()=>Promise<void>>(async()=>{});
   const pendingSave=useRef<Promise<ScreenDirectResult>|undefined>(undefined),saveFailure=useRef(''),dirty=useRef(false);
@@ -293,7 +302,18 @@ export function ScreenTextEditor({target,html,sourceVersion,frame,screenWidth,fo
     try{pendingSave.current=onSave(markup,version.current);const result=await pendingSave.current;if(result.ok){if(result.encoded)version.current=result.encoded;saved.current=markup;dirty.current=editor.current?.innerHTML!==markup;setError('')}else{ownCommit.current=false;saveFailure.current=result.error||'This text changed. Select it again.';setError(saveFailure.current)}}catch{ownCommit.current=false;saveFailure.current='The text could not be saved. Try again.';setError(saveFailure.current)}finally{pendingSave.current=undefined;busy.current=false;if(saveAgain.current){saveAgain.current=false;setTick(value=>value+1)}}
   };
   saveRef.current=save;
-  useLayoutEffect(()=>{version.current=sourceVersion;if(!editor.current)return;if(ownCommit.current){ownCommit.current=false;saved.current=html;return;}editor.current.innerHTML=html;saved.current=html;lastAttempt.current='';saveFailure.current='';setError('');},[html,sourceVersion]);
+  useLayoutEffect(()=>{
+    version.current=sourceVersion;const node=editor.current;if(!node)return;
+    if(!initialized.current){initialized.current=true;node.innerHTML=html;saved.current=html;dirty.current=false;return;}
+    if(ownCommit.current){ownCommit.current=false;saved.current=html;return;}
+    // The inline editor owns its unsaved markup, just as the inspector owns
+    // its pending fields. A peer revision updates the save baseline without
+    // replacing local typing or its DOM selection.
+    const pending=node.innerHTML!==saved.current;
+    if(!pending)node.innerHTML=html;
+    saved.current=html;dirty.current=node.innerHTML!==html;lastAttempt.current='';saveFailure.current='';setError('');
+    if(pending)setTick(value=>value+1);
+  },[html,sourceVersion]);
   useLayoutEffect(()=>{const node=editor.current;if(!node)return;const refresh=()=>setInlineFontRules(canvasV2EditorInlineFontRules(node,fonts));refresh();const observer=new MutationObserver(refresh);observer.observe(node,{subtree:true,childList:true,attributes:true,attributeFilter:['style']});return()=>observer.disconnect()},[fonts,html,sourceVersion]);
   useEffect(()=>{const node=editor.current;if(!node)return;node.focus({preventScroll:true});const selection=window.getSelection(),range=document.createRange();range.selectNodeContents(node);selection?.removeAllRanges();selection?.addRange(range);},[]);
   useEffect(()=>{if(!tick)return;const timer=window.setTimeout(()=>void saveRef.current(),300);return()=>window.clearTimeout(timer)},[tick]);

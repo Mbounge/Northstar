@@ -7,8 +7,8 @@ import type { NorthstarSession } from '@/lib/canvas-v2/sessions/types';
 import { createClient } from '@/lib/supabase/client';
 import { CANVAS_V2_GATEWAY_HANDOFF_KEY } from '@/lib/canvas-v2/gateway-handoff';
 
-type OpenSession = {frameId:string; id:string; temporary:boolean; originalTemporary:boolean; title:string; busy?:boolean; mirrored?:boolean; saveStatus?:string; error?:string};
-export function SessionShell({owner, initialId, temporary=false, testMode=false}: {owner:string;initialId?:string;temporary?:boolean;testMode?:boolean}) {
+type OpenSession = {frameId:string; id:string; temporary:boolean; originalTemporary:boolean; title:string; busy?:boolean; mirrored?:boolean; saveStatus?:string; error?:string; sharedEntry?:boolean};
+export function SessionShell({owner, initialId, initialWorkspaceId, temporary=false, testMode=false}: {owner:string;initialId?:string;initialWorkspaceId?:string;temporary?:boolean;testMode?:boolean}) {
   const path = testMode ? '/canvas?sessionTest=1&' : '/canvas?';
   const [sessions,setSessions]=useState<NorthstarSession[]>([]);
   const [opened,setOpened]=useState<OpenSession[]>([]);
@@ -28,7 +28,7 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
   const refresh = useCallback(async () => {const all=await listSessions();setSessions(all);return all;},[]);
   const select = useCallback((item:OpenSession) => {
     setOpened(prev=>prev.some(s=>s.frameId===item.frameId)?prev:[...prev,item]);setActive(item.frameId);setSidebar(false);
-    history.replaceState(null,'',item.temporary?`${path}temporary=1`:`${path}s=${encodeURIComponent(item.id)}`);
+    history.replaceState(null,'',item.temporary?`${path}temporary=1`:item.sharedEntry?`${path}workspace=${encodeURIComponent(item.id)}`:`${path}s=${encodeURIComponent(item.id)}`);
   },[path]);
   const add = useCallback(async (isTemporary=false) => {
     if(creating)return;setCreating(true);setError('');
@@ -41,6 +41,13 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
     if(booted.current)return;booted.current=true;
     void (async()=>{
       try{
+        // Shared links need the same mounted session host as owned canvases.
+        // The workspace performs its own membership checks; listing failure
+        // must not prevent an already-authorized shared canvas from opening.
+        if(initialWorkspaceId){
+          select({id:initialWorkspaceId,frameId:initialWorkspaceId,title:temporary?'Untitled canvas':'Shared canvas',temporary,originalTemporary:temporary,sharedEntry:!temporary});
+          await refresh();return;
+        }
         const all=await refresh();
         const handoff=Boolean(sessionStorage.getItem(CANVAS_V2_GATEWAY_HANDOFF_KEY));
         if(temporary){await add(true);return;}
@@ -48,9 +55,9 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
         if(initialId && !chosen && !handoff){setError('This saved session is unavailable for your account.');setSidebar(true);return;}
         if(chosen)select({id:chosen.id,frameId:chosen.id,title:chosen.title,temporary:false,originalTemporary:false});
         else await add();
-      }catch(e){setError((e as Error).message);setSidebar(true);if(temporary)await add(true);}
+      }catch(e){setError((e as Error).message);if(!initialWorkspaceId)setSidebar(true);if(temporary&&!initialWorkspaceId)await add(true);}
     })();
-  },[add,initialId,refresh,select,temporary]);
+  },[add,initialId,initialWorkspaceId,refresh,select,temporary]);
   useEffect(()=>{
     const listen=(event:MessageEvent)=>{
       const data=event.data;
@@ -92,7 +99,7 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
   return <main className="fixed inset-0 overflow-hidden bg-[#10101a] text-[#ecebf1]"><PendingCanvasInvitation/>
     {/* Inactive work must keep painting: hiding its frame can throttle agents and pending saves. */}
     {opened.map(item=><iframe key={item.frameId} ref={node=>{if(node)frames.current.set(item.frameId,node);else frames.current.delete(item.frameId);}}
-      title={`Canvas: ${item.title}`} src={`${path}workspace=${encodeURIComponent(item.frameId)}${item.originalTemporary?'&temporary=1':''}`}
+      title={`Canvas: ${item.title}`} src={`${path}workspace=${encodeURIComponent(item.frameId)}&embedded=1${item.originalTemporary?'&temporary=1':''}`}
       aria-hidden={active!==item.frameId} tabIndex={active===item.frameId?0:-1}
       inert={active!==item.frameId} className="absolute top-0 h-full w-full border-0" style={{left:0,zIndex:active===item.frameId?1:0,pointerEvents:active===item.frameId?'auto':'none',visibility:(active===item.frameId || item.busy || item.saveStatus==='saving')?'visible':'hidden'}}/>) }
     {!current && <div className="flex h-full flex-col items-center justify-center gap-4 bg-[radial-gradient(ellipse_at_top_left,#282052,transparent_65%)]"><p role="status" className="text-sm text-white/50">{error ? 'Saved sessions are unavailable. You can retry or open a temporary canvas.' : sidebar && !creating ? 'Choose a session from History or start a new one.' : 'Opening your canvas…'}</p>{error && <button onClick={()=>void add(true)} className="rounded-xl border border-white/10 px-5 py-3">Open temporary canvas</button>}</div>}
@@ -106,6 +113,7 @@ export function SessionShell({owner, initialId, temporary=false, testMode=false}
         {error&&<p role="alert" className="m-3 rounded-xl bg-red-500/10 p-3 text-sm text-red-200">{error}<button className="ml-2 underline" onClick={()=>void refresh().then(async all=>{setError('');if(!openedRef.current.length){const s=all.find(s=>s.id===initialId)||all.find(s=>!s.archived);if(s)openSaved(s);else await add();}}).catch(e=>setError(e.message))}>Retry</button></p>}
         <div className="flex-1 space-y-1 overflow-y-auto p-3">
           {opened.filter(s=>s.temporary).map(item=><div key={item.frameId} className={`group flex items-center rounded-xl ${active===item.frameId?'bg-white/10':''}`}><button className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-sm" onClick={()=>select(item)}><span className="truncate">{item.title}</span><span className="text-xs text-white/40">Temporary</span>{item.busy&&<LoaderCircle role="status" aria-label="Running" size={14} className="ml-auto shrink-0 animate-spin text-white/55"/>}</button><button aria-label={`Close ${item.title}`} className="p-2" onClick={()=>close(item)}><X size={13}/></button></div>)}
+          {opened.filter(item=>item.sharedEntry&&!sessions.some(session=>session.id===item.id)).map(item=><div key={item.frameId} className={`group flex items-center rounded-xl ${active===item.frameId?'bg-white/10':'hover:bg-white/5'}`}><button className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-sm" onClick={()=>select(item)}><span className="truncate">{item.title}</span><span className="text-xs text-white/40">Shared</span>{item.busy&&<LoaderCircle role="status" aria-label="Running" size={14} className="ml-auto shrink-0 animate-spin text-white/55"/>}</button><button aria-label={`Close ${item.title}`} className="p-2" onClick={()=>close(item)}><X size={13}/></button></div>)}
           <p className="px-3 pb-1 pt-4 text-xs text-white/40">{archived?'Archived':'History'}</p>
           {sessions.filter(s=>s.archived===archived && s.title.toLowerCase().includes(query.toLowerCase())).map(s=>{
             const live=opened.find(o=>o.id===s.id);
