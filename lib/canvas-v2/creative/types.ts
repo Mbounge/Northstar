@@ -55,6 +55,7 @@ export interface CreativeResult {
     timedOut: boolean;
     workspace: string;
     canvasRevision?: string;
+    timings?: { workspaceMs: number; transferMs: number; executionMs: number; receiptMs: number; exportMs: number; totalMs: number };
   };
   warnings?: string[];
 }

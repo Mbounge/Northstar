@@ -77,3 +77,21 @@ Keep one worker instance: native runtime routing and unattended browser-side can
 The pinned Linux image built and started successfully on Render on September 13, 2026. The authenticated Vercel branch preview completed live chat, same-conversation follow-up and native canvas composition through that worker. Production remains unchanged until the scoped rollout acceptance checks pass.
 
 References: [OpenAI App Server](https://learn.chatgpt.com/docs/app-server), [Render Docker](https://render.com/docs/docker), [Render compute plans](https://render.com/docs/compute-plans), [Render Blueprint fields](https://render.com/docs/blueprint-spec).
+
+
+## Asset-processing latency
+
+`workspace_run` defaults to `canvasContext=measured`, preserving the current
+revision and geometry check. Retained-image processing and file-only work can
+set `canvasContext=none` to avoid whole-board capture and snapshot transfer.
+The workspace still receives a small explicit omitted-context marker in
+`canvas.json`, so a previous run's geometry cannot appear current.
+The host reuses its execution helper only within the same live container,
+refreshes it after expiry/failure, overlaps independent first-run uploads, and
+reuses the post-execution file listing for that command's exports. Commands
+remain serialized, receipts are still verified, and uncertain work is never
+silently replayed. Execution results report workspace, transfer, execution,
+receipt, export and total durations. These are tool timings, not a claim about
+the entire model turn. Both worker and browser must be released for the new
+context option; an app-only release cannot update the worker's tool schema or
+review instructions. The existing image-boundary precision checks still apply.

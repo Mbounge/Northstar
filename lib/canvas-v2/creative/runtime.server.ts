@@ -159,6 +159,7 @@ print('NORTHSTAR_EXECUTION_RESULT='+json.dumps({'receiptPath':p['receiptPath']})
 export class NorthstarCreativeRuntime {
   private api: CreativeOpenAI;
   private container?: string;
+  private runner?: { container: string; path: string };
   private sourceIds = new Set<string>();
   private jobs = new Map<
     string,
@@ -196,6 +197,7 @@ export class NorthstarCreativeRuntime {
       .finally(async () => {
         const id = this.container;
         this.container = undefined;
+        this.runner = undefined;
         if (id)
           await this.api
             .json(
@@ -341,7 +343,7 @@ export class NorthstarCreativeRuntime {
         throw new Error("Creative service returned an invalid workspace.");
       this.container = id;
     }
-    if (restarted) this.sourceIds.clear();
+    if (restarted) { this.sourceIds.clear(); this.runner = undefined; }
     return { id: this.container, restarted };
   }
   private async upload(
@@ -446,6 +448,7 @@ export class NorthstarCreativeRuntime {
     signal: AbortSignal,
     lineage?: string[],
   ): Promise<CreativeResult> {
+    const startedAt = Date.now();
     const command = string(args.command);
     if (!command.trim() || command.length > 64000)
       throw new Error("Provide a shell command of at most 64,000 characters.");
@@ -471,11 +474,15 @@ export class NorthstarCreativeRuntime {
         data: inputs[i].bytes.toString("base64"),
       });
     }
-    if (context.canvas)
-      files.push({
-        path: "canvas.json",
-        data: Buffer.from(JSON.stringify(context.canvas)).toString("base64"),
-      });
+    // Replace an earlier snapshot even for asset-only work: a stale canvas.json
+    // must not look like current geometry in a persistent workspace.
+    files.push({
+      path: "canvas.json",
+      data: Buffer.from(JSON.stringify(context.canvas ?? {
+        context: 'omitted', revisionId: null, measurementRevisionId: null, nodes: [],
+        note: 'Asset-only processing. No current canvas source or geometry was requested.',
+      })).toString("base64"),
+    });
     if (
       files.some((f) => f.path === "canvas.json") &&
       files.filter((f) => f.path === "canvas.json").length > 1
@@ -487,28 +494,40 @@ export class NorthstarCreativeRuntime {
       throw new Error("Workspace input exceeds the batch transfer limit.");
     const exports = rows(args.exports, 8);
     for (const f of exports) workspacePath(f.path);
+    const workspaceStartedAt = Date.now();
     const { id, restarted } = await this.workspace(signal);
+    const workspaceMs = Date.now() - workspaceStartedAt;
     for (const input of inputs) this.sourceIds.add(input.id);
     const receiptPath = `.northstar-receipts/${randomUUID()}.json`;
-    const payload = await this.upload(
+    const transferStartedAt = Date.now();
+    const runnerWork = this.runner?.container === id
+      ? Promise.resolve(this.runner.path)
+      : this.upload(id, 'run.py', Buffer.from(WORKSPACE_RUNNER), signal).then(path => {
+        this.runner = { container: id, path };
+        return path;
+      });
+    const payloadWork = this.upload(
       id,
       "run-input.json",
       Buffer.from(JSON.stringify({ files, command, timeoutMs, receiptPath })),
       signal,
     );
-    const runner = await this.upload(
-      id,
-      "run.py",
-      Buffer.from(WORKSPACE_RUNNER),
-      signal,
-    );
+    const [payloadResult, runnerResult] = await Promise.allSettled([payloadWork, runnerWork]);
+    if (payloadResult.status === 'rejected') throw payloadResult.reason;
+    if (runnerResult.status === 'rejected') throw runnerResult.reason;
+    const payload = payloadResult.value, runner = runnerResult.value;
+    const transferMs = Date.now() - transferStartedAt;
+    const executionStartedAt = Date.now();
     await this.shell(
       id,
       `python ${quote(runner)} ${quote(payload)}`,
       model,
       signal,
-    );
-    const receipt = (await this.workspaceFiles(id, signal)).find(
+    ).catch(error => { this.runner = undefined; throw error; });
+    const executionMs = Date.now() - executionStartedAt;
+    const receiptStartedAt = Date.now();
+    const workspaceFiles = await this.workspaceFiles(id, signal);
+    const receipt = workspaceFiles.find(
       (file) => file.path === workspacePath(receiptPath),
     );
     const receiptId = string(receipt?.id);
@@ -540,11 +559,15 @@ export class NorthstarCreativeRuntime {
     await this.api
       .json(`/containers/${id}/files/${receiptId}`, "DELETE", undefined, signal)
       .catch(() => undefined);
+    const receiptMs = Date.now() - receiptStartedAt;
+    const exportStartedAt = Date.now();
     const exported = await this.export(
       { ...args, exports },
       lineage ?? [...this.sourceIds],
       signal,
+      workspaceFiles,
     );
+    const exportMs = Date.now() - exportStartedAt;
     return {
       ...exported,
       summary:
@@ -557,6 +580,7 @@ export class NorthstarCreativeRuntime {
         timedOut: result.timedOut === true,
         workspace: WORKSPACE,
         canvasRevision: context.canvas?.revisionId,
+        timings: { workspaceMs, transferMs, executionMs, receiptMs, exportMs, totalMs: Date.now() - startedAt },
       },
       warnings: [
         ...(restarted
@@ -590,6 +614,7 @@ export class NorthstarCreativeRuntime {
     args: JsonObject,
     parents: string[],
     signal: AbortSignal,
+    listedFiles?: JsonObject[],
   ): Promise<CreativeResult> {
     const requested = rows(args.exports, 8);
     const artifacts: NorthstarArtifact[] = [];
@@ -601,7 +626,7 @@ export class NorthstarCreativeRuntime {
       throw new Error(
         "No execution workspace exists. Run code or re-import retained assets first.",
       );
-    const files = await this.workspaceFiles(this.container, signal);
+    const files = listedFiles ?? await this.workspaceFiles(this.container, signal);
     let total = 0;
     for (const item of requested) {
       const path = workspacePath(item.path);

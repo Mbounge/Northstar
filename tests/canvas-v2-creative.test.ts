@@ -203,6 +203,8 @@ test("workspace executes once, reuses its isolated container and retains origina
     assert.equal(a.status, "completed");
     if (a.status !== "completed") return;
     assert.equal(a.result.execution?.stdout, "42");
+    assert.ok(a.result.execution?.timings);
+    assert.ok(Object.values(a.result.execution.timings).every(value => Number.isFinite(value) && value >= 0));
     assert.equal(a.result.artifacts.length, 1);
     assert.equal(a.result.assets[0].authority, "calculated");
     assert.equal(
@@ -211,6 +213,16 @@ test("workspace executes once, reuses its isolated container and retains origina
     );
     r.start("two", "workspace_run", { command: "pwd" }, empty);
     await finish(r, "two");
+    const uploads = f.requests.filter(request => request.method === 'POST' && request.body instanceof FormData).map(request => ((request.body as FormData).get('file') as File).name);
+    assert.equal(uploads.filter(name => name === 'run.py').length, 1, 'reuse the verified runner within this container');
+    assert.equal(uploads.filter(name => name === 'run-input.json').length, 2, 'each command keeps its own fresh payload');
+    assert.equal(f.requests.filter(request => request.path.includes('/files?')).length, 2, 'one authoritative listing per command also serves its exports');
+    const latestPayload = f.requests.filter(request => request.body instanceof FormData && ((request.body as FormData).get('file') as File).name === 'run-input.json').at(-1)!;
+    const payload = JSON.parse(await ((latestPayload.body as FormData).get('file') as File).text());
+    const canvasFile = payload.files.find((file: { path: string }) => file.path === 'canvas.json');
+    const canvasContext = JSON.parse(Buffer.from(canvasFile.data, 'base64').toString());
+    assert.equal(canvasContext.context, 'omitted', 'asset-only work overwrites any previous geometry with an explicit unavailable marker');
+    assert.equal(canvasContext.revisionId, null);
     assert.equal(
       f.requests.filter(
         (r) => r.path === "/v1/containers" && r.method === "POST",
@@ -246,6 +258,22 @@ test('prepared assets retain only their source lineage even after unrelated work
     runtime.start('foreign', 'prepare_asset', { assetId: 'unknown', label: 'Mark', crop: { x: 0, y: 0, width: 1, height: 1 } }, context('source-ref', 'authentic-source'));
     assert.equal((await finish(runtime, 'foreign')).status, 'failed');
     assert.equal(f.requests.length, before);
+  } finally { runtime.dispose(); }
+});
+test('an expired container receives a fresh runner and drops prior workspace lineage', async () => {
+  const f = fakeApi({ expired: true });
+  const runtime = new NorthstarCreativeRuntime('test-key', () => 'gpt-5.6-luna', f);
+  try {
+    runtime.start('before-expiry', 'workspace_run', { command: 'printf 42' }, empty);
+    assert.equal((await finish(runtime, 'before-expiry')).status, 'completed');
+    runtime.start('after-expiry', 'workspace_run', { command: 'printf 42' }, empty);
+    const result = await finish(runtime, 'after-expiry');
+    assert.equal(result.status, 'completed');
+    if (result.status === 'completed') assert.match(result.result.warnings!.join(' '), /expired.*recreated/);
+    const runnerUploads = f.requests.filter(request => request.method === 'POST' && request.body instanceof FormData && ((request.body as FormData).get('file') as File).name === 'run.py');
+    assert.equal(runnerUploads.length, 2);
+    assert.ok(runnerUploads[0].path.includes('cntr_1'));
+    assert.ok(runnerUploads[1].path.includes('cntr_2'));
   } finally { runtime.dispose(); }
 });
 test("altered transport commands are not reported as verified execution", async () => {

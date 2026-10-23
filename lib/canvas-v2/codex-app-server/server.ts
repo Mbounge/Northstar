@@ -212,7 +212,9 @@ export class CodexSessionHost {
       initialActivity: s.reviewReport?.initialActivity ?? s.reviewContext.activity() };
     this.progress(s, s.reviewContext.hasProductWork()
       ? 'I’m checking the rendered screens against the references and the requested experience.'
-      : 'I’m checking whether the explanation misses anything that would change the answer.');
+      : s.reviewContext.activity().toolResults.canvas_edit
+        ? 'I’m checking the requested changes and the surrounding canvas work.'
+        : 'I’m checking whether the explanation misses anything that would change the answer.');
     let feedback: string;
     let rawFeedback: string;
     let remainingWork: number;

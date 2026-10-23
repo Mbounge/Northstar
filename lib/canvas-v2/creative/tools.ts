@@ -43,6 +43,7 @@ export const NORTHSTAR_CREATIVE_TOOLS = [
       properties: {
         command: text,
         summary: text,
+        canvasContext: { type: 'string', enum: ['measured', 'none'], description: 'Defaults to measured: includes current canvas source and freshly verified geometry. Use none for retained-image processing, pixel analysis and file work that do not need board geometry; this avoids a whole-board capture and snapshot transfer. Batch related analysis and processing in one command, reuse workspace files, and export only images needed for visual review or the final result.' },
         timeoutMs: { type: "integer", minimum: 1000, maximum: 120000 },
         inputs: inputsSchema,
         files: {

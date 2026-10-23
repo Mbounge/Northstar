@@ -6,6 +6,7 @@ import { CANVAS_V2_SCREEN_FONTS, inspectCanvasV2FontPixels } from '@/lib/canvas-
 import { recordCanvasV2ScreenVersions, type CanvasV2ScreenVersion } from '@/lib/canvas-v2/screen-versions';
 import { artifactMetadata, isCreativeTool, type NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { creativeInputContext, runCreativeJob, creativeResultForModel } from '@/lib/canvas-v2/creative/bridge';
+import { creativeWorkspaceState } from '@/lib/canvas-v2/creative/canvas-context';
 import { verifyAssetCropSelection, type AssetPixelRect, type AssetSourceSize } from '@/lib/canvas-v2/asset-crop';
 import { inspectAssetCropPixels, readAssetCropSource } from '@/lib/canvas-v2/asset-crop-inspection';
 import { screenConstructionPlan, requireScreenConstructionPlan, type ScreenConstructionPlan } from '@/lib/canvas-v2/screen-construction-plan';
@@ -362,15 +363,14 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         }
         const inputs=Array.isArray(args.inputAssetIds)?args.inputAssetIds:Array.isArray(args.inputs)?args.inputs.map(input=>object(input).assetId):[args.assetId];
         for(const reference of accountReferenceFlows(referenceAssetsFor(inputs),accountFlowSummaries.current))await placeReferenceRail(reference,signal);
-        const requestedMeasurement = action.name === 'workspace_run' ? await engine.ensureObservation(signal) : undefined;
+        const workspaceState = action.name === 'workspace_run' ? await creativeWorkspaceState(args.canvasContext, engine, signal) : undefined;
         const turnId = rootId.current;
-        const revision = engine.readCommittedRevision();
-        if (requestedMeasurement && requestedMeasurement.revisionId !== revision.id) throw new Error('The canvas changed during this action. Read it again.');
+        const revision = workspaceState?.revision ?? engine.readCommittedRevision();
         const registered = [...new Map([...revision.evidence, ...assets.current.values()].map(a=>[a.id,a])).values()];
         let html = revision.document.html;
         for (const asset of registered) html = html.replaceAll(asset.url, `northstar-asset:${asset.id}`);
-        const measurement = requestedMeasurement?.revisionId === revision.id ? requestedMeasurement : undefined;
-        const context = await creativeInputContext(object(action.arguments), args, registered, [...artifacts.current.values()], action.name === 'workspace_run' ? {
+        const measurement = workspaceState?.measurement;
+        const context = await creativeInputContext(object(action.arguments), args, registered, [...artifacts.current.values()], workspaceState?.includeCanvas ? {
           theme: themeContext, revisionId: revision.id, document: {html, css: revision.document.css}, nodes: measurement?.spatial.nodes ?? [], measurementRevisionId: measurement?.revisionId,
           connectors: measurement ? canvasV2MeasuredConnectorDirectory(measurement.spatial.nodes) : undefined,
           screenPlacements: engine.readNativeScene()?.revisionId === revision.id ? canvasV2ScreenPlacementContext(engine.readNativeScene()!, registered, current.current.selectedNodeIds).context : undefined,
