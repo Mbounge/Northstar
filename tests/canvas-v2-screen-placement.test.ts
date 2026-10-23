@@ -26,6 +26,16 @@ test('a placed image becomes a reusable handle and precise logical region withou
   assert.equal(canvasV2ScreenPlacementContext(scene,result.retainedAssets).retainedAssets.length,0);
 });
 
+test('a legacy stale image ID cannot override the currently visible uploaded pixels',()=>{
+  const scene=board();scene.nodes[1].evidence={id:'old-image'};
+  scene.nodes[1].attributes['data-canvas-v2-evidence-id']='old-image';
+  const result=canvasV2ScreenPlacementContext(scene,[{id:'old-image',url:'data:image/png;base64,b2xk',label:'Old photo',mediaType:'image'}],['photo']);
+  assert.equal(result.retainedAssets.length,1);
+  assert.equal(result.retainedAssets[0].url,pixels);
+  assert.notEqual(result.context.placements[0].assetHandle,'northstar-asset:old-image');
+  assert.equal(scene.nodes[1].evidence.id,'old-image','reading a legacy canvas does not rewrite shared source');
+});
+
 test('reusing native pixels in a new screen leaves the original human image byte-for-byte unchanged',()=>{
   const scene=board(),document=serializeCanvasV2NativeScene(scene);
   const evidence=canvasV2ScreenPlacementContext(scene,[]).retainedAssets;

@@ -58,7 +58,9 @@ export function canvasV2ScreenPlacementContext(scene: CanvasV2NativeSceneDocumen
     const matrix=world(node);if(!node.sourceNodeId||!matrix||node.attributes[SCREEN_ATTRIBUTE])return [];
     // A GIF's inspection thumbnail can match a still upload byte-for-byte.
     // Reusing that GIF handle would unexpectedly animate the user's still.
-    let asset=evidence.find(a=>a.id===node.evidence?.id || (a.mediaType!=='gif' && a.mediaType!=='video' && a.url===node.attributes.src));
+    // A saved local image may carry a legacy ID from pixels replaced later.
+    // An ID alone must never substitute a different retained photograph.
+    let asset=evidence.find(a=>(a.id===node.evidence?.id && a.url===node.attributes.src) || (a.mediaType!=='gif' && a.mediaType!=='video' && a.url===node.attributes.src));
     let type=asset?.mediaType ?? 'image',label=node.attributes.alt || asset?.label || 'Canvas asset';
     if(node.attributes[MEDIA_ATTRIBUTE]){try{const media=parseCanvasV2PlayableMedia(node.attributes[MEDIA_ATTRIBUTE]);type=media.type;label=media.description;asset=evidence.find(a=>a.id===media.evidenceId);if(asset&&!asset.mediaType){asset={...asset,mediaType:media.type,originalUrl:asset.originalUrl||media.src};retained.push(asset);}}catch{return [];}}
     else if(node.tagName.toLowerCase()!=='img')return [];
