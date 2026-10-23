@@ -397,7 +397,7 @@ test('confirmed selection blockers end review promptly as unfinished without ret
     assert.equal(JSON.parse(packet.text).executionBlockers[0].nodeId, 'shoe');
     return JSON.stringify(feedback);
   }, 6, (action: JsonObject) => {
-    if (action.name === 'canvas_edit') throw new Error('Human-authored node shoe is protected. Compose around it or target an unedited sibling.');
+    if (action.name === 'canvas_edit') return { committed: false, baseRevisionId: 'unchanged', error: 'Human-authored node shoe is protected. Compose around it or target an unedited sibling.', next: 'The draft was not committed. The public canvas is unchanged.' };
     return { screens: [], selectedNodeIds: [], workingContext: { protectedNodeIds: ['shoe'], editableNodeIds: [], focusObjects: [{ nodeId: 'shoe', locked: false, hidden: false, canonicalEvidence: false }] } };
   });
   try {

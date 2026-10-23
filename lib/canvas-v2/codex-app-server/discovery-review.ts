@@ -338,7 +338,10 @@ export class DiscoveryReviewContext {
     }
     if (!success) {
       if (name === 'canvas_edit' && Array.isArray(content)) for (const raw of content) {
-        const error = string(object(raw).text);
+        let error = string(object(raw).text);
+        // Browser mutations return rejectedCodexEdit, which the client sends
+        // as a JSON error envelope rather than throwing its inner message.
+        try { const rejection = object(JSON.parse(error)); if (rejection.committed === false) error = string(rejection.error); } catch { /* Plain thrown tool errors retain their original message. */ }
         const match = error.match(/^Human-authored node ([A-Za-z0-9_-]+) is protected\. Compose around it or target an unedited sibling\.$/);
         if (match) this.selectionBlocks.set(match[1], { rejectedAt: this.sequence });
       }
