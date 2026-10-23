@@ -216,7 +216,14 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
   const [committed, setCommitted] = useState<CanvasV2ArtifactRevision>(initial);
   const [history, setHistory] = useState<CanvasV2ArtifactRevision[]>(initialHistory.revisions);
   const [historyIndex, setHistoryIndex] = useState(0);
-  const [candidate, setCandidate] = useState<CanvasV2ArtifactRevision>();
+  const [candidate, setCandidateState] = useState<CanvasV2ArtifactRevision>();
+  // Validation callbacks can outlive their iframe and React render. Publish
+  // candidate identity synchronously so cancellation cannot target a new edit.
+  const candidateRef = useRef<CanvasV2ArtifactRevision | undefined>(undefined);
+  const setCandidate = (next: CanvasV2ArtifactRevision | undefined) => {
+    candidateRef.current = next;
+    setCandidateState(next);
+  };
   const [pendingEdit, setPendingEdit] = useState<PendingCanvasV2Edit>();
   const [pendingActionKind, setPendingActionKind] = useState<"research" | "design">("design");
   const [pendingResearch, setPendingResearch] = useState<PendingResearch>();
@@ -1031,9 +1038,10 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
 
   const interruptNorthstarCandidate = () => {
     if (pendingManualEditRef.current?.origin !== "northstar") return;
-    if (candidate) {
-      settleCandidateRevision(candidate.id);
-      discardInspectionScene(candidate.id);
+    const interrupted = candidateRef.current;
+    if (interrupted) {
+      settleCandidateRevision(interrupted.id);
+      discardInspectionScene(interrupted.id);
       setCandidate(undefined);
     }
     updatePendingManualEdit(undefined);
@@ -1150,6 +1158,8 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
   };
 
   const receiveObservation = (observation: CanvasV2RenderObservation) => {
+    if (observation.revisionId !== committedRef.current.id
+      && (observation.revisionId !== candidateRef.current?.id || candidate?.id !== candidateRef.current?.id)) return;
     // ResizeObserver/load callbacks can outlive the React render that created
     // them. The loop ref is updated synchronously by publishLoop and is the
     // transaction authority; using the captured `loop` here can lose a
@@ -1526,7 +1536,12 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
     else activeRunId.current = undefined;
   };
 
-  const captureFailed = (message: string) => {
+  const captureFailed = (message: string, revisionId = candidate?.id ?? committed.id) => {
+    // Public and candidate frames render concurrently. A failure belongs only
+    // to its revision, even if React has installed a newer event handler.
+    if (revisionId !== committedRef.current.id && revisionId !== candidateRef.current?.id) return;
+    if (revisionId !== candidateRef.current?.id && candidateRef.current) return;
+    if (candidate && candidate.id !== candidateRef.current?.id) return;
     if (requestedObservationRevisionId === committedRef.current.id) {
       setRequestedObservationRevisionId(undefined);
       for (const waiter of observationWaiters.current) {
@@ -1667,9 +1682,28 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       if (revision.state !== 'committed') throw new Error('Only committed canvas updates can be shared.');
       assertCanvasV2ArtifactDocument(revision.document);
       validateCanvasV2EvidenceBindings(revision.document,revision.evidence);
+      const interrupted = candidateRef.current;
+      if (interrupted) {
+        settleCandidateRevision(interrupted.id);
+        discardInspectionScene(interrupted.id);
+        manualFailureRef.current = 'A teammate changed the canvas during validation. Read the latest canvas before composing again.';
+      }
       setCandidate(undefined);updatePendingManualEdit(undefined);
       nativeSceneRef.current=undefined;setNativeScene(undefined);
       acceptCommittedRevision(revision,`shared:${revision.id}`);
+      const active = loopRef.current;
+      if (active && activeRunId.current === active.id && canvasV2LoopIsActive(active)) {
+        if (active.status === 'rendering') {
+          steer({ id: id('peer-edit'), message: 'A teammate changed the canvas. Read its current revision, preserve their changes, and continue the objective.' });
+        } else if (pendingInitialRequest.current?.runId === active.id) {
+          // The old measuring frame has gone away. Transfer the waiting read
+          // to shared truth, including a revision already observed locally.
+          pendingInitialRequest.current = undefined;
+          const measured = observationsRef.current[revision.id];
+          if (measured) enqueueModelRequest(active, revision, measured);
+          else pendingInitialRequest.current = { runId: active.id, revisionId: revision.id };
+        }
+      }
       if (!observationsRef.current[revision.id]) setRequestedObservationRevisionId(revision.id);
     },
     readCompositionFeedback: () => compositionFeedbackRef.current?.revisionId === committedRef.current.id

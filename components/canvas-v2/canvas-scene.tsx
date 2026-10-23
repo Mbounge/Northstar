@@ -51,7 +51,7 @@ export interface CanvasV2CanvasSceneProps {
   revision: CanvasV2ArtifactRevision;
   theme?: CanvasV2ArtifactTheme;
   onObservation: (observation: CanvasV2RenderObservation) => void;
-  onCaptureError?: (error: string) => void;
+  onCaptureError?: (error: string, revisionId: string) => void;
   onCaptureProgress?: (revisionId: string, stage: string) => void;
   width?: number;
   height?: number;
@@ -728,7 +728,7 @@ function CanvasV2ObservationScene({
     if (!frame || !frameDocument?.documentElement || !frameDocument.body) {
       const message = "Candidate document was unavailable after iframe load.";
       if (!onCaptureError) setError(message);
-      onCaptureError?.(message);
+      onCaptureError?.(message, revision.id);
       return;
     }
     const captureIsCurrent = () => (
@@ -941,7 +941,7 @@ function CanvasV2ObservationScene({
       const message = canvasV2CaptureErrorMessage(captureError);
       if (process.env.NODE_ENV !== "production") console.warn("[canvas-v2] private whole-board capture could not be observed after local retry", message);
       if (!onCaptureError) setError(message);
-      onCaptureError?.(message);
+      onCaptureError?.(message, revision.id);
     }
   };
 

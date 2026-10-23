@@ -160,6 +160,13 @@ replaying a model request. Before a delayed Northstar edit commits, it must stil
 match the revision against which it was prepared; a teammate's newer edit forces
 a fresh read.
 
+AI validation is revision-owned: cancelled preview callbacks cannot settle or
+cancel a replacement draft. Public preview failures carry their own revision ID
+and do not cancel a simultaneous candidate. Beginning a human gesture retires an
+AI candidate synchronously, even before React renders the new state. A shared
+revision redirects a waiting AI observation or rendering turn to current truth;
+it preserves the objective and never promotes the abandoned draft.
+
 ## Verification and rollout
 
 The disposable local HTTP fixture exercises the real controller and workspace

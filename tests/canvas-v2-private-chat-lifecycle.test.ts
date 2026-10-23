@@ -14,7 +14,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
 /** Execute the real hooks and domain imports. React scheduling alone is
  * replaced: restore must not run effects, start a model request, or need a DOM. */
-function hooks() {
+function hooks(request?: (options: { body: { revision: CanvasV2ArtifactRevision } }) => Promise<unknown>) {
   const slots: unknown[] = []; let cursor = 0;
   const react = {
     useState: (initial: unknown) => {
@@ -35,7 +35,7 @@ function hooks() {
     vm.runInNewContext(code, {
       exports, AbortController, Date, Map, Set, setTimeout, clearTimeout,
       fetch: () => { throw new Error('Restore must not request a model or network.'); },
-      require: (name: string) => name === 'react' ? react : name === './use-timed-chat-turns' ? load(root + 'components/canvas-v2/use-timed-chat-turns.ts')
+      require: (name: string) => name === 'react' ? react : name === '@/lib/canvas-v2/request-reliability' && request ? { ...require(root + 'lib/canvas-v2/request-reliability'), requestCanvasV2Json: request } : name === './use-timed-chat-turns' ? load(root + 'components/canvas-v2/use-timed-chat-turns.ts')
         : require(name.startsWith('@/') ? root + name.slice(2) : name.startsWith('.') ? fileURLToPath(new URL(name, 'file://' + file)) : name),
     }, { filename: file });
     return exports;
@@ -122,4 +122,113 @@ test('an AI edit based on the current peer revision can still enter validation',
   assert.match(current.inspectionCandidate?.document.html ?? '', /AI answer/);
   assert.match(current.inspectionCandidate?.document.html ?? '', /Peer answer/);
   assert.equal(engine.readCommittedRevision().id, peer.id, 'a valid request still waits for rendered validation');
+});
+
+for (const lateEvent of ['observation', 'failure'] as const) test(`a cancelled AI draft's late ${lateEvent} cannot disturb a newer edit`, () => {
+  const h = hooks();
+  type EngineHook = typeof import('../components/canvas-v2/use-canvas-v2-design-loop').useCanvasV2DesignLoop;
+  const useEngine = h.load(root + 'components/canvas-v2/use-canvas-v2-design-loop.ts').useCanvasV2DesignLoop as EngineHook;
+  const render = () => h.render(() => useEngine('/no-model', revision));
+  let engine = render();
+  engine.receiveObservation({ revisionId: revision.id } as Parameters<typeof engine.receiveObservation>[0]);
+  assert.equal(engine.applyManualDocument({ html: '<p data-canvas-v2-node-id="a">Old AI draft</p>', css: '' }, 'Old draft', undefined, undefined, { origin: 'northstar', expectedParentId: revision.id }), true);
+  const old = render();
+  const cancelledId = old.inspectionCandidate!.id;
+  const peer = { ...revision, id: 'peer-during-validation', parentId: revision.id, document: { html: '<p data-canvas-v2-node-id="a">Peer edit</p>', css: '' } };
+  old.receiveSharedRevision(peer);
+  engine = render();
+  engine.receiveObservation({ revisionId: peer.id } as Parameters<typeof engine.receiveObservation>[0]);
+  assert.equal(engine.applyManualDocument({ html: '<p data-canvas-v2-node-id="a">Fresh AI draft</p>', css: '' }, 'Fresh draft', undefined, undefined, { origin: 'northstar', expectedParentId: peer.id }), true);
+  const fresh = render().inspectionCandidate!;
+  if (lateEvent === 'failure') old.captureFailed('Old iframe failed after it was removed');
+  else old.receiveObservation({ revisionId: cancelledId } as Parameters<typeof engine.receiveObservation>[0]);
+  const after = render();
+  assert.equal(after.inspectionCandidate?.id, fresh.id, 'an obsolete iframe cannot cancel the replacement draft');
+  assert.equal(after.readManualFailure(), undefined, 'an obsolete callback cannot publish a stale error');
+  assert.equal(after.readCommittedRevision().id, peer.id);
+  after.captureFailed('Current validation failed', fresh.id);
+  assert.equal(render().inspectionCandidate, undefined, 'the active validation still reports real failures');
+  assert.equal(after.readManualFailure(), 'Current validation failed');
+});
+
+test('starting a human gesture cancels an AI draft even before React renders it', () => {
+  const h = hooks();
+  type EngineHook = typeof import('../components/canvas-v2/use-canvas-v2-design-loop').useCanvasV2DesignLoop;
+  const useEngine = h.load(root + 'components/canvas-v2/use-canvas-v2-design-loop.ts').useCanvasV2DesignLoop as EngineHook;
+  const render = () => h.render(() => useEngine('/no-model', revision));
+  const engine = render();
+  engine.receiveObservation({ revisionId: revision.id } as Parameters<typeof engine.receiveObservation>[0]);
+  assert.equal(engine.applyManualDocument({ html: '<p data-canvas-v2-node-id="a">AI draft</p>', css: '' }, 'AI draft', undefined, undefined, { origin: 'northstar' }), true);
+  engine.beginHumanEdit();
+  const after = render();
+  assert.equal(after.inspectionCandidate, undefined);
+  assert.equal(after.applyingManualEdit, false);
+  assert.equal(after.readCommittedRevision().id, revision.id);
+});
+
+test('a public preview failure cannot cancel simultaneous AI validation', () => {
+  const h = hooks();
+  type EngineHook = typeof import('../components/canvas-v2/use-canvas-v2-design-loop').useCanvasV2DesignLoop;
+  const useEngine = h.load(root + 'components/canvas-v2/use-canvas-v2-design-loop.ts').useCanvasV2DesignLoop as EngineHook;
+  const render = () => h.render(() => useEngine('/no-model', revision));
+  const engine = render();
+  engine.receiveObservation({ revisionId: revision.id } as Parameters<typeof engine.receiveObservation>[0]);
+  assert.equal(engine.applyManualDocument({ html: '<p data-canvas-v2-node-id="a">AI draft</p>', css: '' }, 'AI draft', undefined, undefined, { origin: 'northstar' }), true);
+  const validating = render();
+  validating.captureFailed('Public preview failed', revision.id);
+  assert.equal(render().inspectionCandidate?.id, validating.inspectionCandidate!.id);
+  assert.equal(validating.readManualFailure(), undefined);
+});
+
+for (const alreadyObserved of [false, true]) test(`a peer commit resumes an AI turn waiting for canvas observation (cached=${alreadyObserved})`, async () => {
+  const requested: string[] = [];
+  const h = hooks(async options => {
+    requested.push(options.body.revision.id);
+    return new Promise(() => {}); // Hold the model at the transport boundary.
+  });
+  type EngineHook = typeof import('../components/canvas-v2/use-canvas-v2-design-loop').useCanvasV2DesignLoop;
+  const useEngine = h.load(root + 'components/canvas-v2/use-canvas-v2-design-loop.ts').useCanvasV2DesignLoop as EngineHook;
+  const render = () => h.render(() => useEngine('/deterministic-model', revision));
+  const engine = render();
+  const peer = { ...revision, id: 'peer-before-first-read', parentId: revision.id };
+  if (alreadyObserved) {
+    engine.receiveSharedRevision(peer);
+    engine.receiveObservation({ revisionId: peer.id } as Parameters<typeof engine.receiveObservation>[0]);
+    engine.receiveSharedRevision(revision);
+  }
+  assert.ok(engine.start('Improve the heading'));
+  engine.receiveSharedRevision(peer);
+  if (!alreadyObserved) render().receiveObservation({ revisionId: peer.id } as Parameters<typeof engine.receiveObservation>[0]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(requested, [peer.id], 'the turn must read the newest revision, rather than wait forever for the removed frame');
+  render().stop();
+});
+
+test('a peer commit during AI rendering resumes the same objective from shared truth', async () => {
+  const requested: string[] = [];
+  const h = hooks(async options => {
+    requested.push(options.body.revision.id);
+    if (requested.length > 1) return new Promise(() => {});
+    return { decision: { decision: 'edit', summary: 'Improve the heading', document: { html: '<p data-canvas-v2-node-id="a">AI draft</p>', css: '' } }, evidence: [] };
+  });
+  type EngineHook = typeof import('../components/canvas-v2/use-canvas-v2-design-loop').useCanvasV2DesignLoop;
+  const useEngine = h.load(root + 'components/canvas-v2/use-canvas-v2-design-loop.ts').useCanvasV2DesignLoop as EngineHook;
+  const render = () => h.render(() => useEngine('/deterministic-model', revision));
+  const engine = render();
+  assert.ok(engine.start('Improve the heading', { revisionId: revision.id } as Parameters<typeof engine.receiveObservation>[0]));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const rendering = render();
+  assert.equal(rendering.loop?.status, 'rendering');
+  assert.ok(rendering.inspectionCandidate);
+  const peer = { ...revision, id: 'peer-during-ai-render', parentId: revision.id, document: { html: '<p data-canvas-v2-node-id="a">Teammate heading</p>', css: '' } };
+  rendering.receiveSharedRevision(peer);
+  const resumed = render();
+  assert.equal(resumed.inspectionCandidate, undefined);
+  assert.equal(resumed.loop?.status, 'thinking');
+  assert.equal(resumed.loop?.id, rendering.loop?.id);
+  resumed.receiveObservation({ revisionId: peer.id } as Parameters<typeof engine.receiveObservation>[0]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(requested, [revision.id, peer.id]);
+  assert.equal(render().readCommittedRevision().document.html, peer.document.html);
+  render().stop();
 });
