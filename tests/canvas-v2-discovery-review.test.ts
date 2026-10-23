@@ -70,6 +70,47 @@ test('automatic post-commit render metadata is scoped and source-versioned befor
   assert.ok(initial.images.some(image => image.type === 'image' && image.url.includes('same-pixels')));
 });
 
+test('raster review retains the original, context and exact crops with source-pixel lineage', () => {
+  const context = new DiscoveryReviewContext();
+  const text = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });
+  const image = (pixels: string) => ({ type: 'inputImage', imageUrl: `data:image/png;base64,${pixels}` });
+  const sourceSize = { width: 1024, height: 1536 };
+  const rect = { x: 500, y: 620, width: 340, height: 300 };
+  const contextRect = { x: 381, y: 501, width: 578, height: 538 };
+  context.tool('inspect_asset', { evidenceId: 'original' }, [text({ evidenceId: 'original', sourceSize }), image('full-original')]);
+  const inspect = (assetId: string, cropPixels: unknown, selection: string) => context.tool('inspect_asset', { evidenceId: assetId, pixelRect: cropPixels }, [text({ cropSourceAssetId: assetId, sourceSize, cropPixels, contextRect, cropInspectionId: 'receipt' }), image(`context-${selection}`), image(selection)]);
+  inspect('original', rect, 'gray-panel');
+  inspect('derived', rect, 'ivory-panel');
+  inspect('derived', rect, 'ivory-panel-corrected');
+  const packet = context.packet('Precise panel edit');
+  const directory = JSON.parse(packet.text).imageDirectory as Array<{ role: string; captureRole: string; assetInspection: { assetId: string; sourceSize: unknown; pixelRect?: unknown; contextRect?: unknown; view: string } }>;
+  assert.equal(packet.images.length, 5);
+  assert.deepEqual(directory.map(entry => entry.captureRole), ['asset-original', 'asset-crop-context', 'asset-crop-selection', 'asset-crop-context', 'asset-crop-selection']);
+  assert.deepEqual(directory[0].assetInspection, { assetId: 'original', sourceSize, view: 'original' });
+  assert.deepEqual(directory[4].assetInspection, { assetId: 'derived', sourceSize, pixelRect: rect, contextRect, view: 'selection' });
+  assert.equal(directory[4].role, 'asset:derived:crop:500:620:340:300:selection');
+  assert.ok(packet.images.some(part => part.type === 'image' && part.url.endsWith('ivory-panel-corrected')));
+  assert.ok(!packet.images.some(part => part.type === 'image' && part.url.endsWith(',ivory-panel')));
+  // A tighter seam inspection must not overwrite the full panel or original.
+  inspect('derived', { x: 600, y: 800, width: 100, height: 70 }, 'seam');
+  assert.equal(context.packet('Boundary review').images.length, 7);
+  context.user([{ type: 'text', text: 'A new request', text_elements: [] }]);
+  assert.equal(context.packet('New turn').images.length, 0);
+});
+
+test('identical crop pixels from distinct sources retain their own inspection identity', () => {
+  const context = new DiscoveryReviewContext();
+  for (const assetId of ['original', 'derived']) context.tool('inspect_asset', {}, [
+    { type: 'inputText', text: JSON.stringify({ cropSourceAssetId: assetId, sourceSize: { width: 100, height: 100 }, cropPixels: { x: 1, y: 2, width: 3, height: 4 }, contextRect: { x: 0, y: 0, width: 10, height: 10 } }) },
+    { type: 'inputImage', imageUrl: 'data:image/png;base64,context' },
+    { type: 'inputImage', imageUrl: 'data:image/png;base64,same-crop' },
+  ]);
+  const packet = context.packet('Unchanged protected pixels');
+  const directory = JSON.parse(packet.text).imageDirectory;
+  assert.equal(packet.images.length, 4);
+  assert.deepEqual(directory.map((entry: { assetInspection: { assetId: string } }) => entry.assetInspection.assetId), ['original', 'original', 'derived', 'derived']);
+});
+
 test('direct model-reference review retains typed live evidence without creating a product screen', () => {
   const context = new DiscoveryReviewContext();
   const text = (value: unknown) => ({ type: 'inputText', text: JSON.stringify(value) });
@@ -499,7 +540,7 @@ test('review captions bind each numbered image to its own role, version, aliases
     text: JSON.stringify({ imageDirectory: [
       { imageNumber: 1, role: 'screen:route:render', aliases: ['screen:route:render-copy'], sourceVersion: 'current-v3', captureRole: 'render' },
       { imageNumber: 2, role: 'screen:route:default', sourceVersion: 'current-v3', captureRole: 'default' },
-      { imageNumber: 3, role: 'baseline:route', sourceVersion: 'before-v2', captureRole: 'baseline' },
+      { imageNumber: 3, role: 'baseline:route', sourceVersion: 'before-v2', captureRole: 'baseline', assetInspection: { assetId: 'original', sourceSize: { width: 1024, height: 1536 }, pixelRect: { x: 500, y: 620, width: 340, height: 300 }, view: 'selection' } },
     ] }), images: [current, defaultState, baseline],
   }, { key: 'fake', model: 'gpt-5.6-luna', signal: new AbortController().signal });
   const input = peer.calls.find(call => call.method === 'turn/start')!.params.input as Array<Record<string, unknown>>;
@@ -509,7 +550,10 @@ test('review captions bind each numbered image to its own role, version, aliases
   assert.match(String(input[3].text), /Evidence image 2 of 3; imageDirectory number 2.*screen:route:default.*current-v3.*default/);
   assert.deepEqual(input[4], defaultState);
   assert.match(String(input[5].text), /Evidence image 3 of 3; imageDirectory number 3.*baseline:route.*before-v2.*baseline/);
+  assert.match(String(input[5].text), /Asset inspection:.*original.*1024.*1536.*500.*620.*selection/);
   assert.deepEqual(input[6], baseline);
+  const instructions = String(peer.calls.find(call => call.method === 'thread/start')!.params.developerInstructions);
+  assert.match(instructions, /zero changes outside that mask does not establish that the mask follows the requested subject/);
 });
 
 test('initial appearance and final review preserve the requested model and effort', async () => {

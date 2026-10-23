@@ -11,6 +11,8 @@ import { object, string, type JsonObject } from '../managed-agent/protocol';
 import type { CodexTransport } from './rpc.server';
 import type { UserInput } from './generated/v2/UserInput';
 
+type ReviewImageMetadata = { sourceVersion?: string; captureRole?: string; assetInspection?: { assetId: string; sourceSize: unknown; pixelRect?: unknown; contextRect?: unknown; view: 'original' | 'context' | 'selection' } };
+
 const textField = { type: 'string', minLength: 1 };
 const feedbackBasis = { type: 'string', enum: ['user_requirement', 'observable_defect', 'preference'] };
 const designFinding = { type: 'object', additionalProperties: false, properties: { basis: feedbackBasis, requirement: textField, observation: textField, evidenceImageNumbers: { type: 'array', minItems: 1, items: { type: 'integer', minimum: 1 } } }, required: ['basis', 'requirement', 'observation', 'evidenceImageNumbers'] };
@@ -195,6 +197,8 @@ ${PRODUCT_REFERENCE_REVIEW}
 
 ${ORIGINAL_COMPOSITION_REVIEW}
 
+For localized raster edits, compare the retained original and final derivative at the same source-pixel bounds, including every boundary, seam, trim and occlusion. The assetInspection metadata identifies the original asset, source dimensions and exact crop bounds; a context view includes a selection outline while a selection view contains the unmasked original pixels. Treat the author’s mask and pixel-count report as evidence of compositing containment only: zero changes outside that mask does not establish that the mask follows the requested subject. Inspect protected details and disconnected changed spots against the original. Visible spill, halos, missed material or changed protected stitching requires a local correction even when the outside-mask difference is zero. If the original or corresponding final boundary pixels are missing, request that specific comparison instead of approving precision from a full-board thumbnail or success claim. Preserve valid work and reuse sufficient current captures; do not require repeated exports or unrelated canvas checks.
+
 For an original or explicitly reimagined screen, compare the current pixels with the latest user brief and any supplied componentPlan.designDirection: assess whether hierarchy, layout, density, navigation, typography/icon treatment, component geometry and motion serve the stated product function. The productChecks entry must include designDirection with a pass/revise/unverified verdict and concrete pixel-grounded assessments of briefFit, coherence, typography, imagery, composition, density and visualIdentity. Use revise for a cited requirement violation or observable defect and unverified for missing evidence of such a defect. Keep subjective creative judgments advisory, even when you prefer a different composition. Do not prescribe one palette, layout or level of ornament, and do not demand this verdict for faithful replicas or intentionally consistent variants. This is a brief-fit and craft check, not a requirement that every app look different from its product family.
 
 The server may split product evidence into focused batches. Use reviewFocus.screenNodeIds as the batch scope: only those screens require productChecks or new product-quality work. Sibling component crops support comparisons; omitted sibling full renders are reviewed in their own batch and are not an evidence defect. Assess answer claims only when reviewFocus.assessAnswer is true. Resolve mistaken prior out-of-scope issues as no_longer_needed with the batching reason. This scope does not waive any defect in a focused screen.
@@ -260,7 +264,7 @@ export class DiscoveryReviewContext {
   private omitted = 0;
   private images = new Map<string, UserInput>();
   private imageSizes = new Map<string, number>();
-  private imageMetadata = new Map<string, { sourceVersion?: string; captureRole?: string }>();
+  private imageMetadata = new Map<string, ReviewImageMetadata>();
   private productScreens = new Map<string, JsonObject>();
   private imageSize = 0;
   private question = '';
@@ -330,6 +334,7 @@ export class DiscoveryReviewContext {
     if (!success) return;
     let captureNode = '', nextImageKey = '', nextCaptureRole = '', nextImageSourceVersion: string | undefined;
     let pendingMotionEvidence: JsonObject | undefined, pendingMotionTargetEvidence: JsonObject | undefined;
+    let assetViews: Array<{ key: string; metadata: ReviewImageMetadata }> = [];
     if (Array.isArray(content)) for (const raw of content) {
       const part = object(raw), url = string(part.imageUrl);
       if (part.type === 'inputText') {
@@ -455,15 +460,22 @@ export class DiscoveryReviewContext {
         else if ((captureRole === 'default' || captureNode && value.defaultState===true) && value.nodeId){captureNode=string(value.nodeId);nextImageKey=`screen:${captureNode}:default`;nextCaptureRole='default';nextImageSourceVersion=string(value.sourceVersion)||undefined;const previous=this.productScreens.get(captureNode);this.productScreens.set(captureNode,{...previous,defaultStateRequired:true,defaultState:object(value.state)});}
         else if (!nextImageKey && captureNode && value.detailName) nextImageKey = `screen:${captureNode}:detail:${string(value.detailName)}`;
         else if (!nextImageKey && captureNode && value.referenceAssetId) nextImageKey = `screen:${captureNode}:reference:${string(value.referenceAssetId)}`;
+        else if (name === 'inspect_asset' && value.cropSourceAssetId && value.cropPixels) {
+          const assetId = string(value.cropSourceAssetId), rect = object(value.cropPixels);
+          const key = `asset:${assetId}:crop:${[rect.x,rect.y,rect.width,rect.height].join(':')}`;
+          assetViews = (['context','selection'] as const).map(view => ({ key: `${key}:${view}`, metadata: { captureRole: `asset-crop-${view}`, assetInspection: { assetId, sourceSize: value.sourceSize, pixelRect: value.cropPixels, contextRect: value.contextRect, view } } }));
+        }
         else if (name === 'inspect_asset' && value.evidenceId) {
           const assetKey=`asset:${string(value.evidenceId)}`;
           if(value.referenceFrame===0)for(const key of [...this.images.keys()])if(key.startsWith(assetKey+':video-frame:'))this.removeImage(key);
           nextImageKey=assetKey+(typeof value.referenceFrame==='number'?`:video-frame:${value.referenceFrame}:${value.time}`:'');
+          if (typeof value.referenceFrame !== 'number') assetViews = [{ key: assetKey, metadata: { captureRole: 'asset-original', assetInspection: { assetId: string(value.evidenceId), sourceSize: value.sourceSize, view: 'original' } } }];
         }
       }
       if (part.type === 'inputImage' && url.startsWith('data:image/')) {
-        const key = nextImageKey || url;
-        const retained = this.image(key, { type: 'image', url }, url.length, nextCaptureRole || nextImageSourceVersion ? { captureRole: nextCaptureRole || undefined, sourceVersion: nextImageSourceVersion } : undefined);
+        const assetView = assetViews.shift();
+        const key = assetView?.key || nextImageKey || url;
+        const retained = this.image(key, { type: 'image', url }, url.length, assetView?.metadata ?? (nextCaptureRole || nextImageSourceVersion ? { captureRole: nextCaptureRole || undefined, sourceVersion: nextImageSourceVersion } : undefined));
         if (captureNode && key.includes(':motion:') && retained) {
           const previous = this.productScreens.get(captureNode), progress = Number(pendingMotionTargetEvidence?.progress??key.slice(key.lastIndexOf(':')+1)), familyKey=string(pendingMotionTargetEvidence?.familyKey)||decodeURIComponent(key.slice(`screen:${captureNode}:motion:`.length).split(':')[0]), targetImage=key.endsWith(':target');
           this.productScreens.set(captureNode, { ...previous, motionFrames: [...new Set([...(Array.isArray(previous?.motionFrames) ? previous.motionFrames : []), progress])],
@@ -710,7 +722,7 @@ export class DiscoveryReviewContext {
     const identities = new Set<string>(); this.imageSize=0;
     for (const [key,part] of this.images) { const identity=part.type==='image'?part.url:part.type==='localImage'?part.path:key; if(!identities.has(identity)){identities.add(identity);this.imageSize+=this.imageSizes.get(key)??0;} }
   }
-  private image(id: string, part: UserInput, size: number, metadata?: { sourceVersion?: string; captureRole?: string }) {
+  private image(id: string, part: UserInput, size: number, metadata?: ReviewImageMetadata) {
     this.removeImage(id);
     const identity=part.type==='image'?part.url:part.type==='localImage'?part.path:id;
     // Distinct render/baseline/default captures must remain distinct even when
@@ -719,7 +731,7 @@ export class DiscoveryReviewContext {
     const duplicate=!metadata?.captureRole && [...this.images.values()].some(image=>(image.type==='image'?image.url:image.type==='localImage'?image.path:'')===identity);
     if (this.imageSize + (duplicate?0:size) > 24_000_000) { this.omitted++; return false; }
     this.images.set(id, part); this.imageSizes.set(id, size);
-    if (metadata?.sourceVersion || metadata?.captureRole) this.imageMetadata.set(id, metadata);
+    if (metadata) this.imageMetadata.set(id, metadata);
     this.imageSize += duplicate?0:size;
     return true;
   }
@@ -745,17 +757,19 @@ export class DiscoveryReviewContext {
     const reviewHandoff = h ? { previousDraft: h.previousDraft, previousFeedback: h.feedback,
       activityAtPreviousReview: h.activity, observationsSincePreviousReview: this.entries.slice(handoffStart),
       omittedObservationsSincePreviousReview: Math.max(0, availableStart - h.observationOffset) } : null;
-    const uniqueImages:UserInput[]=[]; const imageDirectory:Array<{imageNumber:number;role:string;aliases?:string[];sourceVersion?:string;captureRole?:string}>=[]; const indices=new Map<string,number>();
+    const uniqueImages:UserInput[]=[]; const imageDirectory:Array<ReviewImageMetadata & {imageNumber:number;role:string;aliases?:string[]}>=[]; const indices=new Map<string,number>();
     for (const [id,image] of this.images) {
       const role=id.startsWith('screen:')||id.startsWith('asset:')||id.startsWith('baseline:')?id:image.type==='localImage'?'user reference image':'inspected source image';
       const metadata=this.imageMetadata.get(id);
       const pixelIdentity=image.type==='image'?image.url:image.type==='localImage'?image.path:id;
-      const identity=metadata?.captureRole === 'baseline'
+      const identity=metadata?.assetInspection?.pixelRect
+        ? `${pixelIdentity}|asset-inspection|${JSON.stringify(metadata.assetInspection)}`
+        : metadata?.captureRole === 'baseline'
         ? `${pixelIdentity}|baseline|${metadata.sourceVersion??''}`
         : metadata?.sourceVersion ? `${pixelIdentity}|source|${metadata.sourceVersion}` : pixelIdentity;
       const existing=indices.get(identity);
       if(existing !== undefined) { const entry=imageDirectory[existing]; entry.aliases=[...(entry.aliases??[entry.role]),role]; }
-      else {indices.set(identity,uniqueImages.length);uniqueImages.push(image);imageDirectory.push({imageNumber:uniqueImages.length,role,...(metadata?.sourceVersion?{sourceVersion:metadata.sourceVersion}:{}),...(metadata?.captureRole?{captureRole:metadata.captureRole}: {})});}
+      else {indices.set(identity,uniqueImages.length);uniqueImages.push(image);imageDirectory.push({imageNumber:uniqueImages.length,role,...(metadata?.sourceVersion?{sourceVersion:metadata.sourceVersion}:{}),...(metadata?.captureRole?{captureRole:metadata.captureRole}: {}),...(metadata?.assetInspection?{assetInspection:metadata.assetInspection}:{})});}
     }
     return { text: JSON.stringify({ reviewDate: new Date().toISOString().slice(0, 10), latestUserRequest: this.question, proposedAnswer: draft, observedActivitySinceLatestUserInput: this.activity(), investigation: this.entries.slice(0, handoffStart),
       productWork: [...this.productScreens.values()].map(screen=>({...screen,motionSequences:(Array.isArray(screen.motionSequences)?screen.motionSequences:[]).map(raw=>{const sequence=object(raw),familyKey=string(sequence.familyKey)||JSON.stringify([sequence.trigger,sequence.motionExpectation,'']);return {...sequence,...this.motionImageEvidence(string(screen.nodeId),familyKey),...(sequence.motionExpectation==='held'?{targetImageEvidence:this.motionTargetImageEvidence(string(screen.nodeId),familyKey)}:{})};})})),
@@ -975,7 +989,7 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
       for (const [index, part] of packet.images.entries()) {
         const imageNumber=index+1, record=imageDirectory.find(entry=>Number(entry.imageNumber)===imageNumber);
         const roles=[string(record?.role),...(Array.isArray(record?.aliases)?record.aliases.map(string):[])].filter((role,i,all)=>role&&all.indexOf(role)===i);
-        images.push({type:'text',text:`Evidence image ${imageNumber} of ${packet.images.length}; imageDirectory number ${imageNumber}. The image immediately following this caption is the only image described here. Role${roles.length===1?'':'s'}: ${roles.length?roles.join(' | '):'unspecified'}. Source version: ${string(record?.sourceVersion)||'unspecified'}. Capture role: ${string(record?.captureRole)||'unspecified'}. Treat render, default, baseline and detail captures as distinct evidence; do not transfer a description from another image.`,text_elements:[]});
+        images.push({type:'text',text:`Evidence image ${imageNumber} of ${packet.images.length}; imageDirectory number ${imageNumber}. The image immediately following this caption is the only image described here. Role${roles.length===1?'':'s'}: ${roles.length?roles.join(' | '):'unspecified'}. Source version: ${string(record?.sourceVersion)||'unspecified'}. Capture role: ${string(record?.captureRole)||'unspecified'}.${record?.assetInspection ? ` Asset inspection: ${JSON.stringify(record.assetInspection)}.` : ''} Treat render, default, baseline and detail captures as distinct evidence; do not transfer a description from another image.`,text_elements:[]});
         if (part.type === 'localImage') { const path = join(peer.cwd, basename(part.path)); await copyFile(part.path, path); images.push({ ...part, path }); }
         else images.push(part);
       }
