@@ -27,6 +27,13 @@ async function routeProductionRequestsToDeterministicModel(page: Page) {
 }
 
 async function openCleanCanvas(page: Page, path: "/canvas-v2-e2e" | "/canvas") {
+  // Compile deterministic endpoints before creating in-memory human work.
+  // Next dev can refresh this fixture's shared client modules on the first
+  // endpoint compilation; that is a test-server rebuild, not a model edit.
+  for (const endpoint of ['route', 'research', 'design']) {
+    const response = await page.request.get(`/canvas-v2-e2e/${endpoint}`);
+    expect(response.status()).toBe(405);
+  }
   if (path === "/canvas") await routeProductionRequestsToDeterministicModel(page);
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto(path);
