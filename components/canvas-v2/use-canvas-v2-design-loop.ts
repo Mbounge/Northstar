@@ -1092,6 +1092,7 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
         ...validateCanvasV2EvidenceBindings(safeDocument, nextEvidence),
         ...validateCanvasV2EvidenceContinuity(currentCommitted.document, safeDocument, nextEvidence, {
           allowUserEvidenceRemoval: options.allowEvidenceRemoval,
+          workingContext: options.origin === 'northstar' ? options.workingContext : undefined,
         }),
       ];
       if (failures.length) throw new Error(Array.from(new Set(failures)).join(" "));

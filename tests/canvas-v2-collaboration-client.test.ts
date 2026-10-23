@@ -22,8 +22,8 @@ function mockTimers(t: import('node:test').TestContext, apis: string[]) {
 
 /** Exercise the actual controller and operation bytes. Only network delivery,
  * server rejection and ACK loss are controlled; no controller is reimplemented. */
-function room() {
-  const seed = revision('seed'); let cells = sharedCellsFromRevision(seed); const log: AcceptedOperation[] = [];
+function room(seed = revision('seed')) {
+  let cells = sharedCellsFromRevision(seed); const log: AcceptedOperation[] = [];
   const commits: SharedOperation[] = [], presence: PeerPresence[] = [], seeds: CanvasV2ArtifactRevision[] = [];
   const members: CanvasMember[] = [{ userId: 'alice', name: 'Alice', role: 'owner' }, { userId: 'bob', name: 'Bob', role: 'editor' }, { userId: 'viewer', name: 'Viewer', role: 'viewer' }];
   const signals = new Map<string, Parameters<CollaborationTransport['watch']>[1]>();
@@ -830,4 +830,33 @@ test('closing still drains the latest already-requested recovery checkpoint', as
   client.retainLocalRevision(revision('navigation-final'), 'Final');
   client.close(); gate.resolve(); await turn(); await turn();
   assert.equal(durable?.recovery?.revision.id, 'navigation-final');
+});
+
+test('a derived image swap and concurrent teammate text converge with source retention and independent Undo', async t => {
+  const { creativeArtifact } = await import('../lib/canvas-v2/creative/runtime.server');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=', 'base64');
+  const original = creativeArtifact(png, 'original.png', 'Original photo', 'generated', []).asset!;
+  const edited = creativeArtifact(png, 'edited.png', 'Edited photo', 'computed', [original.id]).asset!;
+  const source = (asset: typeof original, text = 'Teammate original') => `<main data-canvas-v2-node-id="board"><img data-canvas-v2-node-id="photo" data-canvas-v2-evidence-id="${asset.id}" src="${asset.url}"><p data-canvas-v2-node-id="copy">${text}</p></main>`;
+  const seed = { ...revision('image-seed', source(original)), evidence: [original] };
+  const f = room(seed), a = await f.client('alice'), b = await f.client('bob');
+  t.after(() => { a.value.close(); b.value.close(); });
+  const hold = f.hold('alice-tab');
+  await a.value.observe({ ...seed, id: 'edited-image', parentId: a.revision().id, document: { html: source(edited), css: '' }, evidence: [original, edited] });
+  await hold.entered;
+  await b.value.observe({ ...seed, id: 'human-copy', parentId: b.revision().id, document: { html: source(original, 'Teammate kept working'), css: '' } });
+  await b.value.sync(); hold.release(); await a.value.sync(); await b.value.sync();
+  for (const value of [a.revision(), b.revision()]) {
+    assert.equal(value.document.html, source(edited, 'Teammate kept working'));
+    assert.equal(value.document.html.match(/data-canvas-v2-node-id="photo"/g)?.length, 1);
+    assert.equal(value.evidence.find(asset => asset.id === original.id)?.url, original.url);
+    assert.equal(value.evidence.find(asset => asset.id === edited.id)?.url, edited.url);
+  }
+  assert.equal(await a.value.undo(), true); await a.value.sync(); await b.value.sync();
+  assert.equal(f.html(), source(original, 'Teammate kept working'));
+  assert.equal(await a.value.redo(), true); await a.value.sync(); await b.value.sync();
+  assert.equal(f.html(), source(edited, 'Teammate kept working'));
+  const reopened = await f.client('alice', { clientId: 'alice-image-reopened' }); t.after(() => reopened.value.close());
+  assert.equal(reopened.revision().document.html, f.html());
+  assert.equal(reopened.revision().evidence.find(asset => asset.id === edited.id)?.url, edited.url);
 });

@@ -232,3 +232,26 @@ test('a peer commit during AI rendering resumes the same objective from shared t
   assert.equal(render().readCommittedRevision().document.html, peer.document.html);
   render().stop();
 });
+
+test('the AI commit pipeline accepts only a scoped retained derivative of an uploaded image', async () => {
+  const { creativeArtifact } = await import('../lib/canvas-v2/creative/runtime.server');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=', 'base64');
+  const generated = creativeArtifact(png, 'photo.png', 'Photo', 'generated', []).asset!;
+  const original = { ...generated, source: { ...generated.source!, providerId: 'user-upload' } };
+  const edited = creativeArtifact(png, 'edited.png', 'Edited photo', 'computed', [original.id]).asset!;
+  const document = (asset: typeof generated) => ({ html: `<img data-canvas-v2-node-id="photo" data-canvas-v2-origin="user" data-canvas-v2-last-author="user" data-canvas-v2-evidence-id="${asset.id}" src="${asset.url}">`, css: '' });
+  const base = { ...revision, document: document(original), evidence: [original] };
+  const h = hooks();
+  type EngineHook = typeof import('../components/canvas-v2/use-canvas-v2-design-loop').useCanvasV2DesignLoop;
+  const useEngine = h.load(root + 'components/canvas-v2/use-canvas-v2-design-loop.ts').useCanvasV2DesignLoop as EngineHook;
+  const engine = h.render(() => useEngine('/no-model', base));
+  engine.receiveObservation({ revisionId: base.id } as Parameters<typeof engine.receiveObservation>[0]);
+  assert.equal(engine.applyManualDocument(document(edited), 'Unscoped edit', [original, edited], undefined, { origin: 'northstar', expectedParentId: base.id }), false);
+  const workingContext: import('../lib/canvas-v2/working-context').CanvasV2WorkingContext = { schema: 'canvas-v2.working-context.v1', scope: 'selection', selectionPolicy: 'modify', selectedNodeIds: ['photo'], editableNodeIds: ['photo'], protectedNodeIds: [], visibleNodeIds: ['photo'], nearbyNodeIds: [], visibleBounds: { x: 0, y: 0, width: 1200, height: 900 }, viewportScale: 1, relationships: [], objects: [{ nodeId: 'photo', kind: 'image', origin: 'user', lastAuthor: 'user', userEdited: true, editVersion: 1, locked: false, hidden: false, canonicalEvidence: false, bounds: { x: 0, y: 0, width: 400, height: 600 }, evidenceId: original.id }] };
+  assert.equal(engine.applyManualDocument(document(edited), 'Requested image edit', [original, edited], undefined, { origin: 'northstar', expectedParentId: base.id, workingContext }), true);
+  const current = h.render(() => useEngine('/no-model', base));
+  assert.equal(current.inspectionCandidate?.parentId, base.id);
+  assert.match(current.inspectionCandidate?.document.html ?? '', new RegExp(edited.id));
+  assert.equal(current.inspectionCandidate?.evidence.find(asset => asset.id === original.id)?.url, original.url, 'the original remains retained');
+  assert.equal(current.readCommittedRevision().id, base.id, 'the replacement still waits for rendered validation');
+});

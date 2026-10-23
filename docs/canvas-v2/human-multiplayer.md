@@ -167,6 +167,14 @@ AI candidate synchronously, even before React renders the new state. A shared
 revision redirects a waiting AI observation or rendering turn to current truth;
 it preserves the objective and never promotes the abandoned draft.
 
+Uploaded or human-edited images may be rebound in place to a retained direct
+creative derivative when the current browser-owned selection explicitly permits
+modifying that unlocked, visible image. The original remains in retained media.
+This permission does not extend to reference-only selections, neighbouring
+copies, locked images, or canonical/account research evidence. Derivation and
+placement acceptance do not prove pixel preservation; compare the edited pixels
+against the original separately for localized edits.
+
 ## Verification and rollout
 
 The disposable local HTTP fixture exercises the real controller and workspace
@@ -209,3 +217,21 @@ PostgreSQL and HTTP-fixture verification do not substitute for that hosted check
 Additional boundaries: presence is ephemeral, operation-log compaction is not
 implemented, and deleting an account with retained operation history needs an
 explicit audit-identity retention strategy. Do not cascade away the edit log.
+
+
+### Localized image-edit audit (2026-10-23)
+
+A real two-account run changed the marked suede panel on a retained uploaded
+photograph. Both accounts received byte-identical final PNGs on the same image
+node. Own Undo restored the original for both people; Redo and reloading both
+accounts restored the derivative, keeping geometry and separate chat histories.
+An independent pixel comparison found 35,519 changed pixels and zero changes
+outside the retained mask. Close visual inspection still found ivory spill onto
+adjacent black trim. This is a failed precision result: containment in a model's
+own mask does not establish that the mask matches the requested subject.
+The managed instructions now require boundary/occlusion review and inspection
+of disconnected changed spots before a precision claim. That instruction change
+still needs a fresh hosted run; it is not a deterministic semantic-image gate.
+The observed run took 10m49s, which remains a latency issue. The hosted upload
+path is separate from the bound-evidence authorization fix covered by the
+controller and hook tests; do not conflate their verification.

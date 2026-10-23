@@ -2,25 +2,42 @@ import { expect, test } from '@playwright/test';
 
 test('precise feedback preserves live input, saved state, source scope and camera; motion review retains three real frames', async ({ page }) => {
   test.setTimeout(180000);
+  page.setDefaultTimeout(15000);
   await page.goto('/canvas-v2-e2e/codex');
   const send = async (message: string) => { await page.getByLabel('Message North Star').fill(message); await page.getByRole('button', { name: 'Send message', exact: true }).click(); };
   await send('screen creative');
   await expect(page.getByText('Created the screen with a saved product identity and reviewed three distinct motion frames.', { exact: true })).toBeVisible({ timeout: 90000 });
-  await page.getByRole('button', { name: 'Show on canvas', exact: true }).click();
+  await page.getByRole('button', { name: 'Show latest work on canvas', exact: true }).click();
   const scene = page.getByTestId('canvas-v2-native-scene'), object = scene.locator('[data-canvas-v2-screen]');
   const frame = page.frameLocator('iframe[title="GRAET · creative review"]');
-  const select = async () => { const bounds = await object.boundingBox(); if (!bounds) throw Error('Screen is not visible'); await page.mouse.click(bounds.x - 3, bounds.y + bounds.height / 2); };
+  const mode = page.getByRole('button', { name: 'Design view', exact: true });
+  const collapseChat = async () => {
+    const collapse = page.getByRole('button', { name: 'Collapse North Star panel', exact: true });
+    if (await collapse.isVisible()) await collapse.click();
+  };
+  const enterDesign = async () => {
+    await collapseChat();
+    if (await mode.getAttribute('aria-pressed') !== 'true') await mode.click();
+    if (!await page.getByRole('button', { name: 'Back to canvas', exact: true }).isVisible()) {
+      await scene.getByText('GRAET · creative review', { exact: true }).click();
+    }
+    await expect(page.getByRole('tree', { name: 'Editable layers' })).toBeVisible();
+  };
+  const selectHeadline = async () => {
+    await enterDesign();
+    await page.getByRole('tree', { name: 'Editable layers' }).locator('[data-layer-selector="#headline"]').click();
+  };
   await frame.getByRole('button', { name: 'Save team', exact: true }).click();
   await frame.getByRole('textbox', { name: 'Your goal' }).fill('Score 24 goals');
   const geometry = await object.getAttribute('style'), before = await scene.evaluate(el => el.parentElement?.style.transform);
   const encoded = await object.getAttribute('data-canvas-v2-screen');
   const source = JSON.parse(Buffer.from(encoded!, 'base64').toString());
-  await select();
-  await page.getByRole('button', { name: 'Give feedback on screen' }).click();
-  await expect(page.getByRole('button', { name:'Done selecting' })).toBeVisible();
-  await expect(page.getByText('Click items to add feedback')).toHaveCount(0);
-  await frame.getByRole('heading', { name: 'Your next season.', exact: true }).click();
-  await expect(page.getByTestId('screen-feedback-target')).toContainText('Your next season.');
+  await selectHeadline();
+  await page.getByRole('button', { name: 'Ask Northstar about selection', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Comment for marked area', exact: true }).fill('Change this headline only.');
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cancel canvas feedback', exact: true })).toHaveCount(0, { timeout: 60000 });
+  await expect(page.getByRole('button', { name: /^Review 1 comments?$/ })).toBeVisible();
   await send('precise feedback — change this headline only');
   await expect(page.getByText('Refined only the selected headline; the saved product identity and interaction state were retained.', { exact: true })).toBeVisible({ timeout: 90000 });
   await expect(frame.getByRole('heading', { name: 'Your next chapter.', exact: true })).toBeVisible();
@@ -31,23 +48,25 @@ test('precise feedback preserves live input, saved state, source scope and camer
   const revised = JSON.parse(Buffer.from((await object.getAttribute('data-canvas-v2-screen'))!, 'base64').toString());
   expect(revised.javascript).toBe(source.javascript); expect(revised.css).toBe(source.css);
   expect(revised.productIdentityId).toBe('graet-test');
-  await select();
+  await collapseChat();
   await expect(page.getByRole('button', { name:'Move screen' })).toHaveCount(0);
   await expect(page.getByRole('button', { name:'Review screen quality' })).toHaveCount(0);
-  await page.getByRole('button', { name:'Screen version history' }).click();
-  const history = page.getByRole('dialog', { name:'Screen version history' });
+  await page.getByRole('button', { name: 'Compare changes', exact: true }).click();
+  const history = page.getByRole('dialog', { name: 'Compare design changes', exact: true });
   await expect(history.getByRole('navigation', { name:'Screen versions' })).toContainText('Refined the selected headline');
   await expect(history.getByRole('navigation', { name:'Screen versions' })).toContainText('Starting version');
   await history.getByRole('button', { name:'Close version history' }).click();
   await expect(frame.getByRole('textbox', { name:'Your goal' })).toHaveValue('Score 24 goals');
   await expect(frame.getByRole('button', { name:'Saved',exact:true })).toBeVisible();
+  await mode.click();
   await frame.getByRole('button', { name: 'Saved', exact: true }).click();
   await expect(frame.getByRole('button', { name: 'Save team', exact: true })).toBeVisible();
-  await select();
-  await page.getByRole('button', { name: 'Give feedback on screen' }).click();
-  await frame.getByRole('heading', { name: 'Your next chapter.', exact: true }).press('Escape');
-  await expect(page.getByRole('button', { name:'Done selecting' })).toHaveCount(0);
-  await expect(page.getByTestId('screen-feedback-target')).toHaveCount(0);
+  await selectHeadline();
+  await page.getByRole('button', { name: 'Ask Northstar about selection', exact: true }).click();
+  await page.getByRole('button', { name: 'Cancel canvas feedback', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Comment on this area', exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-visual-feedback-overlay]')).toHaveCount(0);
+
 });
 
 
@@ -57,7 +76,7 @@ test('adding an inspiration rail retains saved native screen coordinates and liv
   const send = async (message: string) => { await page.getByLabel('Message North Star').fill(message); await page.getByRole('button', { name: 'Send message', exact: true }).click(); };
   await send('screen creative');
   await expect(page.getByText('Created the screen with a saved product identity and reviewed three distinct motion frames.', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Show on canvas', exact: true }).click();
+  await page.getByRole('button', { name: 'Show latest work on canvas', exact: true }).click();
   const screen = page.locator('[data-canvas-v2-screen]');
   const position = () => screen.evaluate(el => [el.style.getPropertyValue('--canvas-v2-native-x'), el.style.getPropertyValue('--canvas-v2-native-y')]);
   const before = await position();
@@ -91,7 +110,7 @@ test('feedback spans screens and canvas references; restoring a version preserve
   }
   await send('creative flow preserve');
   await expect(page.getByText('Added the full inspiration flow without moving the existing screen.',{exact:true})).toBeVisible({timeout:90000});
-  await page.getByRole('button',{name:'Show on canvas',exact:true}).click();
+  await page.getByRole('button',{name:'Show latest work on canvas',exact:true}).click();
   const screens=page.locator('[data-canvas-v2-screen]');
   const first=screens.nth(0), second=screens.nth(1);
   const firstId=await first.getAttribute('data-canvas-v2-node-id'), secondId=await second.getAttribute('data-canvas-v2-node-id');
@@ -140,6 +159,7 @@ test('motion review samples staggered reveals on one shared timeline', async ({ 
 
 
 test('native image uploads become inspected retained material inside an authored screen', async ({ page }) => {
+  test.setTimeout(120_000);
   await page.goto('/canvas-v2-e2e/codex');
   await page.getByLabel('Choose images for the canvas', { exact: true }).setInputFiles('app/canvas-v2-e2e/codex/media-assets/reference.png');
   await expect(page.locator('[data-canvas-v2-native-scene] img')).toHaveCount(1);

@@ -1,5 +1,6 @@
 import { readCanvasV2Screens, validateCanvasV2ScreenAssets } from './interactive-screen';
 import { readCanvasV2PlayableMedia } from "./canvas-media";
+import type { CanvasV2WorkingContext } from "./working-context";
 import { MODEL_ATTRIBUTE, parseCanvasV2NativeModel } from "./model-object";
 import { isCanvasV2ScreenModelBytes } from "./screen-asset-pixels";
 import {
@@ -167,9 +168,14 @@ export function validateCanvasV2EvidenceContinuity(
   previous: CanvasV2ArtifactDocument,
   next: CanvasV2ArtifactDocument,
   evidence: readonly CanvasV2EvidenceAsset[],
-  options: { allowUserEvidenceRemoval?: boolean } = {},
+  options: { allowUserEvidenceRemoval?: boolean; workingContext?: CanvasV2WorkingContext } = {},
 ): string[] {
   const failures: string[] = [];
+  const context = options.workingContext;
+  const editableImages = new Set(context?.scope === 'selection' && context.selectionPolicy === 'modify'
+    ? context.editableNodeIds.filter(nodeId => context.objects.some(node => node.nodeId === nodeId
+      && node.kind === 'image' && !node.locked && !node.hidden && !node.canonicalEvidence)) : []);
+  const creativeProviders = new Set(["northstar-image-generation", "northstar-execution"]);
   const previousIds = canvasV2VisibleEvidenceIds(previous);
   const nextIds = canvasV2VisibleEvidenceIds(next);
   if (!options.allowUserEvidenceRemoval) {
@@ -186,14 +192,17 @@ export function validateCanvasV2EvidenceContinuity(
           && !/\bdata-canvas-v2-last-author\s*=\s*["']user["']/i.test(tag));
       // An inspected generated/processed image may replace its own earlier version.
       // Keep the original in the registry, not as a forced duplicate on the canvas.
-      // Require actual retained lineage and the same model-owned image node; this
-      // does not authorize removing uploaded/human-edited evidence or app sources.
-      const creativeProviders = new Set(["northstar-image-generation", "northstar-execution"]);
-      const derivedReplacement = creativeProviders.has(asset.source?.providerId ?? "") && bindings.length > 0
+      // A person can also explicitly authorize editing an uploaded/human image.
+      // That exception is confined to the selected, unlocked image nodes and a
+      // retained direct derivative. App evidence and unrelated copies stay protected.
+      const creativeSource = creativeProviders.has(asset.source?.providerId ?? "");
+      const derivedReplacement = (creativeSource || ['user-upload', 'user-canvas'].includes(asset.source?.providerId ?? '')) && bindings.length > 0
         && bindings.every(tag => {
           const nodeId = /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
-          if (!nodeId || !/^<img\b/i.test(tag) || !/\bdata-canvas-v2-origin\s*=\s*["']northstar["']/i.test(tag)
-            || /\bdata-canvas-v2-last-author\s*=\s*["']user["']/i.test(tag)) return false;
+          if (!nodeId || !/^<img\b/i.test(tag)) return false;
+          const modelOwned = creativeSource && /\bdata-canvas-v2-origin\s*=\s*["']northstar["']/i.test(tag)
+            && !/\bdata-canvas-v2-last-author\s*=\s*["']user["']/i.test(tag);
+          if (!modelOwned && !editableImages.has(nodeId)) return false;
           const replacementTag = Array.from(next.html.matchAll(/<img\b[^>]*>/gi), match => match[0])
             .find(nextTag => /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(nextTag)?.[1] === nodeId);
           const replacementId = replacementTag && /\bdata-canvas-v2-evidence-id\s*=\s*["']([^"']+)["']/i.exec(replacementTag)?.[1];
