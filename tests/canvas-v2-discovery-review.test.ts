@@ -24,6 +24,16 @@ const goodDesignDirection = () => ({
   visualIdentity: 'The visual choices form a specific identity grounded in the brief.',
 });
 const tick = () => new Promise(resolve => setTimeout(resolve, 25));
+test('reading an unrelated prototype during raster work does not create a product-quality task or draft warning',()=>{
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  context.user([{type:'text',text:'Change only the photograph panel colour; preserve the workshop.',text_elements:[]}]);
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'workshop',title:'Workshop',sourceVersion:'same',source:{html:'<button>Reserve</button>',javascript:'interactive source'}}]})]);
+  const packet=JSON.parse(context.packet('The image edit is complete.').text);
+  assert.equal(packet.productWork[0].qualityReviewRequired,false);assert.deepEqual(packet.reviewFocus.screenNodeIds,[]);
+  assert.equal(packet.productWork.length,1,'the unrelated screen remains available as preservation context');
+  context.tool('canvas_screen',{nodeId:'workshop'},[text({nodeId:'workshop',committed:true})]);
+  assert.equal(context.hasProductWork(),true);assert.deepEqual(JSON.parse(context.packet('').text).reviewFocus.screenNodeIds,['workshop']);
+});
 test('measured source preservation survives compact review but never substitutes for pixels or interaction evidence',async()=>{
   const {productReviewBatches}=await import('../lib/canvas-v2/codex-app-server/discovery-review');
   const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
