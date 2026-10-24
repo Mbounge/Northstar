@@ -4,7 +4,7 @@ import { isCreativeTool, type CreativeContext } from '../creative/types';
 import { northstarRunConfig, northstarModelCapabilities, type NorthstarModelCapability, type NorthstarEffort } from '../model-catalog';
 import { randomUUID, createHash } from 'node:crypto';
 import { NORTHSTAR_AGENT_INSTRUCTIONS, NORTHSTAR_AGENT_TOOLS } from '../managed-agent/config';
-import { object, string, type JsonObject } from '../managed-agent/protocol';
+import { IDLE_SESSION_RELEASED, object, string, type JsonObject } from '../managed-agent/protocol';
 import { readNorthstarSource } from '../agent-source.server';
 import { codexInput, codexReviewMessage, validateCodexInput } from './input.server';
 import { codexDisplayEvents } from './events';
@@ -39,6 +39,7 @@ export class CodexSessionHost {
    * sessions keep their own creative runtime and all in-flight jobs. */
   configureCreativeFactory(factory: (key: string, model: () => string) => NorthstarCreativeRuntime) { this.creativeFactory = factory; }
   private sessions = new Map<string, Session>();
+  private released = new Map<string, { owner: string; at: number }>();
   private modelListing?: { key: string; expires: number; work: Promise<NorthstarModelCapability[]> };
   private creations = new Map<string, { fingerprint: string; work: Promise<Session> }>();
   private starting = new Map<string, number>();
@@ -48,6 +49,7 @@ export class CodexSessionHost {
     if (!Number.isInteger(initialAppearanceTimeoutMs) || initialAppearanceTimeoutMs < 1 || initialAppearanceTimeoutMs > 600_000) throw new Error('Configure an initial appearance deadline between 1 and 600000 milliseconds.');
     this.reaper = setInterval(() => {
       const now = Date.now();
+      for (const [token, entry] of this.released) if (now - entry.at > 30 * 60_000) this.released.delete(token);
       for (const s of this.sessions.values()) {
         if ((s.turn.status !== 'in_progress' && !s.listeners.size && now - s.lastUse > 30 * 60_000) || (s.disconnectedAt && now - s.disconnectedAt > 30_000 && s.turn.status === 'in_progress')) this.close(s);
       }
@@ -59,6 +61,17 @@ export class CodexSessionHost {
     this.emit(s, { type: 'agent.session.turn.failed', error: { message } });
     s.rpc.close(); this.sessions.delete(s.token);
     for (const [key, value] of this.creations) void value.work.then(v => { if (v === s) this.creations.delete(key); }).catch(() => undefined);
+  }
+  private releaseIdle(owner?: string) {
+    const idle = [...this.sessions.values()]
+      .filter(s => (!owner || s.owner === owner) && ['completed', 'cancelled', 'failed'].includes(string(s.turn.status))
+        && !s.nativeActive && !s.listeners.size && !s.pending.size && !s.appearanceReviews.size)
+      .sort((a, b) => a.lastUse - b.lastUse)[0];
+    if (!idle) return false;
+    this.released.set(idle.token, { owner: idle.owner, at: Date.now() });
+    while (this.released.size > 2000) this.released.delete(this.released.keys().next().value!);
+    this.close(idle, IDLE_SESSION_RELEASED);
+    return true;
   }
   private emit(s: Session, raw: JsonObject) {
     const e = { ...raw, session_id: s.id, event_id: randomUUID() };
@@ -79,7 +92,12 @@ export class CodexSessionHost {
     const configuration = this.configuration;
     const toolNames = new Set(configuration.tools.flatMap(tool => tool.type === 'function' ? [tool.name] : []));
     const selected = northstarRunConfig(body.model, body.effort);
-    if ([...this.sessions.values()].filter(s => s.owner === owner).length + (this.starting.get(owner) || 0) >= this.limits.perOwner || this.sessions.size + [...this.starting.values()].reduce((a, b) => a + b, 0) >= this.limits.sessions) throw new Error('Close an existing discovery conversation before starting another.');
+    const ownerCount = () => [...this.sessions.values()].filter(s => s.owner === owner).length + (this.starting.get(owner) || 0);
+    const totalCount = () => this.sessions.size + [...this.starting.values()].reduce((a, b) => a + b, 0);
+    while (ownerCount() >= this.limits.perOwner && this.releaseIdle(owner)) { /* Rotate only completed, unsubscribed processes. */ }
+    if (ownerCount() >= this.limits.perOwner) throw new Error('Northstar is already working in the available conversations. Let a run finish or stop it before starting another.');
+    while (totalCount() >= this.limits.sessions && this.releaseIdle()) { /* Private history remains with its owner. */ }
+    if (totalCount() >= this.limits.sessions) throw new Error('Northstar is already working in the available conversations. Let a run finish or stop it before starting another.');
     this.starting.set(owner, (this.starting.get(owner) || 0) + 1);
     let rpc: CodexTransport;
     try { rpc = await this.factory(); } finally { const left = (this.starting.get(owner) || 1) - 1; if (left) this.starting.set(owner, left); else this.starting.delete(owner); }
@@ -319,7 +337,8 @@ export class CodexSessionHost {
       void this.once(s, body, () => this.input(s, body)).catch(error => this.emit(s, { type: 'agent.session.turn.failed', error: { message: error instanceof Error ? error.message.replaceAll(key, '[redacted]') : 'Codex could not start the turn.' } }));
       return response;
     }
-    const s = this.sessions.get(string(body.token));
+    const token = string(body.token), s = this.sessions.get(token);
+    if (!s && this.released.get(token)?.owner === owner) throw new Error(IDLE_SESSION_RELEASED);
     if (!s || s.owner !== owner || s.closed) throw new Error('This Codex session is unavailable. Start a new conversation.');
     s.lastUse = Date.now();
     if (body.op === 'heartbeat') return Response.json({ accepted: true });

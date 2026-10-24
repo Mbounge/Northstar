@@ -10,7 +10,7 @@ const snapshot = (): NorthstarSnapshot => ({
   turns: [{ id: 'private-turn', message: 'My private plan', answer: 'Private answer: café 👩🏾‍💻', status: 'responded', createdAt: '2026-10-20T00:00:00Z' }], draft: 'Unsent private draft',
   attachments: [{ id: 'note', kind: 'text', name: 'My notes', text: 'Private notes \n exact spaces', charCount: 28, createdAt: '2026-10-20T00:00:00Z', mimeType: 'text/plain' }],
   model: 'gpt-5.6-sol', effort: 'high', viewport: { x: 12345, y: 67890, scale: 0.6 },
-  memory: { assets: [{ id: 'large-common-asset', label: 'Common visible asset', url: 'data:image/png;base64,COMMON_SHARED_BLOB' }], accountPackets: [], accountFlows: [], sourceMedia: [], sourcePages: ['https://private.invalid/research'], compositionHistory: [], compositionSequence: 7, accountHandles: [['opaque-private-handle', 'private-value']] },
+  memory: { conversationEditTargets: [{nodeId:'personal-target',fingerprint:'0123abcd'}], assets: [{ id: 'large-common-asset', label: 'Common visible asset', url: 'data:image/png;base64,COMMON_SHARED_BLOB' }], accountPackets: [], accountFlows: [], sourceMedia: [], sourcePages: ['https://private.invalid/research'], compositionHistory: [], compositionSequence: 7, accountHandles: [['opaque-private-handle', 'private-value']] },
 });
 
 test('private history explicitly selects personal fields and excludes source, camera, common blobs and unknown metadata', async () => {
@@ -27,6 +27,7 @@ test('personal answers, draft, attachments and memory round-trip through the act
   const selected = privateCanvasHistory(snapshot());
   const restored = await decodePrivateCanvasHistory(await encodePrivateCanvasHistory(selected));
   assert.deepEqual(JSON.parse(JSON.stringify(restored)), JSON.parse(JSON.stringify(selected)));
+  assert.deepEqual(restored.memory?.conversationEditTargets,[{nodeId:'personal-target',fingerprint:'0123abcd'}]);
   assert.equal(restored.turns[0].answer, 'Private answer: café 👩🏾‍💻');
   assert.equal(restored.attachments?.[0].kind === 'text' && restored.attachments[0].text, 'Private notes \n exact spaces');
   assert.equal(Object.hasOwn(restored, 'revision'), false); assert.equal(Object.hasOwn(restored, 'viewport'), false);

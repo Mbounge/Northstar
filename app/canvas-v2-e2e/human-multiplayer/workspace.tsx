@@ -135,7 +135,7 @@ export function HumanMultiplayerFixture({ room, peer, device = 'first', personal
         if (!cameraTimer.current) cameraTimer.current = setTimeout(() => { cameraTimer.current = undefined; const current = latest.current;
           if (current) void bundle.view.writeCamera(current.viewport).then(() => { cameraWrites.current++; if (cameraOutput.current) cameraOutput.current.textContent = String(cameraWrites.current); });
         }, 900);
-      }} accountEndpoint="/canvas-v2-e2e/codex/account" agentEndpoint={legacyAuthoring ? undefined : '/canvas-v2-e2e/human-multiplayer/api'} designEndpoint="/canvas-v2-e2e/human-multiplayer/api" researchEndpoint="/canvas-v2-e2e/human-multiplayer/api" routerEndpoint="/canvas-v2-e2e/human-multiplayer/api" />
+      }} accountEndpoint="/canvas-v2-e2e/codex/account" agentEndpoint={legacyAuthoring ? undefined : '/canvas-v2-e2e/codex/agent'} designEndpoint="/canvas-v2-e2e/human-multiplayer/api" researchEndpoint="/canvas-v2-e2e/human-multiplayer/api" routerEndpoint="/canvas-v2-e2e/human-multiplayer/api" />
   </Profiler>, [bundle, room, legacyAuthoring]);
   const reconnect = async () => {
     if (!bundle) return;

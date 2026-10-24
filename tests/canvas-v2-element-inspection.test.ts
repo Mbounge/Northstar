@@ -27,7 +27,7 @@ test("selection geometry feeds the single manual candidate pipeline", () => {
   const preview = readFileSync("components/canvas-v2/canvas-scene.tsx", "utf8");
   assert.match(workspace, /data-testid="canvas-v2-element-selection"/);
   assert.match(workspace, /applyManualDocument/);
-  assert.match(workspace, /allowEvidenceRemoval: mutation\.kind === "delete"[\s\S]*mutation\.kind === "batch"[\s\S]*item\.kind === "delete"/);
+  assert.match(workspace, /allowEvidenceRemoval: atomicMutations\.some\(item => item\.kind === 'delete' \|\| item\.kind === 'image-source'\)/);
   assert.match(workspace, /workspaceRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
   assert.match(workspace, /selectionIsText/);
   assert.match(workspace, /data-testid="canvas-v2-context-toolbar"/);

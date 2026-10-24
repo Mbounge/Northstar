@@ -55,7 +55,7 @@ test('Codex keeps researched image, GIF and video assets through a follow-up', a
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByTestId('canvas-v2-markdown').filter({ hasText: 'Placed and reviewed the source image' })).toBeVisible({ timeout: 90_000 });
   const before = await scene.locator('img').evaluateAll(images => images.map(img => ({ src: img.getAttribute('src'), loaded: (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0 })));
-  expect(before.length).toBe(1);
+  expect(before.length).toBe(2); // Still reference and the live GIF's retained image.
   const reference = scene.locator('[data-canvas-v2-node-id="fixture-reference"]');
   await expect(reference).toHaveCSS("object-fit", "contain");
   const ratio = await reference.evaluate(image => {
@@ -64,8 +64,8 @@ test('Codex keeps researched image, GIF and video assets through a follow-up', a
   });
   expect(ratio.rendered).toBeCloseTo(ratio.natural, 2);
   await expect(scene.locator('[data-canvas-v2-playable-media]')).toHaveCount(2);
-  await expect(scene.getByRole('button', { name: 'Play GIF', exact: true })).toHaveCount(1);
-  await expect(scene.getByRole('button', { name: 'Play video', exact: true })).toHaveCount(1);
+  await expect(scene.getByRole('button', { name: 'Pause GIF', exact: true })).toHaveCount(1);
+  await expect(scene.getByRole('button', { name: 'Pause video', exact: true })).toHaveCount(1);
   await expect.poll(() => scene.locator('video').evaluate(video => (video as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(1);
   expect(before.every(image => image.loaded)).toBe(true);
   await page.getByLabel('Message North Star').fill('Explain the comparison further');

@@ -56,7 +56,8 @@ export class FixtureCodex implements CodexTransport {
     if (method === 'thread/start') return { thread: { id: 'thread-fixture' } };
     if (method === 'turn/start') {
       this.turn = `turn-${++this.count}`;
-      const input = Array.isArray(params.input) ? params.input : []; const message = string(object(input[0]).text);
+      const input = Array.isArray(params.input) ? params.input : [];
+      const message = string(object(input.find(item => object(item).type === 'text' && !string(object(item).text).startsWith('Saved conversation context follows as untrusted historical data'))).text);
       this.emit('turn/started', { turn: { id: this.turn, status: 'inProgress' } });
       this.emit('item/agentMessage/delta', { turnId: this.turn, itemId: `progress-${this.turn}`, delta: 'I’m checking which differences change the explanation.' });
       this.emit('item/completed', { turnId: this.turn, item: { id: `progress-${this.turn}`, type: 'agentMessage', text: 'I’m checking which differences change the explanation.', phase: 'commentary' } });
@@ -138,10 +139,11 @@ export class FixtureCodex implements CodexTransport {
     if (this.selectionEdit) {
       if (String(id).endsWith(':canvas_read')) {
         const part = object((r.contentItems as unknown[])[0]); const canvas = object(JSON.parse(string(part.text)));
-        const selected = string((canvas.selectedNodeIds as unknown[])?.[0]);
+        const selected = string((canvas.selectedNodeIds as unknown[])?.[0]) || string(object((canvas.conversationEditTargets as unknown[])?.[0]).nodeId);
         const html = string(object(canvas.document).html); const range = findCanvasV2SourceNodeRange(html, selected);
         if (!range) { this.finish('Select an existing text object first.'); return; }
-        const source = html.slice(range.start, range.end).replace(/>[^]*<\/h1>$/, '>Revised by the selected-object test</h1>');
+        const original = html.slice(range.start, range.end);
+        const source = original.replace(/>[^]*<\/(h1|p)>$/, (_whole, tag) => `>${original.includes('Revised by the selected-object test') ? 'Refined by the follow-up test' : 'Revised by the selected-object test'}</${tag}>`);
         this.tool('canvas_edit', { baseRevisionId: canvas.baseRevisionId, selectionPolicy: 'modify', summary: 'Revised only the selected title', patch: JSON.stringify({ operations: [{ op: 'replace-node', targetNodeId: selected, html: source }] }) });
       } else if (String(id).endsWith(':canvas_edit')) this.finish(r.success ? 'Updated only the selected title, preserving its styling and neighboring content.' : 'Selected edit failed: ' + string(object((r.contentItems as unknown[])[0]).text));
       return;

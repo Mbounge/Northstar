@@ -57,10 +57,12 @@ test("video and GIF batch upload keeps both sources through history and duplicat
   await page.getByLabel("Choose playable media",{exact:true}).setInputFiles(["canvas-motion.mp4","canvas-motion.gif"].map(name=>path.resolve("e2e/fixtures/media",name)));
   const media=page.locator("[data-canvas-v2-playable-media]");
   await expect(media).toHaveCount(2);
-  await page.getByRole("button",{name:"Play GIF",exact:true}).click();
+  await expect(page.getByRole("button",{name:"Pause GIF",exact:true})).toHaveCount(1);
   await expect(media.locator("img")).toHaveCount(1);
   await page.getByRole("button",{name:"Pause GIF",exact:true}).click();
-  await expect(media.locator("img")).toHaveCount(0);
+  await expect(media.locator("img")).toBeHidden(); // Keep the decoded bytes for a smooth resume.
+  await page.getByRole("button",{name:"Play GIF",exact:true}).click();
+  await expect(media.locator("img")).toBeVisible();
   await page.getByRole("button",{name:"Undo canvas action",exact:true}).click();
   await expect(media).toHaveCount(0);
   await page.getByRole("button",{name:"Redo canvas action",exact:true}).click();

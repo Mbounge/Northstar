@@ -1243,7 +1243,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const contentInsets = useCallback((): CanvasV2WorkspaceInsets => {
     const workspace = workspaceRef.current?.getBoundingClientRect();
-    if(canvasView==='design')return {left:(workspace?.width??1440)<=900?216:264,right:312,top:120,bottom:96};
+    if(canvasView==='design')return {left:editChatOpen?388:(workspace?.width??1440)<=900?216:264,right:312,top:120,bottom:96};
     if (!workspace) return { left: chatOpen ? 430 : 32, top: 116, right: 32, bottom: 92 };
     const chat = chatOpen ? chatPanelRef.current?.getBoundingClientRect() : undefined;
     const menu = canvasMenuRef.current?.getBoundingClientRect();
@@ -1256,7 +1256,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return canvasV2PanelAwareInsets({ width: workspace.width, height: workspace.height }, base,
       chatOpen ? floatingPanel.rect ?? (chat ? { x: chat.left - workspace.left, y: chat.top - workspace.top, width: chat.width, height: chat.height } : undefined) : undefined);
 
-  }, [canvasView,chatOpen, floatingPanel.rect]);
+  }, [canvasView,chatOpen,editChatOpen, floatingPanel.rect]);
   publishViewRef.current=next=>{
     if(collaboration?.enabled)collaboration.view(canvasV2VisibleWorkspaceBounds(next,followFrameRef.current.size,followFrameRef.current.insets));
   };
@@ -1484,14 +1484,17 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const previousCameraFrame=useRef<{key:string;size:typeof workspaceSize;insets:CanvasV2WorkspaceInsets}|undefined>(undefined);
   useLayoutEffect(()=>{
+    // Feedback temporarily hides panels; keep the marked artwork under the
+    // pointer instead of treating this as a new camera composition.
+    if(visualFeedbackActive)return;
     const size=workspaceSizeRef.current;
-    const frame={key:JSON.stringify([canvasView,chatOpen,size.width,size.height]),size,insets:contentInsets()};
+    const frame={key:JSON.stringify([canvasView,chatOpen,editChatOpen,size.width,size.height]),size,insets:contentInsets()};
     const previous=previousCameraFrame.current;previousCameraFrame.current=frame;
     if(!previous||previous.key===frame.key||followingClientRef.current||cameraPreviewActiveRef.current)return;
     const next=reframeCanvasV2WorkspaceViewport(viewportRef.current,previous,frame);
     if(next.x===viewportRef.current.x&&next.y===viewportRef.current.y)return;
     viewportRef.current=next;applyViewportVisual(next);setViewport(next);
-  },[canvasView,chatOpen,workspaceSize,contentInsets,applyViewportVisual]);
+  },[canvasView,chatOpen,editChatOpen,visualFeedbackActive,workspaceSize,contentInsets,applyViewportVisual]);
 
   const stopFollowing=useCallback(()=>{
     followRequestRef.current++;
@@ -4685,7 +4688,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
             }}
           />
         )}
-        <CanvasFeedbackSession workspace={workspaceRef} getViewport={()=>viewportRef.current} getDocument={()=>engine.readCommittedRevision().document} getElements={()=>sceneElementsRef.current} edit={Boolean(screenEditNodeId)} onRetain={ids=>setFeedbackCaptureNodeIds(current=>current.length===ids.length&&current.every((id,i)=>id===ids[i])?current:ids)} onActive={active=>{setVisualFeedbackActive(active);if(active){setCanvasV2FeedbackPicking(false);setChatOpen(false);setEditChatOpen(false);cancelDrawingGesture();}}} onDone={()=>{setPanel('chat');if(screenEditNodeId)setEditChatOpen(true);else setChatOpen(true)}} onPan={(dx,dy)=>{beginCameraPreview();previewViewport(current=>constrainViewport({...current,x:current.x+dx,y:current.y+dy}));scheduleWheelCommit();}}/>
+        <CanvasFeedbackSession workspace={workspaceRef} getViewport={()=>viewportRef.current} getDocument={()=>engine.readCommittedRevision().document} getElements={()=>sceneElementsRef.current} edit={Boolean(screenEditNodeId)} onRetain={ids=>setFeedbackCaptureNodeIds(current=>current.length===ids.length&&current.every((id,i)=>id===ids[i])?current:ids)} onActive={active=>{setVisualFeedbackActive(active);if(active){setCanvasV2FeedbackPicking(false);setChatOpen(false);setEditChatOpen(false);cancelDrawingGesture();}}} onDone={()=>{setPanel('chat');if(canvasView==='design')setEditChatOpen(true);else setChatOpen(true)}} onPan={(dx,dy)=>{beginCameraPreview();previewViewport(current=>constrainViewport({...current,x:current.x+dx,y:current.y+dy}));scheduleWheelCommit();}}/>
       </section>
 
       {!engine.displayedObservation && (engine.observationRequested || engine.running) && observationMountRevisionId === engine.displayed.id && (
@@ -4899,7 +4902,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
       </aside>}
       {collaboration&&<CanvasCollaborationOverlay client={collaboration} viewport={viewportRef} elements={sceneElementsRef} onMotion={geometry=>{remoteTransientRef.current=geometry;if(!directGestureRef.current)canvasSceneRef.current?.applyTransientGeometry(geometry)}}/>}
-      {collaboration&&followingClient&&<CanvasCollaborationFollow client={collaboration} target={followingClient} viewport={viewportRef} frame={followFrameRef} workspace={workspaceRef} refreshKey={JSON.stringify([workspaceSize,canvasView,chatOpen,floatingPanel.rect])} onPreview={previewFollowViewport} onSettle={settleFollowViewport} onMode={mode=>updateCanvasView(mode)} onStop={stopFollowing}/>}
+      {collaboration&&followingClient&&<CanvasCollaborationFollow client={collaboration} target={followingClient} viewport={viewportRef} frame={followFrameRef} workspace={workspaceRef} refreshKey={JSON.stringify([workspaceSize,canvasView,chatOpen,editChatOpen,floatingPanel.rect])} onPreview={previewFollowViewport} onSettle={settleFollowViewport} onMode={mode=>updateCanvasView(mode)} onStop={stopFollowing}/>}
       {mutationError && <div role="alert" className="absolute right-5 top-[90px] z-50 max-w-[340px] rounded-2xl border border-red-200 bg-white/95 px-4 py-3 text-xs leading-5 text-red-700 shadow-xl backdrop-blur dark:border-red-500/25 dark:bg-[#241d24]/95 dark:text-red-300">{mutationError}</div>}
 
       {objectMenu && <div ref={objectMenuRef} role="menu" aria-label="Canvas object menu" data-testid="canvas-v2-object-menu" className="absolute z-[70] w-[230px] rounded-[12px] border border-[#ddddea] bg-white/98 p-2 text-xs font-semibold shadow-[0_22px_70px_rgba(44,39,88,.22)] backdrop-blur-xl dark:border-white/[.11] dark:bg-[#1c1b23]/98 dark:shadow-[0_24px_75px_rgba(0,0,0,.48)]" style={{ left: objectMenu.x, top: objectMenu.y }}>

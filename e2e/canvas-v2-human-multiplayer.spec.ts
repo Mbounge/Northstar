@@ -615,3 +615,70 @@ test('an AI response prepared before a teammate reconnects preserves the offline
   await info.attach('AI and reconnect receipt', { body: JSON.stringify({ designRequests, designParents, alice: await state(alice), bob: await state(bob) }), contentType: 'application/json' });
  } finally { releaseDesign(); await alice.close(); await bob.close(); }
 });
+
+test('private edit context survives follow-ups and reload while a peer change invalidates only the affected target', async ({ context }) => {
+ test.setTimeout(150_000);
+ // Warm the managed fixture before creating human-authored work.
+ const warm = await context.newPage(); await warm.goto('/canvas-v2-e2e/codex'); expect((await warm.request.get('/canvas-v2-e2e/codex/agent')).status()).toBe(405); await warm.close();
+ const room='followup-context-'+randomUUID();
+ const alice=await openPrivatePeer(context,room,'alice'), bob=await openPrivatePeer(context,room,'bob');
+ const send=async(text:string)=>{
+  const open=alice.getByRole('button',{name:'Open North Star panel',exact:true});if(await open.isVisible())await open.click();
+  await alice.getByRole('textbox',{name:'Message North Star',exact:true}).fill(text);
+  await alice.getByRole('button',{name:'Send message',exact:true}).click();
+  await expect(alice.getByRole('button',{name:'Stop current response',exact:true})).toHaveCount(0,{timeout:60_000});
+ };
+ try{
+  await editNote(alice,'note-alice','Human selected starting point');
+  await object(alice,'note-alice').click();
+  const before=await geometry(alice,'note-alice');
+  await send('selection parity: refine this selected note');
+  await expect(object(alice,'note-alice')).toHaveText('Revised by the selected-object test');
+  await expect(object(bob,'note-alice')).toHaveText('Revised by the selected-object test');
+  await alice.keyboard.press('Escape');
+  await expect(alice.getByTestId('canvas-v2-element-selection')).toHaveCount(0);
+  await editNote(bob,'note-bob','Independent teammate work must survive');
+  await expect(object(alice,'note-bob')).toHaveText('Independent teammate work must survive');
+  await send('selection parity: refine that same note again');
+  await expect(object(alice,'note-alice')).toHaveText('Refined by the follow-up test');
+  await expect(object(bob,'note-alice')).toHaveText('Refined by the follow-up test');
+  await expect(object(alice,'note-bob')).toHaveText('Independent teammate work must survive');
+  expect(await geometry(alice,'note-alice')).toEqual(before);
+  await expect(bob.getByText('selection parity: refine that same note again',{exact:true})).toHaveCount(0);
+  const saved=await privateReceipt(alice);
+  await expect(alice.getByTestId('multiplayer-private-status')).toContainText('"phase":"saved"');
+  expect(saved.acceptedSaves).toBeGreaterThan(0);
+  await alice.reload();await expect(object(alice,'note-alice')).toHaveText('Refined by the follow-up test');
+  await send('selection parity: refine the same note after reload');
+  await expect(object(alice,'note-alice')).toHaveText('Revised by the selected-object test');
+  await expect(object(bob,'note-alice')).toHaveText('Revised by the selected-object test');
+  // A newer peer-authored source must not inherit Alice's old edit scope.
+  await editNote(bob,'note-alice','Peer took this note in a new direction');await waitSaved(bob);
+  await expect(object(alice,'note-alice')).toHaveText('Peer took this note in a new direction');
+  await send('selection parity: try the stale previous target');
+  await expect(object(alice,'note-alice')).toHaveText('Peer took this note in a new direction');
+  await expect(alice.getByText('Select an existing text object first.',{exact:true})).toBeVisible();
+  await expect(alice.getByRole('button',{name:'Retry preview',exact:true})).toHaveCount(0);
+ }finally{await alice.close();await bob.close();}
+});
+
+test('native design feedback keeps the marked object steady and Done opens the visible design chat', async ({ context }) => {
+ test.setTimeout(90_000);
+ const page=await openPeer(context,'feedback-chat-'+randomUUID(),'alice');
+ try{
+  await design(page);await object(page,'note-alice').click();
+  const open=page.getByRole('button',{name:'Open North Star panel',exact:true});if(await open.isVisible())await open.click();
+  const before=await object(page,'note-alice').boundingBox();
+  await page.getByRole('button',{name:'Give feedback on selection',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Comment for marked area',exact:true})).toBeVisible();
+  const marked=await object(page,'note-alice').boundingBox();
+  expect(marked!.x).toBeCloseTo(before!.x,1);expect(marked!.y).toBeCloseTo(before!.y,1);
+  await page.getByRole('textbox',{name:'Comment for marked area',exact:true}).fill('Keep the type, make the message more direct.');
+  await page.getByRole('button',{name:'Add comment',exact:true}).click();
+  await page.getByRole('button',{name:'Done',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Message North Star',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Design view',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('button',{name:'Send message',exact:true})).toBeVisible();
+  await expect(page.getByRole('region',{name:'Canvas feedback tools',exact:true})).toHaveCount(0);
+ }finally{await page.close();}
+});

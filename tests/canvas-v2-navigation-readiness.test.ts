@@ -39,7 +39,7 @@ function camera() {
     insets: { left: 740, right: 24, top: 72, bottom: 88 },
     contentInsets: (): coordinates.CanvasV2WorkspaceInsets => context.insets as coordinates.CanvasV2WorkspaceInsets,
     workspaceSize: { width: 1512, height: 790 }, workspaceSizeRef: { current: { width: 1512, height: 790 } },
-    canvasView: 'preview', chatOpen: true, followingClientRef: {}, previousCameraFrame: {},
+    canvasView: 'preview', chatOpen: true, editChatOpen: false, visualFeedbackActive: false, followingClientRef: {}, previousCameraFrame: {},
     nativeViewportStore: { update: () => {} }, stopFollowingRef: { current: () => {} }, stopPendingViewportFrame: () => {},
     applyViewportVisual: (value: coordinates.CanvasV2WorkspaceViewport) => { commits.push(value); },
     setViewport: (update: coordinates.CanvasV2WorkspaceViewport | ((value: coordinates.CanvasV2WorkspaceViewport) => coordinates.CanvasV2WorkspaceViewport)) => { rendered = typeof update === 'function' ? update(rendered) : update; },
@@ -141,4 +141,13 @@ test('first measured camera geometry does not reframe again when ResizeObserver 
   h.context.workspaceSize = { width: 1512, height: 790 }; h.frameChanged();
   assert.equal(h.commits.length, 0, 'the same measured frame is one baseline, not a second camera authority');
   assert.deepEqual(h.viewportRef.current, before);
+});
+
+
+test('feedback can temporarily hide chat without moving the marked artwork or replacing its camera baseline', () => {
+  const h=camera();h.frameChanged();const before={...h.viewportRef.current};
+  h.context.visualFeedbackActive=true;h.context.chatOpen=false;h.context.insets=closedFrame.insets;h.frameChanged();
+  assert.deepEqual(h.viewportRef.current,before);assert.equal(h.commits.length,0);
+  h.context.chatOpen=true;h.context.insets=chatFrame.insets;h.context.visualFeedbackActive=false;h.frameChanged();
+  assert.deepEqual(h.viewportRef.current,before);assert.equal(h.commits.length,0);
 });

@@ -13,7 +13,7 @@ const CARRIER_HTML = '<template data-canvas-v2-node-id="private-history" data-ca
 export function privateCanvasHistory(value: PrivateCanvasWorkspace | NorthstarSnapshot | PrivateCanvasHistory): PrivateCanvasHistory {
   const memory=value.memory;
   let personal=memory?memories.get(memory):undefined;
-  if(memory&&!personal){personal={assets:[],accountPackets:memory.accountPackets,accountFlows:memory.accountFlows,sourceMedia:memory.sourceMedia,sourcePages:memory.sourcePages,compositionHistory:memory.compositionHistory,compositionSequence:memory.compositionSequence,screenVersions:memory.screenVersions,productIdentities:memory.productIdentities,artifacts:memory.artifacts,accountFlowSummaries:memory.accountFlowSummaries,referenceRailFlowIds:memory.referenceRailFlowIds,accountHandles:memory.accountHandles};memories.set(memory,personal);}
+  if(memory&&!personal){personal={conversationEditTargets:memory.conversationEditTargets,assets:[],accountPackets:memory.accountPackets,accountFlows:memory.accountFlows,sourceMedia:memory.sourceMedia,sourcePages:memory.sourcePages,compositionHistory:memory.compositionHistory,compositionSequence:memory.compositionSequence,screenVersions:memory.screenVersions,productIdentities:memory.productIdentities,artifacts:memory.artifacts,accountFlowSummaries:memory.accountFlowSummaries,referenceRailFlowIds:memory.referenceRailFlowIds,accountHandles:memory.accountHandles};memories.set(memory,personal);}
   return {turns:value.turns,draft:value.draft,attachments:value.attachments,model:value.model,effort:value.effort,
     ...(personal?{memory:personal}:{})};
 }

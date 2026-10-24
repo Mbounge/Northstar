@@ -1,6 +1,8 @@
 import type { CanvasV2Activity } from '../tool-activity';
 
 export type JsonObject = Record<string, unknown>;
+// Only an owner-verified idle eviction guarantees that the new input was never accepted.
+export const IDLE_SESSION_RELEASED = 'This idle conversation was released. Resume with its private saved history.';
 export const object = (v: unknown): JsonObject => v && typeof v === 'object' && !Array.isArray(v) ? v as JsonObject : {};
 export const string = (v: unknown) => typeof v === 'string' ? v : '';
 export interface AgentText { id: string; text: string; phase?: string }

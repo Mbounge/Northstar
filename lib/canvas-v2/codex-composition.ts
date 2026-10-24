@@ -115,7 +115,14 @@ export function normalizeCodexCompositionHeading(plan: CodexCompositionPlan, doc
   return normalized === section ? document : { ...document, html: document.html.slice(0,range.start) + normalized + document.html.slice(range.end) };
 }
 export function rejectedCodexEdit(baseRevisionId: string, error: unknown) {
-  return { committed: false, baseRevisionId, error: error instanceof Error ? error.message : String(error), next: 'The draft was not committed. The public canvas is unchanged by this attempt. Read the canvas if it changed; otherwise repair using the same plan. canvas_review can show a rejected preview, which is not a committed revision.' };
+  const message = error instanceof Error ? error.message : String(error);
+  const protectedTarget = /^Human-authored node ([A-Za-z0-9_.:-]+) is protected\./.exec(message)?.[1];
+  return { committed: false, baseRevisionId, error: message,
+    ...(protectedTarget ? { requiredUserAction: { kind: 'confirm-edit-target', nodeId: protectedTarget } } : {}),
+    next: protectedTarget
+      ? 'The draft was not committed. The public canvas is unchanged. Read this exact target once to check current selection, remembered edit context and lock state. If it still has no editable scope, ask the person to select the current object; preserve completed artifacts and stop retrying this same protected write. Do not create a duplicate or bypass protection.'
+      : 'The draft was not committed. The public canvas is unchanged by this attempt. Read the canvas if it changed; otherwise repair using the same plan. canvas_review can show a rejected preview, which is not a committed revision.' };
+
 }
 
 /** New canvas compositions inherit the canvas backdrop, including one-child layout wrappers. */

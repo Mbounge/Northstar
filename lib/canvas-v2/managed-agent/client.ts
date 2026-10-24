@@ -1,4 +1,4 @@
-import { emptyAgentView, object, readAgentEvents, reduceAgentEvent, string, type AgentView, type JsonObject } from './protocol';
+import { IDLE_SESSION_RELEASED, emptyAgentView, object, readAgentEvents, reduceAgentEvent, string, type AgentView, type JsonObject } from './protocol';
 import { screenProbeFailure } from '../screen-probe-outcome';
 
 export class ManagedAgentClient {
@@ -58,8 +58,20 @@ export class ManagedAgentClient {
         return; // Initial input was submitted with creation; never send it twice.
       }
       if (this.view.status !== 'running') { this.recoveries = 0; this.actions = new AbortController(); this.publish({ ...emptyAgentView(), sessionId: this.sessionId, status: 'running' }); }
-      if (!this.stream) await this.listen(); // Subscribe before submitting input; do not lose early events.
-      await this.request({ op: 'send', message, attachments, requestId, model, effort, canvasTheme });
+      try {
+        if (!this.stream) await this.listen(); // Subscribe before submitting input; do not lose early events.
+        await this.request({ op: 'send', message, attachments, requestId, model, effort, canvasTheme });
+      } catch (error) {
+        // This exact owner-bound server receipt means input was not dispatched.
+        // Never replay a timed-out request or an unknown/wrong-owner session.
+        if (!(error instanceof Error) || error.message !== IDLE_SESSION_RELEASED || this.disposed || this.cancelling) throw error;
+        this.stream?.abort(); this.stream = undefined;
+        this.token = undefined; this.sessionId = undefined;
+        this.actions.abort(); this.actions = new AbortController();
+        this.tools.clear(); this.results.clear(); this.recoveries = 0;
+        this.publish({ ...emptyAgentView(), status: 'running' });
+        await this.create(message, attachments, model, requestId, effort, restoredHistory, canvasTheme);
+      }
     });
     this.commands = work.catch(() => undefined);
     return work.catch(error => { this.fail(error); throw error; }).finally(() => { this.pendingInputs--; this.publish(this.view); this.closeSettledStream(); });

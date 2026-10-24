@@ -87,6 +87,19 @@ test('unknown session cannot execute a provider request', async () => {
   await assert.rejects(handleManagedRequest({ op: 'send', token: 'invalid', message: 'hello', requestId: 'r' }, { owner: 'alice', key: 'key', signal: new AbortController().signal, fetcher: async () => { requests++; return Response.json({}); } }));
   assert.equal(requests, 0);
 });
+test('unavailable sessions and ambiguous network failures never replay an input or private history', async () => {
+  for (const failure of ['This Codex session is unavailable. Start a new conversation.', 'The agent connection timed out.']) {
+    const calls: Record<string, unknown>[] = [];
+    const client = new ManagedAgentClient({ endpoint: '/codex', onView: () => undefined, execute: async () => null, fetcher: async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); calls.push(body);
+      return Response.json({ error: failure }, { status: 400 });
+    } });
+    client.token = 'missing'; client.sessionId = 'old'; client.view.status = 'completed';
+    await assert.rejects(client.send('New change', [], 'gpt-5.6-luna', 'once', 'high', 'Private saved history'), { message: failure });
+    assert.equal(calls.length, 1); assert.equal(calls[0].op, 'stream');
+    assert.equal(calls[0].restoredHistory, undefined); client.dispose();
+  }
+});
 test('attachments remain model inputs and user instruction is not replaced by an intermediate report', () => {
   assert.deepEqual(managedInput({ message: 'Explain this' }), [{ role: 'user', content: [{ type: 'input_text', text: 'Explain this' }] }]);
 });

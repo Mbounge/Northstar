@@ -228,3 +228,13 @@ test('Codex local CSS edits preserve layout and typography unless replacement is
   assert.ok(!replaced.css.includes(layout));
   assert.match(replaced.css, /\.photo\{width:600px\}/);
 });
+
+test('a protected target rejection names the required user action instead of instructing an unchanged retry', async () => {
+  const { rejectedCodexEdit } = await import('../lib/canvas-v2/codex-composition');
+  const error='Human-authored node title is protected. Compose around it or target an unedited sibling.';
+  const rejected=rejectedCodexEdit('current',new Error(error));
+  assert.equal(rejected.committed,false);assert.equal(rejected.baseRevisionId,'current');assert.equal(rejected.error,error);
+  assert.deepEqual(rejected.requiredUserAction,{kind:'confirm-edit-target',nodeId:'title'});
+  assert.match(rejected.next,/Read this exact target once/);assert.match(rejected.next,/stop retrying/);
+  assert.equal(rejectedCodexEdit('current',new Error('A teammate changed the canvas')).requiredUserAction,undefined);
+});

@@ -7,7 +7,7 @@ import { join, relative } from 'node:path';
 import { CodexSessionHost } from '../lib/canvas-v2/codex-app-server/server';
 import { fixtureCodex, FixtureCodex } from '../app/canvas-v2-e2e/codex/fixture';
 import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
-import { object, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
+import { IDLE_SESSION_RELEASED, object, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
 import { codexDisplayEvents } from '../lib/canvas-v2/codex-app-server/events';
 import { codexChildEnvironment } from '../lib/canvas-v2/codex-app-server/rpc.server';
 
@@ -52,6 +52,48 @@ test('unreadable or invalid trust configuration fails before spawning instead of
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 const tick = () => new Promise(r => setTimeout(r, 160));
+test('capacity rotates only idle processes and resumes private history once for the same owner', async () => {
+  const peers: FixtureCodex[] = [], clients: ManagedAgentClient[] = [];
+  const host = new CodexSessionHost(async () => { const peer = await fixtureCodex(); peers.push(peer); return peer; }, undefined, { sessions: 2, perOwner: 1 });
+  const make = (owner: string) => {
+    const client = new ManagedAgentClient({ endpoint: '/codex', onView: () => undefined, execute: async () => null, fetcher: async (_url, init) => {
+      try { return await host.handle(JSON.parse(String(init?.body)), { owner, key: 'fake', signal: init?.signal || new AbortController().signal }); }
+      catch (error) { return Response.json({ error: (error as Error).message }, { status: 400 }); }
+    } }); clients.push(client); return client;
+  };
+  const request = (owner: string, token?: string) => host.handle({ op: 'snapshot', token }, { owner, key: 'fake', signal: new AbortController().signal });
+  try {
+    const alice = make('alice'), bob = make('bob');
+    await alice.send('Alice first', [], 'gpt-5.6-luna', 'a1'); await tick();
+    const oldAlice = alice.token;
+    await bob.send('hold Bob active', [], 'gpt-5.6-luna', 'b1'); await tick();
+    const another = make('alice');
+    await another.send('Alice new canvas', [], 'gpt-5.6-luna', 'a2'); await tick();
+    assert.equal(peers[0].closed, true); assert.equal(peers[1].closed, false);
+    await assert.rejects(request('alice', oldAlice), { message: IDLE_SESSION_RELEASED });
+    await assert.rejects(request('bob', oldAlice), /unavailable/);
+    const history = JSON.stringify([{ role: 'user', text: 'Alice first' }, { role: 'assistant', text: 'Private prior answer' }]);
+    await alice.send('Alice new follow-up', [], 'gpt-5.6-luna', 'a3', 'high', history); await tick();
+    assert.equal(peers.length, 4); assert.notEqual(alice.token, oldAlice);
+    const inputs = peers[3].calls.filter(call => call.method === 'turn/start');
+    assert.equal(inputs.length, 1);
+    const restored = inputs[0].params.input as JsonObject[];
+    assert.match(String(restored[0].text), /Private prior answer/);
+    assert.equal(restored[1].text, 'Alice new follow-up');
+    assert.equal(peers[1].calls.filter(call => call.method === 'turn/start').length, 1);
+    assert.equal(peers[1].closed, false);
+    // A second active Alice process cannot displace either in-progress run.
+    await another.send('hold Alice active', [], 'gpt-5.6-luna', 'a4'); await tick();
+    await assert.rejects(make('alice').send('Third active', [], 'gpt-5.6-luna', 'a5'), /already working/);
+    assert.equal(peers.at(-1)!.closed, false);
+    await assert.rejects(make('charlie').send('Global full', [], 'gpt-5.6-luna', 'c1'), /already working/);
+    await bob.cancel();
+    await make('charlie').send('Use global idle slot', [], 'gpt-5.6-luna', 'c2'); await tick();
+    assert.equal(peers[1].closed, true);
+    await assert.rejects(request('bob', bob.token), { message: IDLE_SESSION_RELEASED });
+    await assert.rejects(request('charlie', bob.token), /unavailable/);
+  } finally { for (const client of clients) client.dispose(); host.dispose(); }
+});
 async function setup(execute: (a: JsonObject, s: AbortSignal) => Promise<unknown> = async () => null) {
   const peers: FixtureCodex[] = [];
   const host = new CodexSessionHost(async () => { const p = await fixtureCodex(); peers.push(p); return p; });
