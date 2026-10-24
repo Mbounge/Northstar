@@ -54,6 +54,7 @@ test('Codex keeps researched image, GIF and video assets through a follow-up', a
   await page.getByLabel('Message North Star').fill('media parity');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByTestId('canvas-v2-markdown').filter({ hasText: 'Placed and reviewed the source image' })).toBeVisible({ timeout: 90_000 });
+  await expect.poll(() => scene.locator('img').evaluateAll(images => images.length === 2 && images.every(img => (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0))).toBe(true);
   const before = await scene.locator('img').evaluateAll(images => images.map(img => ({ src: img.getAttribute('src'), loaded: (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0 })));
   expect(before.length).toBe(2); // Still reference and the live GIF's retained image.
   const reference = scene.locator('[data-canvas-v2-node-id="fixture-reference"]');

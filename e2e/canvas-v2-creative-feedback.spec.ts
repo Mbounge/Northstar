@@ -128,7 +128,7 @@ test('feedback spans screens and canvas references; restoring a version preserve
   await referenceLeaf.click();await page.getByRole('button',{name:'Give feedback on selection',exact:true}).click();
   await expect(page.getByText('Feedback · 3 items',{exact:true})).toBeVisible();
   await send('feedback collection');
-  await expect(page.getByText('Refined every tagged screen detail and retained the tagged canvas reference.',{exact:true})).toBeVisible({timeout:90000});
+  await expect(page.getByText('Refined every tagged screen detail together and retained the tagged canvas reference.',{exact:true})).toBeVisible({timeout:90000});
   await expect(frame1.getByRole('heading',{name:'Refined detail 1',exact:true})).toBeVisible();
   await expect(frame2.getByRole('heading',{name:'Refined detail 2',exact:true})).toBeVisible();
   await expect(frame1.getByLabel('Your goal')).toHaveValue('Score 24 goals');
