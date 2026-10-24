@@ -163,6 +163,7 @@ test('feedback spans screens and canvas references; restoring a version preserve
   expect(await second.getAttribute('data-canvas-v2-screen')).toBe(sibling);
   expect(await first.getAttribute('style')).toBe(geometry1);expect(await second.getAttribute('style')).toBe(geometry2);
   await openHistory();
+  await history.getByRole('navigation',{name:'Screen versions'}).getByRole('button',{name:/Restored version 1/}).click();
   await expect(history.getByText('On canvas',{exact:true})).toHaveCount(1);
   await expect(history.getByRole('button',{name:'On canvas',exact:true})).toBeDisabled();
 });

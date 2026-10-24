@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 const titles={app:'Responsive app fixture',poster:'Layered poster fixture',svg:'Native fox artwork fixture'};
 async function create(page:Page,family:keyof typeof titles){
+  page.setDefaultTimeout(15000);
   await page.setViewportSize({width:1512,height:1000});await page.goto('/canvas-v2-e2e/codex');
   if(family==='poster'){
     await page.getByRole('button',{name:'assets',exact:true}).click();await page.getByRole('button',{name:'Add project images',exact:true}).click();
@@ -10,7 +11,7 @@ async function create(page:Page,family:keyof typeof titles){
     await expect(page.getByRole('button',{name:/Preview.*fixture.*logo/i})).toBeVisible();await page.getByRole('button',{name:'chat',exact:true}).click();
   }
   await page.getByRole('textbox',{name:'Message North Star'}).fill('editing workspace '+family);await page.getByRole('button',{name:'Send message',exact:true}).click();
-  await expect(page.getByText('The '+family+' editing workspace fixture is ready.',{exact:true})).toBeVisible({timeout:60000});await page.getByRole('button',{name:'Show on canvas',exact:true}).click();
+  await expect(page.getByText('The '+family+' editing workspace fixture is ready.',{exact:true})).toBeVisible({timeout:60000});await page.getByRole('button',{name:'Show latest work on canvas',exact:true}).click();
   return page.frameLocator('iframe[title="'+titles[family]+'"]');
 }
 async function enter(page:Page,family:keyof typeof titles){
@@ -156,14 +157,20 @@ test('one instruction refines a current native multi-selection while edit chat p
   await stageSelectedFeedback(page,'Refine the two selected text layers while keeping my wording.');
   await expect(page.locator('[data-northstar-edit-view="true"]')).toBeVisible();
   await expect(page.getByRole('heading',{name:'2 layers selected',exact:true})).toBeVisible();
-  await expect(page.getByTestId('canvas-v2-workspace-surface')).toHaveAttribute('style',camera!);
+  // Done opens the wider Design chat and recenters the app into the free
+  // canvas space. Zoom stays fixed, and closing chat restores the camera.
+  const chatCamera=await page.getByTestId('canvas-v2-workspace-surface').getAttribute('style');
+  expect(chatCamera?.match(/scale\(([^)]+)\)/)?.[1]).toBe(camera?.match(/scale\(([^)]+)\)/)?.[1]);
   await page.getByRole('button',{name:'Collapse North Star panel',exact:true}).click();
+  await expect(page.getByTestId('canvas-v2-workspace-surface')).toHaveAttribute('style',camera!);
   await expect(row(page,'#app-heading')).toHaveAttribute('aria-selected','true');await expect(row(page,'#centered-label')).toHaveAttribute('aria-selected','true');
   // A source-bound region must be staged again after a later human edit.
   await row(page,'#app-heading').click();await page.getByRole('textbox',{name:'Element text',exact:true}).fill('My current human revision.');
   await row(page,'#centered-label').click({modifiers:['Meta']});await expect(frame.locator('#app-heading')).toHaveText('My current human revision.');
   const human=await source(page);
-  await page.getByRole('button',{name:'Open Northstar chat in edit view',exact:true}).click();
+  // The development-only export receipt overlaps this footer; exercise its
+  // normal keyboard activation without forcing a click through the observer.
+  await page.getByRole('button',{name:'Open Northstar chat in edit view',exact:true}).press('Enter');
   await page.getByRole('button',{name:'Remove canvas feedback',exact:true}).click();
   await page.getByRole('button',{name:'Collapse North Star panel',exact:true}).click();
   await stageSelectedFeedback(page,'Refine these two current text layers, preserving the newest human wording.');

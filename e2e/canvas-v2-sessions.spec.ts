@@ -83,7 +83,11 @@ test('switching sessions keeps a running native loop mounted and isolates anothe
  test.setTimeout(150_000);await storage(page);
  await page.goto('/canvas?sessionTest=1');await send(page,'hold first session');
  await expect(active(page).getByRole('button',{name:'Stop current response'})).toBeVisible();
+ const firstFrameSource=await page.locator('iframe[aria-hidden="false"]').getAttribute('src');
  await menu(page);await page.getByRole('button',{name:'New session',exact:true}).click();
+ // Creating a saved session is asynchronous. Wait for the newly selected
+ // iframe before typing, so the still-running old session never gets the draft.
+ await expect.poll(()=>page.locator('iframe[aria-hidden="false"]').getAttribute('src')).not.toBe(firstFrameSource);
  await send(page,'Put it on the canvas');
  await expect(active(page).getByTestId('canvas-v2-native-scene').locator('[data-canvas-v2-node-id="codex-finding"]')).toHaveText('The evidence changes the explanation.');
  await menu(page);await page.getByRole('button').filter({has:page.getByText('hold first session',{exact:true})}).click();
