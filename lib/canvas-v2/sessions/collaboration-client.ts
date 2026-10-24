@@ -2,7 +2,7 @@ import { normalizeCanvasV2NativeGeometryDocument } from '../native-geometry-docu
 import type { CanvasV2ArtifactRevision } from '../types';
 import { applySharedChanges, conflictingSharedCells, diffSharedCells, encodeSharedId, revisionFromSharedCells, sharedCellsFromRevision, type AcceptedOperation, type CellChange, type SharedCells, type SharedOperation } from './collaboration-document';
 
-export interface CanvasMember { userId: string; name: string; role: 'owner' | 'editor' | 'viewer' }
+export interface CanvasMember { userId: string; name: string; role: 'owner' | 'editor' | 'viewer'; joinedAt?: string }
 export interface SharedRoom { version: number; cells: SharedCells; seed: CanvasV2ArtifactRevision; ownerId: string; role: CanvasMember['role']; members: CanvasMember[] }
 export interface PeerSelection { nodeId: string; x: number; y: number; width: number; height: number }
 export interface PeerView { x:number; y:number; width:number; height:number }
@@ -40,6 +40,31 @@ export function collaboratorColor(userId: string): string {
   let hash = 0; for (const char of userId) hash = (hash * 31 + char.charCodeAt(0)) | 0;
   return COLORS[(hash >>> 0) % COLORS.length];
 }
+/** Allocate from durable membership, never ephemeral presence/arrival order.
+ * Earlier members keep their slots when someone joins or reconnects. User ID
+ * breaks equal join timestamps deterministically on every account. */
+export function collaboratorColors(members: CanvasMember[]): Map<string, string> {
+  const colors = new Map<string, string>(), used = new Set<string>();
+  const ordered = [...members].sort((a, b) => (a.joinedAt ?? '').localeCompare(b.joinedAt ?? '') || a.userId.localeCompare(b.userId));
+  for (const member of ordered) {
+    if (colors.has(member.userId)) continue;
+    const preferred = COLORS.indexOf(collaboratorColor(member.userId));
+    let color = COLORS.map((_, step) => COLORS[(preferred + step) % COLORS.length]).find(candidate => !used.has(candidate));
+    let extra = 0;
+    while (!color || used.has(color)) {
+      // More than eight members still get unique hex colours. Keep the same
+      // readable pastel range as the curated palette, with distributed hues.
+      const hue = (extra++ * 137.508 + 23) % 360, chroma = .36, base = .57;
+      const channel = (offset: number) => {
+        const k = (offset + hue / 60) % 6;
+        return Math.round(255 * (base + chroma * Math.max(0, Math.min(k, 4 - k, 1)))).toString(16).padStart(2, '0');
+      };
+      color = ('#' + channel(5) + channel(3) + channel(1)).toUpperCase();
+    }
+    colors.set(member.userId, color); used.add(color);
+  }
+  return colors;
+}
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1_000_000;
 export function validPeerView(value:unknown):value is PeerView {
   if(!value||typeof value!=='object')return false;
@@ -62,10 +87,14 @@ export class CanvasCollaborationClient {
   readonly userId: string;
   readonly transport: CollaborationTransport;
   private status: CollaborationStatus = { phase: 'off', role: 'viewer', pending: 0, members: [], busyObjects: [] };
+  private colors = new Map<string, string>();
   private listeners = new Set<() => void>();
   private revisionListeners = new Set<(revision: CanvasV2ArtifactRevision) => void>();
   private presenceListeners = new Set<() => void>();
   private peers = new Map<string, PeerPresence>();
+  private pendingPresence = new Map<string, PeerPresence>();
+  private membersRefresh?: Promise<void>;
+  private membersRetry?: ReturnType<typeof setTimeout>;
   private accepted: SharedCells = new Map();
   private visible: SharedCells = new Map();
   private revision?: CanvasV2ArtifactRevision;
@@ -105,6 +134,7 @@ export class CanvasCollaborationClient {
   get enabled() { return this.status.phase !== 'off'; }
   get writable() { return this.enabled && this.status.phase !== 'blocked' && this.status.role !== 'viewer'; }
   getStatus = () => this.status;
+  colorFor = (userId: string) => this.colors.get(userId) ?? collaboratorColor(userId);
   getRevision = () => this.revision;
   getPeers = () => [...this.peers.values()];
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -117,6 +147,7 @@ export class CanvasCollaborationClient {
       return before === after || (Array.isArray(before) && Array.isArray(after) && before.length === after.length && before.every((item, index) => item === after[index]));
     });
     if (same) return;
+    if (status.members !== this.status.members) this.colors = collaboratorColors(status.members);
     this.status = status; for (const listener of this.listeners) listener();
   }
   private journal(): Promise<void> {
@@ -179,14 +210,19 @@ export class CanvasCollaborationClient {
     this.watchStop?.();
     this.watchStop = this.transport.watch(this.clientId, event => {
       if (event.kind === 'changed') { void this.sync(); return; }
-      if (event.kind === 'leave') { this.peers.delete(event.clientId); this.emitPresence(); return; }
+      if (event.kind === 'leave') { this.peers.delete(event.clientId); this.pendingPresence.delete(event.clientId); this.emitPresence(); return; }
       const peer = parsePeerPresence(event.value);
       if (!peer || peer.clientId === this.clientId) return;
-      const member = this.status.members.find(member => member.userId === peer.userId);
-      if (!member) { void this.refreshMembers(); return; }
-      const previous = this.peers.get(peer.clientId);
-      if (previous && peer.sequence <= previous.sequence) return;
-      this.peers.set(peer.clientId, { ...peer, name: member.name }); this.emitPresence();
+      if (!this.status.members.some(member => member.userId === peer.userId)) {
+        const previous = this.pendingPresence.get(peer.clientId);
+        if (previous && peer.sequence <= previous.sequence) return;
+        // Bound unverified awareness while the authenticated directory catches
+        // up. A cursor packet cannot grant membership or supply a display name.
+        if (!previous && this.pendingPresence.size >= 64) this.pendingPresence.delete(this.pendingPresence.keys().next().value!);
+        this.pendingPresence.set(peer.clientId, peer);
+        void this.refreshMembers(); return;
+      }
+      if (this.admitPresence(peer)) this.emitPresence();
     });
     clearInterval(this.timer);
     this.timer = setInterval(() => {
@@ -199,22 +235,45 @@ export class CanvasCollaborationClient {
     }, 1000);
     this.update({ phase: 'live', error: undefined }); this.publishPresence(); void this.sync();
   }
-  async refreshMembers(force = false) {
-    if (!force && Date.now() - this.lastMembers < 1500) return;
-    this.lastMembers = Date.now();
-    try {
-      const members = await this.transport.members();
-      if (this.closed) return;
-      const same = members.length === this.status.members.length && members.every(member => this.status.members.some(previous => previous.userId === member.userId && previous.name === member.name && previous.role === member.role));
-      // Owner authority comes from the room read, not its editor membership
-      // row. Other users must adopt role changes before another edit queues.
-      const role = this.status.role === 'owner' ? 'owner' : members.find(member => member.userId === this.userId)?.role ?? 'viewer';
-      if (!same || role !== this.status.role) this.update({ members: same ? this.status.members : members, role });
-      if (role === 'viewer' && this.claims.length) void this.claim([]);
-      for (const [id, peer] of this.peers) if (!members.some(member => member.userId === peer.userId)) this.peers.delete(id);
-      this.emitPresence();
+  private admitPresence(peer: PeerPresence): boolean {
+    if (this.closed || this.status.phase === 'blocked' || Date.now() - peer.at > 12000) return false;
+    const member = this.status.members.find(member => member.userId === peer.userId);
+    if (!member) return false;
+    const previous = this.peers.get(peer.clientId);
+    if (previous && peer.sequence <= previous.sequence) return false;
+    this.peers.set(peer.clientId, { ...peer, name: member.name }); return true;
+  }
+  refreshMembers(force = false): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.membersRefresh) return this.membersRefresh;
+    const remaining = 1500 - (Date.now() - this.lastMembers);
+    if (!force && remaining > 0) {
+      if (this.pendingPresence.size && !this.membersRetry) this.membersRetry = setTimeout(() => {
+        this.membersRetry = undefined; void this.refreshMembers();
+      }, remaining + 1);
+      return Promise.resolve();
     }
-    catch { /* The next durable sync determines whether access was removed. */ }
+    clearTimeout(this.membersRetry); this.membersRetry = undefined;
+    this.lastMembers = Date.now();
+    const refresh = (async () => {
+      try {
+        const members = await this.transport.members();
+        if (this.closed || this.status.phase === 'blocked') return;
+        const same = members.length === this.status.members.length && members.every(member => this.status.members.some(previous => previous.userId === member.userId && previous.name === member.name && previous.role === member.role && previous.joinedAt === member.joinedAt));
+        // Owner authority comes from the room read, not its editor membership row.
+        const role = this.status.role === 'owner' ? 'owner' : members.find(member => member.userId === this.userId)?.role ?? 'viewer';
+        if (!same || role !== this.status.role) this.update({ members: same ? this.status.members : members, role });
+        if (role === 'viewer' && this.claims.length) void this.claim([]);
+        for (const [id, peer] of this.peers) if (!members.some(member => member.userId === peer.userId)) this.peers.delete(id);
+        for (const [id, peer] of this.pendingPresence) {
+          if (Date.now() - peer.at > 12000) { this.pendingPresence.delete(id); continue; }
+          if (members.some(member => member.userId === peer.userId)) { this.admitPresence(peer); this.pendingPresence.delete(id); }
+        }
+        this.emitPresence();
+      } catch { /* Durable sync still determines access; unknown peers remain hidden. */ }
+    })();
+    const pending = refresh.finally(() => { if (this.membersRefresh === pending) this.membersRefresh = undefined; });
+    this.membersRefresh = pending; return pending;
   }
   observe(revision: CanvasV2ArtifactRevision, label = 'Edited canvas'): Promise<void> {
     if (!this.enabled || this.closed) return Promise.resolve();
@@ -470,7 +529,10 @@ export class CanvasCollaborationClient {
     }
     this.update({ busyObjects: [...busy].sort() });
   }
-  private publishPresence() { if (!this.enabled || this.closed || this.status.phase === 'blocked') return; this.local.sequence++; this.local.at = Date.now(); this.lastHeartbeat = Date.now(); this.transport.presence({ ...this.local }); }
+  private publishPresence() { if (!this.enabled || this.closed || this.status.phase === 'blocked') return;
+    // The durable client ID survives reload for journal recovery. Do not reset
+    // awareness to sequence 1 while peers still retain its previous packets.
+    this.local.sequence = Math.max(this.local.sequence + 1, Date.now() * 1000); this.local.at = Date.now(); this.lastHeartbeat = Date.now(); this.transport.presence({ ...this.local }); }
   private emitPresence() { this.refreshBusy(); for (const listener of this.presenceListeners) listener(); }
   expirePresence(now = Date.now()) { let changed = false; for (const [id, peer] of this.peers) if (now - peer.at > 12000) { this.peers.delete(id); changed = true; } if (changed) this.emitPresence(); }
   retainLocalRevision(revision: CanvasV2ArtifactRevision, label: string) {
@@ -479,5 +541,5 @@ export class CanvasCollaborationClient {
     this.update({ recovery: { revision, label, at: Date.now(),...(alternatives.length?{alternatives}:{}) } }); void this.journal();
   }
   dismissRecovery() { this.update({ recovery: undefined, error: undefined }); void this.journal(); }
-  close() { this.closed = true; clearTimeout(this.pointerTimer); clearInterval(this.timer); this.watchStop?.(); this.watchStop = undefined; void this.claim([], true); this.claimBusy = []; this.peers.clear(); this.emitPresence(); }
+  close() { this.closed = true; clearTimeout(this.membersRetry); this.pendingPresence.clear(); clearTimeout(this.pointerTimer); clearInterval(this.timer); this.watchStop?.(); this.watchStop = undefined; void this.claim([], true); this.claimBusy = []; this.peers.clear(); this.emitPresence(); }
 }

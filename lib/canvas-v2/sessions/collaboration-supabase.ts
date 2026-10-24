@@ -30,17 +30,23 @@ export class SupabaseCanvasTransport implements CollaborationTransport {
     const result = await this.db.rpc(name, args); if (result.error) throw failure(result.error); return result.data as T;
   }
   async read() {
-    try { return room(await this.rpc('northstar_canvas_read', { sid: this.sessionId })); }
+    try {
+      const value = room(await this.rpc('northstar_canvas_read', { sid: this.sessionId }));
+      return value ? { ...value, members: await this.members() } : null;
+    }
     catch (error) { if (error instanceof Error && /Could not find the function|does not exist.*northstar_canvas_read/i.test(error.message)) return null; throw error; }
   }
-  async enable(cells: SharedCells, seed: CanvasV2ArtifactRevision) { return room(await this.rpc('northstar_canvas_enable', { sid: this.sessionId, initial_cells: Object.fromEntries(cells), initial_seed: seed }))!; }
+  async enable(cells: SharedCells, seed: CanvasV2ArtifactRevision) {
+    const value = room(await this.rpc('northstar_canvas_enable', { sid: this.sessionId, initial_cells: Object.fromEntries(cells), initial_seed: seed }))!;
+    return { ...value, members: await this.members() };
+  }
   commit(operation: SharedOperation) { return this.rpc<{ ok: boolean; version: number; conflicts?: string[] }>('northstar_canvas_commit', { sid: this.sessionId, oid: operation.id, cid: operation.clientId, edits: operation.changes, summary: operation.label }); }
   since(version: number) { return this.rpc<AcceptedOperation[]>('northstar_canvas_operations_since', { sid: this.sessionId, since_version: version }); }
   claim(clientId: string, objectIds: string[]) { return this.rpc<{ busy: string[] }>('northstar_canvas_claim', { sid: this.sessionId, cid: clientId, objects: objectIds }); }
   async members(): Promise<CanvasMember[]> {
-    const result = await this.db.from('northstar_canvas_members').select('user_id,display_name,role').eq('session_id', this.sessionId);
+    const result = await this.db.from('northstar_canvas_members').select('user_id,display_name,role,joined_at').eq('session_id', this.sessionId);
     if (result.error) throw failure(result.error);
-    return (result.data ?? []).map(member => ({ userId: member.user_id, name: member.display_name, role: member.role }));
+    return (result.data ?? []).map(member => ({ userId: member.user_id, name: member.display_name, role: member.role, ...(member.joined_at ? { joinedAt: member.joined_at } : {}) }));
   }
   watch(clientId: string, onSignal: Parameters<CollaborationTransport['watch']>[1]) {
     let owned: ReturnType<Database['channel']> | undefined, cancelled = false;

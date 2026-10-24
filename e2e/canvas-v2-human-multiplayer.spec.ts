@@ -702,3 +702,43 @@ test('native design feedback keeps the marked object steady and Done opens the v
   await expect(page.getByRole('region',{name:'Canvas feedback tools',exact:true})).toHaveCount(0);
  }finally{await page.close();}
 });
+
+
+test('one person in multiple tabs keeps one teammate avatar and consistent cursor, selection and follow colours', async ({ context }, info) => {
+  test.setTimeout(120000);
+  const room = 'identities-' + randomUUID(), alice = await openPeer(context, room, 'alice'), bob = await openPeer(context, room, 'bob');
+  const otherAlice = await openPeer(context, room, 'alice');
+  try {
+    const toolbar = (page: Page) => page.getByTestId('canvas-collaborators');
+    await expect(toolbar(alice).locator('[data-collaborator-user="bob"]')).toHaveCount(1);
+    await expect(toolbar(alice).locator('[data-collaborator-user="alice"]')).toHaveCount(0);
+    await expect(toolbar(bob).locator('[data-collaborator-user="alice"]')).toHaveCount(1);
+    await expect(toolbar(alice).getByRole('button', {name:'Share canvas', exact:true})).toHaveAttribute('title', '2 people on this canvas · Share');
+    await design(alice); await design(bob); await object(bob, 'note-bob').click();
+    await bob.mouse.move(1000, 650);
+    const peerCursor = cursor(alice, 'bob');
+    await expect(peerCursor.locator('span')).toHaveText('Bob');
+    const color = await peerCursor.locator('path').getAttribute('stroke');
+    expect(color).toMatch(/^#[0-9A-F]{6}$/);
+    const rgb = await peerCursor.locator('span').evaluate(node => getComputedStyle(node).backgroundColor);
+    await expect(toolbar(alice).locator('[data-collaborator-user="bob"]')).toHaveCSS('background-color', rgb);
+    await expect(alice.locator('[data-collaborator-selection="note-bob"]')).toHaveCSS('border-color', rgb);
+    const localCursor = await bob.getByRole('region', {name:'Canvas workspace',exact:true}).evaluate(node => getComputedStyle(node).cursor);
+    expect(localCursor).toContain(encodeURIComponent(color!));
+    await toolbar(alice).getByRole('button', {name:'Follow Bob',exact:true}).click();
+    await expect(alice.getByTestId('canvas-follow-status')).toContainText('Following Bob');
+    await expect(alice.getByTestId('canvas-follow-status').locator('span').first()).toHaveCSS('background-color', rgb);
+    await alice.getByRole('button', {name:'Stop following',exact:true}).click();
+    await bob.reload(); await expect.poll(async () => (await state(bob)).phase).toBe('live');
+    await bob.mouse.move(700, 670);
+    const restoredWorld = await bob.getByTestId('canvas-v2-workspace-surface').evaluate(element => {
+      const transform = new DOMMatrix(getComputedStyle(element).transform);
+      return {x:(700-transform.e)/transform.a,y:(670-transform.f)/transform.d};
+    });
+    await expect.poll(async () => Math.hypot(Number(await peerCursor.getAttribute('data-world-x'))-restoredWorld.x,Number(await peerCursor.getAttribute('data-world-y'))-restoredWorld.y), {timeout:2500}).toBeLessThan(2);
+    await expect(peerCursor.locator('path')).toHaveAttribute('stroke', color!);
+    await expect(toolbar(bob).locator('[data-collaborator-user="alice"]')).toHaveCount(1);
+    await info.attach('teammate identity receipt', {body: JSON.stringify({color,rgb,people:2,sameAccountTabs:2}),contentType:'application/json'});
+    await alice.screenshot({path:info.outputPath('consistent-teammate-colour.png')});
+  } finally { await alice.close(); await bob.close(); await otherAlice.close(); }
+});

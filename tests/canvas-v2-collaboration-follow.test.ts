@@ -60,6 +60,7 @@ function mount({ peers = [peer()], allowed = true, reduced = false }: { peers?: 
       if (!previous || deps.some((value, n) => !Object.is(value, previous.deps?.[n]))) jobs.push(() => { previous?.cleanup?.(); slots[index] = { deps, cleanup: effect() }; });
     },
     useState: () => assert.fail('Camera animation must not allocate React state'),
+    useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
   };
   class FakeElement { constructor(public inside = false, public control = false) {} closest() { return this.control ? this : null; } }
   const exports: Record<string, unknown> = {};
@@ -72,7 +73,7 @@ function mount({ peers = [peer()], allowed = true, reduced = false }: { peers?: 
     document: { addEventListener: (name: string, callback: (event: unknown) => void) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(callback); }, removeEventListener: (name: string, callback: (event: unknown) => void) => listeners.get(name)?.delete(callback) },
   });
   const viewport = { current: { x: 0, y: 0, scale: 1 } }, frameRef = { current: structuredClone(frame) }, workspace = { current: { contains: (element: FakeElement) => element.inside } };
-  const client = { clientId: 'alice', getPeers: () => currentPeers, follow: (id?: string) => { follows.push(id); return allowed; }, subscribePresence: (callback: () => void) => { presence.add(callback); return () => presence.delete(callback); } };
+  const client = { colorFor: collaboratorColor, subscribe: () => () => {}, getStatus: () => ({}), clientId: 'alice', getPeers: () => currentPeers, follow: (id?: string) => { follows.push(id); return allowed; }, subscribePresence: (callback: () => void) => { presence.add(callback); return () => presence.delete(callback); } };
   const props = { client, target: 'bob', viewport, frame: frameRef, workspace, refreshKey: '', onPreview: (next: CanvasV2WorkspaceViewport) => { viewport.current = next; previews.push(next); }, onSettle: (next: CanvasV2WorkspaceViewport) => settlements.push(next), onMode: (mode: string) => modes.push(mode), onStop: () => { stops++; } };
   const Component = exports.CanvasCollaborationFollow as (value: typeof props) => unknown;
   const render = (patch: Partial<typeof props> = {}) => { Object.assign(props, patch); cursor = 0; renders++; Component(props); while (jobs.length) jobs.shift()!(); };

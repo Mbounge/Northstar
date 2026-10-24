@@ -25,14 +25,15 @@ class Channel {
 function fixture() {
   const calls: Array<{name: string; args: unknown}> = [], channels: Channel[] = [], configs: unknown[] = [], removed: Channel[] = [];
   let response: {data: unknown; error: null | {message: string; code?: string}} = { data: null, error: null };
+  let directory: {data: unknown; error: null | {message: string; code?: string}} = {data: [], error: null};
   const db = {
     rpc: async (name: string, args: unknown) => { calls.push({name,args}); return response; },
     channel: (name: string, config: unknown) => { const channel = new Channel(); channels.push(channel); configs.push({name,config}); return channel; },
     removeChannel: async (channel: Channel) => { removed.push(channel); },
-    from: (table: string) => ({ select: (columns: string) => ({ eq: async (key: string, value: string) => { calls.push({name: 'select', args: {table,columns,key,value}}); return response; } }) }),
+    from: (table: string) => ({ select: (columns: string) => ({ eq: async (key: string, value: string) => { calls.push({name: 'select', args: {table,columns,key,value}}); return directory; } }) }),
   };
   const transport = new SupabaseCanvasTransport(sid, db as unknown as ConstructorParameters<typeof SupabaseCanvasTransport>[1]);
-  return { db, transport, calls, channels, configs, removed, respond(data: unknown, error: typeof response.error = null) { response = {data,error}; } };
+  return { db, transport, calls, channels, configs, removed, respondMembers(data: unknown) { directory = { data, error: null }; }, respond(data: unknown, error: typeof response.error = null) { response = {data,error}; } };
 }
 const settle=()=>new Promise<void>(resolve=>setImmediate(resolve));
 
@@ -59,7 +60,10 @@ function timeouts(context: TestContext) {
 test('production transport uses exact durable SQL RPC argument and JSON contracts', async () => {
   const f = fixture();
   f.respond({version: 7, cells: {'document:html':'[]'}, seed, ownerId: 'user', role: 'editor', members: []});
-  assert.equal((await f.transport.read())?.cells.get('document:html'), '[]');
+  f.respondMembers([{user_id:'user',display_name:'Owner',role:'editor',joined_at:'2026-10-20T00:00:00Z'}]);
+  const initial = await f.transport.read();
+  assert.equal(initial?.cells.get('document:html'), '[]');
+  assert.equal(initial?.members[0].joinedAt, '2026-10-20T00:00:00Z');
   assert.equal((await f.transport.enable(new Map([['document:html','[]']]), seed)).version, 7);
   const operation = {id: 'op', clientId, label: 'Edit', changes: [{key:'document:css',before:null,after:'body{}'}]};
   f.respond({ok:true,version:8}); assert.deepEqual(await f.transport.commit(operation), {ok:true,version:8});
@@ -70,7 +74,9 @@ test('production transport uses exact durable SQL RPC argument and JSON contract
   f.respond(sid); assert.equal(await f.transport.redeem('token'),sid);
   assert.deepEqual(f.calls,[
     {name:'northstar_canvas_read',args:{sid}},
+    {name:'select',args:{table:'northstar_canvas_members',columns:'user_id,display_name,role,joined_at',key:'session_id',value:sid}},
     {name:'northstar_canvas_enable',args:{sid,initial_cells:{'document:html':'[]'},initial_seed:seed}},
+    {name:'select',args:{table:'northstar_canvas_members',columns:'user_id,display_name,role,joined_at',key:'session_id',value:sid}},
     {name:'northstar_canvas_commit',args:{sid,oid:'op',cid:clientId,edits:operation.changes,summary:'Edit'}},
     {name:'northstar_canvas_operations_since',args:{sid,since_version:7}},
     {name:'northstar_canvas_claim',args:{sid,cid:clientId,objects:['encoded']}},
@@ -91,9 +97,9 @@ test('legacy missing RPC is optional while authentication and database errors re
 });
 
 test('membership rows map SQL column names into authenticated member identities',async()=>{
-  const f=fixture(); f.respond([{user_id:'member',display_name:'Teammate',role:'viewer'}]);
-  assert.deepEqual(await f.transport.members(),[{userId:'member',name:'Teammate',role:'viewer'}]);
-  assert.deepEqual(f.calls,[{name:'select',args:{table:'northstar_canvas_members',columns:'user_id,display_name,role',key:'session_id',value:sid}}]);
+  const f=fixture(); f.respondMembers([{user_id:'member',display_name:'Teammate',role:'viewer',joined_at:'2026-10-20T10:00:00Z'}]);
+  assert.deepEqual(await f.transport.members(),[{userId:'member',name:'Teammate',role:'viewer',joinedAt:'2026-10-20T10:00:00Z'}]);
+  assert.deepEqual(f.calls,[{name:'select',args:{table:'northstar_canvas_members',columns:'user_id,display_name,role,joined_at',key:'session_id',value:sid}}]);
 });
 
 test('realtime uses private per-room channel and only awareness or refresh signals',async()=>{

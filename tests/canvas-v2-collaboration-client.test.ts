@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  CanvasCollaborationClient, parsePeerPresence,
+  CanvasCollaborationClient, collaboratorColor, collaboratorColors, parsePeerPresence,
   type CanvasMember, type CollaborationJournal, type CollaborationTransport, type PeerPresence,
 } from '../lib/canvas-v2/sessions/collaboration-client';
 import {
@@ -859,4 +859,80 @@ test('a derived image swap and concurrent teammate text converge with source ret
   const reopened = await f.client('alice', { clientId: 'alice-image-reopened' }); t.after(() => reopened.value.close());
   assert.equal(reopened.revision().document.html, f.html());
   assert.equal(reopened.revision().evidence.find(asset => asset.id === edited.id)?.url, edited.url);
+});
+
+
+test('roster colours resolve real hash collisions consistently, including offline members and teams beyond eight', () => {
+  const members: CanvasMember[] = Array.from({ length: 40 }, (_, index) => ({ userId: `designer-${index}`, name: `Designer ${index}`, role: 'editor', joinedAt: new Date(1700000000000 + index * 1000).toISOString() }));
+  assert.ok(new Set(members.map(member => collaboratorColor(member.userId))).size < members.length, 'exercise actual preferred-colour collisions');
+  const forward = collaboratorColors(members), shuffled = collaboratorColors([...members].reverse());
+  assert.equal(new Set(forward.values()).size, members.length);
+  assert.deepEqual([...forward], [...shuffled]);
+  assert.ok([...forward.values()].every(color => /^#[0-9A-F]{6}$/.test(color)));
+  assert.deepEqual([...collaboratorColors([...members, members[0]])], [...forward], 'another tab for the same account uses one slot');
+  const enlarged = collaboratorColors([...members, { userId: 'aaa-late-join', name: 'New teammate', role: 'editor', joinedAt: '2030-01-01T00:00:00Z' }]);
+  for (const [id, color] of forward) assert.equal(enlarged.get(id), color, 'new joins must not recolour existing members');
+});
+
+test('both clients retain roster colours across presence expiration, reload and directory order changes', async t => {
+  const f = room(), a = await f.client('alice'), b = await f.client('bob');
+  t.after(() => { a.value.close(); b.value.close(); });
+  const before = new Map(f.members.map(member => [member.userId, a.value.colorFor(member.userId)]));
+  assert.equal(new Set(before.values()).size, f.members.length);
+  for (const [id, color] of before) assert.equal(b.value.colorFor(id), color);
+  a.value.expirePresence(Date.now() + 20000);
+  f.members.reverse(); await a.value.refreshMembers(true);
+  const reopened = await f.client('bob', { clientId: 'bob-reopened' }); t.after(() => reopened.value.close());
+  for (const [id, color] of before) { assert.equal(a.value.colorFor(id), color); assert.equal(reopened.value.colorFor(id), color); }
+});
+
+
+test('a newly joined teammate appears from the first awareness burst after one authenticated directory read', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const gate = deferred(); let reads = 0;
+  t.mock.method(a.value.transport, 'members', async () => { reads++; await gate.promise; return structuredClone(f.members); });
+  f.members.push({userId:'new-teammate',name:'Verified new teammate',role:'editor'});
+  const packet: PeerPresence = {clientId:'new-tab',userId:'new-teammate',name:'Untrusted name',sequence:1,cursor:{x:10,y:20},selection:[],mode:'design',activity:'viewing',at:0};
+  const receive = f.signals.get('alice-tab')!;
+  for (let sequence = 1; sequence <= 30; sequence++) receive({kind:'presence',value:{...packet,sequence,cursor:{x:sequence,y:20}}});
+  assert.equal(reads,1,'a joining cursor burst must not fan out directory requests');
+  assert.equal(a.value.getPeers().length,0,'no cursor until membership is authenticated');
+  gate.resolve(); await a.value.refreshMembers(true);
+  assert.equal(a.value.getPeers()[0].name,'Verified new teammate');
+  assert.equal(a.value.getPeers()[0].sequence,30,'replay the newest buffered pointer without waiting for another heartbeat');
+  assert.equal(a.value.getPeers()[0].cursor?.x,30);
+  assert.equal(f.log.length,0);
+});
+
+test('leaving while membership loads cannot resurrect a cursor and an unknown user is never admitted', async t => {
+  const f = room(), a = await f.client('alice'); t.after(() => a.value.close());
+  const gate = deferred();
+  t.mock.method(a.value.transport, 'members', async () => { await gate.promise; return structuredClone(f.members); });
+  f.members.push({userId:'new-teammate',name:'New teammate',role:'editor'});
+  const packet: PeerPresence = {clientId:'new-tab',userId:'new-teammate',name:'New teammate',sequence:1,cursor:null,selection:[],mode:'preview',activity:'viewing',at:0};
+  const receive = f.signals.get('alice-tab')!;
+  receive({kind:'presence',value:packet});
+  receive({kind:'presence',value:{...packet,clientId:'unknown-tab',userId:'not-a-member'}});
+  receive({kind:'leave',clientId:'new-tab'});
+  gate.resolve(); await a.value.refreshMembers(true);
+  assert.deepEqual(a.value.getPeers(),[]);
+});
+
+
+test('reloading the same durable client advances awareness immediately and delayed old packets cannot move it back', async t => {
+  let now = 1700000000000; t.mock.method(Date, 'now', () => now);
+  const f = room(), a = await f.client('alice'), b = await f.client('bob');
+  t.after(() => { a.value.close(); b.value.close(); });
+  b.value.pointer({x:10,y:20});
+  const old = f.presence.filter(packet => packet.userId === 'bob').at(-1)!;
+  f.signals.get('alice-tab')!({kind:'presence',value:old});
+  b.value.close(); now += 100;
+  const reopened = await f.client('bob'); t.after(() => reopened.value.close());
+  reopened.value.pointer({x:99,y:100});
+  const current = f.presence.filter(packet => packet.userId === 'bob').at(-1)!;
+  assert.ok(Number.isSafeInteger(current.sequence) && current.sequence > old.sequence);
+  const receive = f.signals.get('alice-tab')!;
+  receive({kind:'presence',value:current}); receive({kind:'presence',value:old});
+  assert.deepEqual(a.value.getPeers()[0].cursor,{x:99,y:100});
+  assert.equal(f.log.length,0);
 });

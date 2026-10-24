@@ -4,7 +4,7 @@ import { reframeCanvasV2WorkspaceViewport } from '@/lib/canvas-v2/workspace-coor
 import { createCanvasV2NativeViewportStore } from '@/lib/canvas-v2/native-viewport-reuse';
 import { CanvasCollaborationFollow, CanvasCollaborationOverlay, CanvasCollaborationToolbar } from './canvas-collaboration';
 import type {FollowFrame} from '@/lib/canvas-v2/sessions/collaboration-follow';
-import { collaboratorColor, type CanvasCollaborationClient, type CollaborationStatus } from '@/lib/canvas-v2/sessions/collaboration-client';
+import { type CanvasCollaborationClient, type CollaborationStatus } from '@/lib/canvas-v2/sessions/collaboration-client';
 import {CanvasFeedbackSession} from './canvas-feedback-session';
 import {VISUAL_FEEDBACK_START} from '@/lib/canvas-v2/visual-feedback';
 import {applyScreenDesignOperation} from '@/lib/canvas-v2/screen-design-edit';
@@ -810,7 +810,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const collaborationEnabled=Boolean(collaboration&&collaborationStatus.phase!=='off');
   const collaborationReadOnly=Boolean(collaboration?.enabled&&!collaboration.writable);
   const engine = useCanvasV2DesignLoop(designEndpoint, initialSnapshot?.revision,()=>collaboration?.enabled?(!collaboration.writable?'This canvas is view-only.':collaboration.getStatus().busyObjects.length?'A teammate is editing this element. Select another object.':undefined):undefined);
-  const personalSelectCursor=useMemo(()=>collaborationEnabled&&collaboration?CANVAS_V2_SELECT_CURSOR.replaceAll(encodeURIComponent('#65a8ff'),encodeURIComponent(collaboratorColor(collaboration.userId))).replaceAll(encodeURIComponent('stroke="#fff"'),encodeURIComponent(`stroke="${collaboratorColor(collaboration.userId)}"`)):CANVAS_V2_SELECT_CURSOR,[collaboration,collaborationEnabled]);
+  const personalSelectCursor=useMemo(()=>collaborationEnabled&&collaboration?CANVAS_V2_SELECT_CURSOR.replaceAll(encodeURIComponent('#65a8ff'),encodeURIComponent(collaboration.colorFor(collaboration.userId))).replaceAll(encodeURIComponent('stroke="#fff"'),encodeURIComponent(`stroke="${collaboration.colorFor(collaboration.userId)}"`)):CANVAS_V2_SELECT_CURSOR,[collaboration,collaborationEnabled,collaborationStatus.members]);
   const [observationMountRevisionId, setObservationMountRevisionId] = useState<string>();
   const [candidateMountRevisionId, setCandidateMountRevisionId] = useState<string>();
   useEffect(() => {
