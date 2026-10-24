@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { FixturePeer } from '../app/canvas-v2-e2e/human-multiplayer/seed';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 // These peers use the production workspace/client with the explicitly DEV-only
@@ -15,7 +16,7 @@ const geometry = (page: Page, id: string) => object(page, id).evaluate(element =
 });
 test.use({ viewport: { width: 1512, height: 790 } });
 
-async function openPeer(context: BrowserContext, room: string, peer: 'alice' | 'bob' | 'quinn', prepare?: (page:Page)=>Promise<unknown>, authoring?: 'legacy') {
+async function openPeer(context: BrowserContext, room: string, peer: FixturePeer, prepare?: (page:Page)=>Promise<unknown>, authoring?: 'legacy') {
   const page = await context.newPage();
   await prepare?.(page);
   await page.goto(`/canvas-v2-e2e/human-multiplayer?room=${room}&peer=${peer}&hardening=1${authoring ? `&authoring=${authoring}` : ''}`);
@@ -147,7 +148,12 @@ test('HTTP peers share colored world-space cursors, selections and in-progress m
       if(next!==observedRenders){observedRenders=next;stableSince=Date.now();}
       return Date.now()-stableSince;
     }).toBeGreaterThan(500);
-    const renders = observedRenders;
+    // The preceding shared edit can still finish its background image review
+    // after geometry settles. Measure cursor traffic after that real work has
+    // completed, rather than counting its legitimate completion as a redraw.
+    await expect(bob.getByTestId('canvas-v2-committed-observation-surface')).toHaveCount(0);
+    await bob.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const renders = Number(await bob.getByTestId('multiplayer-workspace-body-renders').innerText());
     for (let index = 0; index < 100; index++) await alice.mouse.move(700 + index % 70, 670 + index % 8);
     const finalWorldX = await alice.getByTestId('canvas-v2-workspace-surface').evaluate(element => {
       const transform = new DOMMatrix(getComputedStyle(element).transform);
@@ -749,4 +755,38 @@ test('one person in multiple tabs keeps one teammate avatar and consistent curso
     await info.attach('teammate identity receipt', {body: JSON.stringify({color,rgb,people:2,sameAccountTabs:2}),contentType:'application/json'});
     await alice.screenshot({path:info.outputPath('consistent-teammate-colour.png')});
   } finally { await alice.close(); await bob.close(); await otherAlice.close(); }
+});
+
+
+test('three, five and ten active fixture teammates retain matching cursor, name and profile colours', async ({context},info) => {
+  test.setTimeout(240000);
+  const room='ten-designers-'+randomUUID(), identities: FixturePeer[]=['alice','bob','quinn','dana','eli','frankie','gabi','harper','ira','jules'], pages: Page[]=[];
+  const receipts: unknown[]=[];
+  try {
+    for (let index=0;index<identities.length;index++) {
+      const page=await openPeer(context,room,identities[index]);pages.push(page);
+      await page.mouse.move(700+(index%3)*100,450+Math.floor(index/3)*60);
+      if (![3,5,10].includes(pages.length)) continue;
+      const observer=pages[0];
+      await expect(observer.locator('[data-collaborator-cursor]')).toHaveCount(pages.length-1);
+      const localColor=await observer.getByRole('region',{name:'Canvas workspace',exact:true}).evaluate(node=>decodeURIComponent(getComputedStyle(node).cursor).match(/stroke="([^"]+)"/)?.[1]);
+      const colors=await observer.locator('[data-collaborator-cursor] path').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('stroke')));
+      expect(new Set([localColor,...colors]).size).toBe(pages.length);
+      await expect(observer.getByRole('button',{name:'Share canvas',exact:true})).toHaveAttribute('title',`${pages.length} people on this canvas · Share`);
+      for (let peer=1;peer<pages.length;peer++) {
+        const remote=cursor(observer,identities[peer]);
+        await expect(remote.locator('span')).toContainText(identities[peer][0].toUpperCase()+identities[peer].slice(1));
+        const color=await remote.locator('path').getAttribute('stroke');
+        const own=await pages[peer].getByRole('region',{name:'Canvas workspace',exact:true}).evaluate(node=>decodeURIComponent(getComputedStyle(node).cursor).match(/stroke="([^"]+)"/)?.[1]);
+        expect(color).toBe(own);
+      }
+      receipts.push({people:pages.length,colors:[localColor,...colors]});
+    }
+    await pages[0].getByRole('button',{name:'Share canvas',exact:true}).click();
+    const people=pages[0].getByRole('dialog',{name:'Share this canvas',exact:true});
+    await expect(people).toBeVisible();
+    for (const name of ['Alice','Bob','Quinn','Dana','Eli','Frankie','Gabi','Harper','Ira','Jules']) await expect(people.getByText(name==='Alice'?'Alice (you)':name,{exact:true})).toBeVisible();
+    await info.attach('3-5-10 person colour receipt',{body:JSON.stringify(receipts,null,2),contentType:'application/json'});
+    await pages[0].screenshot({path:info.outputPath('ten-teammate-colours.png')});
+  } finally {for (const page of pages) await page.close();}
 });

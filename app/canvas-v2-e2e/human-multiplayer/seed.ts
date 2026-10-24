@@ -3,9 +3,16 @@ import { CANVAS_V2_ARTIFACT_SCHEMA, type CanvasV2ArtifactRevision } from '@/lib/
 import { normalizeCanvasV2NativeGeometryDocument } from '@/lib/canvas-v2/native-geometry-document';
 
 export const fixtureMembers = [
-  { userId: 'alice', name: 'Alice', role: 'owner' as const },
-  { userId: 'bob', name: 'Bob', role: 'editor' as const },
-  { userId: 'quinn', name: 'Quinn', role: 'viewer' as const },
+  { userId: 'alice', name: 'Alice', role: 'owner' as const, joinedAt:'2026-10-20T00:00:00Z' },
+  { userId: 'bob', name: 'Bob', role: 'editor' as const, joinedAt:'2026-10-20T00:00:01Z' },
+  { userId: 'quinn', name: 'Quinn', role: 'viewer' as const, joinedAt:'2026-10-20T00:00:02Z' },
+  { userId:'dana', name:'Dana', role:'editor' as const, joinedAt:'2026-10-20T00:00:03Z' },
+  { userId:'eli', name:'Eli', role:'editor' as const, joinedAt:'2026-10-20T00:00:04Z' },
+  { userId:'frankie', name:'Frankie', role:'editor' as const, joinedAt:'2026-10-20T00:00:05Z' },
+  { userId:'gabi', name:'Gabi', role:'editor' as const, joinedAt:'2026-10-20T00:00:06Z' },
+  { userId:'harper', name:'Harper', role:'editor' as const, joinedAt:'2026-10-20T00:00:07Z' },
+  { userId:'ira', name:'Ira', role:'editor' as const, joinedAt:'2026-10-20T00:00:08Z' },
+  { userId:'jules', name:'Jules', role:'editor' as const, joinedAt:'2026-10-20T00:00:09Z' },
 ] as const;
 export type FixturePeer = typeof fixtureMembers[number]['userId'];
 export const isFixturePeer = (value: unknown): value is FixturePeer => fixtureMembers.some(member => member.userId === value);

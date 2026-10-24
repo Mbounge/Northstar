@@ -130,7 +130,7 @@ export async function POST(request: Request) {
       }
       case 'restore-bob': {
         if (!owner) return response({ error: 'Permission denied' }, 403);
-        if (!room.members.some(item => item.userId === 'bob')) room.members.push({ userId: 'bob', name: 'Bob', role: 'editor' });
+        if (!room.members.some(item => item.userId === 'bob')) room.members.push({...fixtureMembers.find(member=>member.userId==='bob')!});
         return response({ ok: true });
       }
       case 'invite': { if (!owner) return response({ error: 'Permission denied' }, 403); const id = randomUUID(); room.invites.add(id); return response({ id, token: 'fixture-' + randomUUID() }); }

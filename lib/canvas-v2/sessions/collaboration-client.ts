@@ -35,7 +35,46 @@ export interface CollaborationStatus {
   phase: 'off' | 'connecting' | 'live' | 'reconnecting' | 'blocked'; role: CanvasMember['role']; pending: number;
   error?: string; recovery?: RecoveredEdit; members: CanvasMember[]; busyObjects: string[];
 }
-const COLORS = ['#A994FF', '#55C8E9', '#F2A36C', '#77CE9F', '#ED89BD', '#F0CF71', '#8CB4FF', '#CB9DEA'];
+// Saturated, readable on both canvas themes. Allocation separates teammates
+// by visual distance rather than merely choosing different hex values.
+const COLORS = ['#9B78EF', '#3685FA', '#E96E12', '#12A46C', '#D95BD5', '#B98C00', '#F05B6B', '#009EB3', '#4561D8', '#CF3150', '#8748D8', '#087C64'];
+const linearChannel = (value: number) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+function colourLuminance(color: string): number {
+  const [r, g, b] = [1, 3, 5].map(offset => linearChannel(parseInt(color.slice(offset, offset + 2), 16) / 255));
+  return r*.2126 + g*.7152 + b*.0722;
+}
+export function collaboratorInk(color: string): string { return colourLuminance(color) < .2 ? '#FFFFFF' : '#17131E'; }
+function colourLab(color: string): number[] {
+  const [r, g, b] = [1, 3, 5].map(offset => linearChannel(parseInt(color.slice(offset, offset + 2), 16) / 255));
+  const l = Math.cbrt(.4122214708*r + .5363325363*g + .0514459929*b);
+  const m = Math.cbrt(.2119034982*r + .6806995451*g + .1073969566*b);
+  const s = Math.cbrt(.0883024619*r + .2817188376*g + .6299787005*b);
+  return [.2104542553*l + .793617785*m - .0040720468*s, 1.9779984951*l - 2.428592205*m + .4505937099*s, .0259040371*l + .7827717662*m - .808675766*s];
+}
+function separatedColour(candidates: string[], used: Set<string>): string {
+  if (!used.size) return candidates[0];
+  const previous = [...used].map(colourLab);
+  const distance = (color: string) => {
+    const lab = colourLab(color);
+    return Math.min(...previous.map(other => Math.hypot(...lab.map((channel, index) => channel - other[index]))));
+  };
+  return candidates.reduce((best, color) => distance(color) > distance(best) + 1e-9 ? color : best);
+}
+function additionalColour(index: number): string {
+  const hue = (index * 137.508 + 23) % 360;
+  const rgb = [5, 3, 1].map(offset => {
+    const k = (offset + hue / 60) % 6;
+    return linearChannel(.1 + .85 * Math.max(0, Math.min(k, 4 - k, 1)));
+  });
+  const luminance = rgb[0]*.2126 + rgb[1]*.7152 + rgb[2]*.0722, target = index % 3 === 0 ? .15 : .26;
+  // Keep name labels legible and outlines visible on both canvas themes. This
+  // also prevents larger teams falling back to near-white pastel cursors.
+  return '#' + rgb.map(channel => {
+    const value = luminance > target ? channel * target/luminance : channel + (1-channel)*(target-luminance)/(1-luminance);
+    const encoded = value <= .0031308 ? value*12.92 : 1.055*value**(1/2.4)-.055;
+    return Math.round(encoded*255).toString(16).padStart(2,'0');
+  }).join('').toUpperCase();
+}
 export function collaboratorColor(userId: string): string {
   let hash = 0; for (const char of userId) hash = (hash * 31 + char.charCodeAt(0)) | 0;
   return COLORS[(hash >>> 0) % COLORS.length];
@@ -49,18 +88,15 @@ export function collaboratorColors(members: CanvasMember[]): Map<string, string>
   for (const member of ordered) {
     if (colors.has(member.userId)) continue;
     const preferred = COLORS.indexOf(collaboratorColor(member.userId));
-    let color = COLORS.map((_, step) => COLORS[(preferred + step) % COLORS.length]).find(candidate => !used.has(candidate));
-    let extra = 0;
-    while (!color || used.has(color)) {
-      // More than eight members still get unique hex colours. Keep the same
-      // readable pastel range as the curated palette, with distributed hues.
-      const hue = (extra++ * 137.508 + 23) % 360, chroma = .36, base = .57;
-      const channel = (offset: number) => {
-        const k = (offset + hue / 60) % 6;
-        return Math.round(255 * (base + chroma * Math.max(0, Math.min(k, 4 - k, 1)))).toString(16).padStart(2, '0');
-      };
-      color = ('#' + channel(5) + channel(3) + channel(1)).toUpperCase();
+    let candidates = COLORS.map((_, step) => COLORS[(preferred + step) % COLORS.length]).filter(candidate => !used.has(candidate));
+    if (!candidates.length) {
+      candidates = [];
+      for (let index = 0; candidates.length < 32; index++) {
+        const candidate = additionalColour(index);
+        if (!used.has(candidate) && !candidates.includes(candidate)) candidates.push(candidate);
+      }
     }
+    const color = separatedColour(candidates, used);
     colors.set(member.userId, color); used.add(color);
   }
   return colors;

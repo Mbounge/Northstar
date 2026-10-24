@@ -4,7 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { followViewport, interpolateFollowViewport, followWouldCycle, type FollowFrame } from '../lib/canvas-v2/sessions/collaboration-follow';
-import { collaboratorColor, type PeerPresence } from '../lib/canvas-v2/sessions/collaboration-client';
+import { collaboratorColor, collaboratorInk, type PeerPresence } from '../lib/canvas-v2/sessions/collaboration-client';
 import type { CanvasV2WorkspaceViewport } from '../lib/canvas-v2/workspace-coordinate-space';
 const frame: FollowFrame = { size: { width: 1200, height: 900 }, insets: { left: 100, right: 100, top: 50, bottom: 50 } };
 const peer = (patch: Partial<PeerPresence> = {}): PeerPresence => ({ clientId: 'bob', userId: 'user-bob', name: 'Bob', sequence: 1, cursor: null, selection: [], mode: 'design', activity: 'viewing', at: 1, view: { x: 65000, y: 64000, width: 1000, height: 800 }, ...patch });
@@ -67,7 +67,7 @@ function mount({ peers = [peer()], allowed = true, reduced = false }: { peers?: 
   const jsx = (type: unknown, props: unknown) => ({ type, props });
   const code = ts.transpileModule(readFileSync('components/canvas-v2/canvas-collaboration.tsx', 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   vm.runInNewContext(code, {
-    exports, require: (name: string) => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx, jsxs: jsx } : name.endsWith('/collaboration-follow') ? { followViewport, interpolateFollowViewport, followWouldCycle } : name.endsWith('/collaboration-client') ? { collaboratorColor } : {},
+    exports, require: (name: string) => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx, jsxs: jsx } : name.endsWith('/collaboration-follow') ? { followViewport, interpolateFollowViewport, followWouldCycle } : name.endsWith('/collaboration-client') ? { collaboratorColor, collaboratorInk } : {},
     window: { matchMedia: () => ({ matches: reduced }) }, performance: { now: () => clock }, Element: FakeElement,
     requestAnimationFrame: (callback: (time: number) => void) => { const id = ++nextFrame; rafs.set(id, callback); return id; }, cancelAnimationFrame: (id: number) => rafs.delete(id),
     document: { addEventListener: (name: string, callback: (event: unknown) => void) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(callback); }, removeEventListener: (name: string, callback: (event: unknown) => void) => listeners.get(name)?.delete(callback) },

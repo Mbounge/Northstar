@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  CanvasCollaborationClient, collaboratorColor, collaboratorColors, parsePeerPresence,
+  CanvasCollaborationClient, collaboratorColor, collaboratorColors, collaboratorInk, parsePeerPresence,
   type CanvasMember, type CollaborationJournal, type CollaborationTransport, type PeerPresence,
 } from '../lib/canvas-v2/sessions/collaboration-client';
 import {
@@ -935,4 +935,42 @@ test('reloading the same durable client advances awareness immediately and delay
   receive({kind:'presence',value:current}); receive({kind:'presence',value:old});
   assert.deepEqual(a.value.getPeers()[0].cursor,{x:99,y:100});
   assert.equal(f.log.length,0);
+});
+
+
+test('teammates receive strongly separated hues rather than adjacent pastel preferences, with legible rings and labels', () => {
+  const members: CanvasMember[] = [
+    {userId:'a',name:'First designer',role:'owner',joinedAt:'2026-10-20T00:00:00Z'},
+    {userId:'h',name:'Second designer',role:'editor',joinedAt:'2026-10-21T00:00:00Z'},
+  ];
+  const colors = collaboratorColors(members);
+  assert.equal(collaboratorColor('a'),'#3685FA');
+  assert.equal(collaboratorColor('h'),'#4561D8');
+  assert.equal(colors.get('a'),'#3685FA');
+  assert.equal(colors.get('h'),'#E96E12','prefer orange opposite blue, rather than the second user’s similar blue preference');
+  const team = collaboratorColors(Array.from({length:40},(_,index)=>({userId:`person-${index}`,name:'Designer',role:'editor'})));
+  const luminance = (color: string) => {
+    const channels = [1,3,5].map(offset=>parseInt(color.slice(offset,offset+2),16)/255).map(channel=>channel<=.04045?channel/12.92:((channel+.055)/1.055)**2.4);
+    return channels[0]*.2126+channels[1]*.7152+channels[2]*.0722;
+  };
+  for (const color of team.values()) {
+    const light = luminance(color);
+    assert.ok(1.05/(light+.05)>=3,`${color} outline must remain visible on the light canvas`);
+    const ink = luminance(collaboratorInk(color));
+    assert.ok((Math.max(light,ink)+.05)/(Math.min(light,ink)+.05)>=4.5,`${color} must keep the small avatar/name text readable`);
+    assert.ok((light+.05)/(.006+.05)>=3,`${color} outline must remain visible on the dark canvas`);
+  }
+});
+
+
+test('three-, five- and ten-person rosters keep deterministic distinct colours as the team grows', () => {
+  const members: CanvasMember[] = Array.from({length:10},(_,index)=>({userId:`team-${index}`,name:`Designer ${index}`,role:'editor',joinedAt:new Date(1700000000000+index*1000).toISOString()}));
+  let previous = new Map<string,string>();
+  for (const count of [3,5,10]) {
+    const colors = collaboratorColors(members.slice(0,count));
+    assert.equal(new Set(colors.values()).size,count);
+    for (const [user,color] of previous) assert.equal(colors.get(user),color,'joining teammates must not recolour existing people');
+    assert.deepEqual([...colors],[...collaboratorColors(members.slice(0,count).reverse())]);
+    previous=colors;
+  }
 });
