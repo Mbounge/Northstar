@@ -19,7 +19,7 @@ export class ManagedAgentClient {
   private buffered?: JsonObject[];
   private actions = new AbortController();
   private accountApps = new Map<string, { name: string; iconUrl?: string }>();
-  constructor(private options: { endpoint: string; closeOnDispose?: boolean; keepAliveMs?: number; resultTimeoutMs?: number; fetcher?: typeof fetch; onView: (view: AgentView) => void; execute: (action: JsonObject, signal: AbortSignal) => Promise<unknown> }) {}
+  constructor(private options: { endpoint: string; supportedClientTools?: readonly string[]; closeOnDispose?: boolean; keepAliveMs?: number; resultTimeoutMs?: number; fetcher?: typeof fetch; onView: (view: AgentView) => void; execute: (action: JsonObject, signal: AbortSignal) => Promise<unknown> }) {}
   async request(body: JsonObject, signal?: AbortSignal) {
     const timeout = new AbortController();
     // Tool acknowledgements may include the bounded 45-second appearance review.
@@ -80,7 +80,7 @@ export class ManagedAgentClient {
     const controller = new AbortController(); this.stream = controller;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const response = await this.request({ op: 'create', model, effort, restoredHistory, message, attachments, canvasTheme, requestId: `create:${requestId}` }, controller.signal);
+      const response = await this.request({ op: 'create', model, effort, restoredHistory, message, attachments, canvasTheme, ...(this.options.supportedClientTools ? { supportedClientTools: this.options.supportedClientTools } : {}), requestId: `create:${requestId}` }, controller.signal);
       await new Promise<void>((resolve, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(new Error('Session identity was not received. Initial input may have been accepted; do not resubmit blindly.')); }, 30_000);
         this.consume(response, controller, event => {
@@ -165,7 +165,7 @@ export class ManagedAgentClient {
   }
   private toolActivity(action: JsonObject, status: 'started' | 'completed' | 'failed', output?: unknown) {
     const id = `tool:${action.turn_id}:${action.call_id}`;
-    const names: Record<string, string> = { canvas_plan_screen: 'Plan screen components', canvas_compare_reference: 'Compare reference details', canvas_product_identity: 'Remember product design', canvas_screen_component: 'Refine a screen component', canvas_screen_element: 'Refine selected details', canvas_screen_motion_review: 'Review screen motion', prepare_asset: 'Prepare a reference asset', workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect asset', canvas_insert_flow: 'Place an app flow', canvas_insert_simulation: 'Place an app simulation', canvas_arrange_screens: 'Arrange product screens', canvas_screen: 'Create or revise a screen', canvas_screen_interact: 'Test screen interactions', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
+    const names: Record<string, string> = { canvas_plan_screen: 'Plan screen components', canvas_compare_reference: 'Compare reference details', canvas_product_identity: 'Remember product design', canvas_screen_component: 'Refine a screen component', canvas_screen_element: 'Refine selected details', canvas_screen_motion_review: 'Review screen motion', adjust_image_region: 'Adjust image colour', prepare_asset: 'Prepare a reference asset', workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect asset', canvas_insert_flow: 'Place an app flow', canvas_insert_simulation: 'Place an app simulation', canvas_arrange_screens: 'Arrange product screens', canvas_screen: 'Create or revise a screen', canvas_screen_interact: 'Test screen interactions', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
     const previous = this.view.activity.find(a => a.id === id);
     const args = object(action.arguments);
     const result = object(output);

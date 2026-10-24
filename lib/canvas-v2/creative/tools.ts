@@ -17,7 +17,19 @@ const inputsSchema = {
     additionalProperties: false,
   },
 };
+const pixelPolygonSchema = { type: 'array', minItems: 1, maxItems: 8, items: { type: 'array', minItems: 3, maxItems: 96, items: { type: 'object', additionalProperties: false, properties: { x: { type: 'number', minimum: 0 }, y: { type: 'number', minimum: 0 } }, required: ['x', 'y'] } } };
 export const NORTHSTAR_CREATIVE_TOOLS = [
+  {
+    type: 'function', name: 'adjust_image_region',
+    description: 'Make a localized colour-only adjustment directly from retained original pixels, without regeneration or hosted code execution. First inspect_asset with pixelRect; use its cropInspectionId, identical sourceSize and cropPixels. Trace the actual subject using polygons in ORIGINAL source pixels, or reuse a retained opaque grayscale PNG mask of the exact original dimensions (black protects, white adjusts). protectedPolygons cut holes for seams, trim and other details. The user’s drawn mark is intent, never permission to recolour everything inside its rectangle. color=#RRGGBB becomes the selected region’s median colour while original luminance detail and alpha are retained; inspect clipping warnings. Feathering is inward only. Returns a full-resolution derived PNG, reusable mask, measured preservation checks and an actual original/mask/result detail image. Inspect the complete boundary and result before binding; zero changes outside a mask does NOT prove the mask selected the correct semantic subject. This tool does not modify the canvas. Replace the authorized original image in place using outputAssetId and retain native poster text, branding and geometry. Use generate_image for generative content changes, workspace_run for processing beyond colour adjustment.',
+    parameters: { type: 'object', additionalProperties: false, properties: {
+      assetId: text, label: text, cropInspectionId: text,
+      sourceSize: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', minimum: 1 }, height: { type: 'integer', minimum: 1 } }, required: ['width', 'height'] },
+      cropPixels: { type: 'object', additionalProperties: false, properties: { x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 }, width: { type: 'integer', minimum: 2 }, height: { type: 'integer', minimum: 2 } }, required: ['x', 'y', 'width', 'height'] },
+      polygons: pixelPolygonSchema, maskAssetId: text, protectedPolygons: { ...pixelPolygonSchema, minItems: 0 },
+      color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }, strength: { type: 'number', exclusiveMinimum: 0, maximum: 1 }, featherPixels: { type: 'integer', minimum: 0, maximum: 8 },
+    }, required: ['assetId', 'label', 'cropInspectionId', 'sourceSize', 'cropPixels', 'color'] },
+  },
   {
     type: 'function', name: 'prepare_asset',
     description: 'Extract authentic pixels from a retained image. First inspect_asset with pixelRect to see the exact source selection, its surrounding UI and an unmasked crop. Refine the selection until it contains only the intended asset. Supply that returned cropInspectionId, original sourceSize and the identical integer cropPixels rectangle. Coordinates refer to original pixels, never a resized overview or previous crop. Changing the rectangle/source requires fresh inspection. A legacy normalized crop is accepted only when it resolves to that exact inspected pixel rectangle. mask=none retains existing transparency; circle requires square bounds and cannot remove unwanted UI inside the selection. maxEdge only downsizes. The output is shown for inspection before binding; correct contamination or clipping rather than hiding it with a mask or object-fit. Reuse retained source pixels across variants; use workspace_run for complex processing, generation only for original imagery.',

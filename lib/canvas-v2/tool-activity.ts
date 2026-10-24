@@ -83,7 +83,7 @@ export function canvasV2ReadableAgentText(text: string, technicalRequested = fal
         .replace(/(?:screen-|node-|asset-|flow-|revision-|request-|turn-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, 'the selected item')
         .replace(/(?:\*\*|__)?\bID:(?:\*\*|__)?\s*`?[\w-]+`?\s*/g, '')
         .replace(/`?[a-z][a-z0-9]*(?:-[a-z0-9]+){2,}`? (?=identity\b)/g, 'product ')
-        .replace(/\b(?:canvas_(?:read|edit|review|plan|screen(?:_\w+)?|insert_\w+|arrange_screens|product_identity)|workspace_(?:run|export)|prepare_asset|inspect_asset|generate_image|account_read)\b/g, 'the canvas');
+        .replace(/\b(?:canvas_(?:read|edit|review|plan|screen(?:_\w+)?|insert_\w+|arrange_screens|product_identity)|workspace_(?:run|export)|adjust_image_region|prepare_asset|inspect_asset|generate_image|account_read)\b/g, 'the canvas');
       if (!technicalRequested) readable = readable
         .replace(/\brefreshing the canvas context\b/gi, 'checking the reference assets')
         .replace(/\bre-submit the same visual\/interaction correction with that reference assets explicitly recognized\b/gi, 'apply the same design correction with the reference icon')

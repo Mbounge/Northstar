@@ -94,16 +94,28 @@ test('capacity rotates only idle processes and resumes private history once for 
     await assert.rejects(request('charlie', bob.token), /unavailable/);
   } finally { for (const client of clients) client.dispose(); host.dispose(); }
 });
-async function setup(execute: (a: JsonObject, s: AbortSignal) => Promise<unknown> = async () => null) {
+async function setup(execute: (a: JsonObject, s: AbortSignal) => Promise<unknown> = async () => null, supportedClientTools?: string[]) {
   const peers: FixtureCodex[] = [];
   const host = new CodexSessionHost(async () => { const p = await fixtureCodex(); peers.push(p); return p; });
   const fetcher: typeof fetch = async (_url, init) => {
     try { return await host.handle(object(JSON.parse(String(init?.body))), { owner: 'alice', key: 'fake-test-key', signal: init?.signal || new AbortController().signal }); }
     catch (e) { return Response.json({ error: (e as Error).message }, { status: 400 }); }
   };
-  const client = new ManagedAgentClient({ endpoint: '/codex', fetcher, onView: () => undefined, execute });
+  const client = new ManagedAgentClient({ endpoint: '/codex', fetcher, supportedClientTools, onView: () => undefined, execute });
   return { host, client, peers, close: () => { client.dispose(); host.dispose(); } };
 }
+test('new browser tools are offered only to clients that advertise the implementation', async () => {
+  const legacy = await setup(), modern = await setup(undefined, ['adjust_image_region', 'unknown_tool']);
+  try {
+    await legacy.client.send('Explain', [], 'gpt-5.6-luna', 'legacy-capabilities');
+    await modern.client.send('Explain', [], 'gpt-5.6-luna', 'modern-capabilities');
+    const offered = (fixture: typeof legacy) => (fixture.peers[0].calls.find(call => call.method === 'thread/start')!.params.dynamicTools as JsonObject[]).map(tool => tool.name);
+    assert.equal(offered(legacy).includes('adjust_image_region'), false);
+    assert.equal(offered(modern).includes('adjust_image_region'), true);
+    assert.equal(offered(modern).includes('unknown_tool'), false);
+    assert.equal(offered(modern).length, offered(legacy).length + 1);
+  } finally { legacy.close(); modern.close(); }
+});
 test('Codex runs the first prompt once, streams Markdown, and retains follow-up conversation', async () => {
   const t = await setup();
   try {

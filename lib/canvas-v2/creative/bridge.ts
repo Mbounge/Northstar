@@ -18,12 +18,12 @@ export async function creativeInputContext(
   signal: AbortSignal,
   fetcher: typeof fetch = fetch,
 ): Promise<CreativeContext> {
-  const refs = Array.isArray(raw.inputAssetIds)
+  const refs = typeof raw.maskAssetId === 'string' && typeof raw.assetId === 'string' ? [raw.assetId, raw.maskAssetId] : Array.isArray(raw.inputAssetIds)
     ? raw.inputAssetIds
     : Array.isArray(raw.inputs)
       ? raw.inputs.map((v) => object(v).assetId)
       : typeof raw.assetId === 'string' ? [raw.assetId] : [];
-  const ids = Array.isArray(decoded.inputAssetIds)
+  const ids = typeof decoded.maskAssetId === 'string' && typeof decoded.assetId === 'string' ? [decoded.assetId, decoded.maskAssetId] : Array.isArray(decoded.inputAssetIds)
     ? decoded.inputAssetIds
     : Array.isArray(decoded.inputs)
       ? decoded.inputs.map((v) => object(v).assetId)

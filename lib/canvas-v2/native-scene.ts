@@ -870,6 +870,14 @@ function inlineStyle(element: Element): Record<string, string> {
     const value = style.getPropertyValue(property);
     if (property && value) entries.push([property, value]);
   }
+  // CSSOM enumerates expanded longhands, but their getters are empty when a
+  // shorthand contains an unresolved var(). The shorthand itself still owns
+  // the authored value. Losing it made a transparent uploaded image's backdrop
+  // disappear when an unrelated AI image replacement recompiled the source.
+  for (const property of ['background', 'font', 'border', 'border-color', 'border-width', 'border-style', 'border-radius', 'margin', 'padding', 'gap', 'flex', 'grid', 'grid-template', 'place-items', 'outline', 'text-decoration', 'animation', 'transition']) {
+    const value = style.getPropertyValue(property);
+    if (value.includes('var(') && !entries.some(([key]) => key === property)) entries.push([property, value]);
+  }
   return Object.fromEntries(entries);
 }
 

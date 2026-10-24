@@ -4,9 +4,11 @@ import { captureValidationIsPending } from '@/lib/canvas-v2/capture-batch';
 import { retainSimulationSourceAssets } from '@/lib/canvas-v2/simulation-source-assets';
 import { CANVAS_V2_SCREEN_FONTS, inspectCanvasV2FontPixels } from '@/lib/canvas-v2/screen-fonts';
 import { recordCanvasV2ScreenVersions, type CanvasV2ScreenVersion } from '@/lib/canvas-v2/screen-versions';
-import { artifactMetadata, isCreativeTool, type NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
+import { artifactMetadata, isCreativeTool, type CreativeResult, type NorthstarArtifact } from '@/lib/canvas-v2/creative/types';
 import { creativeInputContext, runCreativeJob, creativeResultForModel } from '@/lib/canvas-v2/creative/bridge';
 import { creativeWorkspaceState } from '@/lib/canvas-v2/creative/canvas-context';
+import { parseRasterAdjustment } from '@/lib/canvas-v2/creative/raster-adjustment';
+import { adjustRetainedImage } from '@/lib/canvas-v2/creative/raster-adjustment.browser';
 import { verifyAssetCropSelection, type AssetPixelRect, type AssetSourceSize } from '@/lib/canvas-v2/asset-crop';
 import { inspectAssetCropPixels, readAssetCropSource } from '@/lib/canvas-v2/asset-crop-inspection';
 import { screenConstructionPlan, requireScreenConstructionPlan, type ScreenConstructionPlan } from '@/lib/canvas-v2/screen-construction-plan';
@@ -238,7 +240,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   };
   const getClient = () => {
     if (client.current) return client.current;
-    const runtime = new ManagedAgentClient({ resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
+    const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const engine = current.current.engine;
       const reviewScreenPixels = async (screenRevision: ReturnType<typeof engine.readCommittedRevision>, screen: ReturnType<typeof readCanvasV2Screens>[number]) => {
           const capture = await captureCanvasV2Screen(screen.nodeId, screen.encoded, signal);
@@ -357,8 +359,12 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       const args = object(accountHandles.current.decode(action.arguments)); const engine = current.current.engine;
       if(reviewedPreviews.current.turnId!==(rootId.current ?? ''))reviewedPreviews.current={turnId:rootId.current ?? '',nodeIds:new Set()};
       const themeContext = canvasV2ModelThemeContext(current.current.theme ?? "light");
-      if (isCreativeTool(action.name)) {
-        const cropInspection = action.name === 'prepare_asset' ? cropInspections.current.get(string(args.cropInspectionId)) : undefined;
+      if (isCreativeTool(action.name) || action.name === 'adjust_image_region') {
+        const cropInspection = action.name === 'prepare_asset' || action.name === 'adjust_image_region' ? cropInspections.current.get(string(args.cropInspectionId)) : undefined;
+        const adjustment = action.name === 'adjust_image_region' ? (() => {
+          if (!cropInspection) throw new Error('Inspect the original image with inspect_asset pixelRect first, then use that cropInspectionId.');
+          return parseRasterAdjustment(args, cropInspection);
+        })() : undefined;
         if (action.name === 'prepare_asset') {
           if (!cropInspection || cropInspection.assetId !== args.assetId) throw new Error('Inspect this source with inspect_asset pixelRect first and use its cropInspectionId. A crop cannot be extracted from uninspected bounds.');
           const selected = verifyAssetCropSelection(args, cropInspection);
@@ -380,12 +386,14 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           viewport: compactCanvasV2WorkingContextForModel(current.current.getWorkingContext?.('reference')),
         } : undefined, signal);
         if (cropInspection && !context.inputs.some(input => input.id === cropInspection.assetId && input.dataUrl.split(',')[1] === cropInspection.sourcePixels.split(',')[1])) throw new Error('The source bytes changed after crop inspection. Inspect the current original before extracting it.');
-        const result = await runCreativeJob((body, s)=>runtime.request(body, s), action, context, signal);
+        const localAdjustment = adjustment ? await adjustRetainedImage(adjustment, context.inputs, signal) : undefined;
+        const result: CreativeResult = localAdjustment?.result ?? await runCreativeJob((body, s)=>runtime.request(body, s), action, context, signal);
         signal.throwIfAborted();
         for (const asset of result.assets) assets.current.set(asset.id, asset);
         for (const artifact of result.artifacts) artifacts.current.set(artifact.id, artifact);
         accountHandles.current.remember({apps:[], flows:[], evidence:result.assets});
         setTurns(all=>all.map(turn=>turn.id===turnId?{...turn, artifacts:[...new Map([...(turn.artifacts??[]),...result.artifacts].map(a=>[a.id,a])).values()]}:turn));
+        if (localAdjustment) return [{ type: 'input_text', text: JSON.stringify({ ...creativeResultForModel(result), rasterAdjustment: localAdjustment.verification, note: 'Actual original, mask overlay and adjusted detail follow in that order. Inspect every boundary, protected seam and material detail before replacing the existing authorized image. Preservation checks certify this supplied mask only; they do not establish semantic segmentation. The canvas has not changed yet.' }) }, { type: 'input_image', image_url: localAdjustment.reviewPixels }];
         if (cropInspection) return [{ type: 'input_text', text: JSON.stringify({ ...creativeResultForModel(result), inspectedCrop: { sourceSize: cropInspection.sourceSize, rect: cropInspection.rect }, note: 'Actual extracted pixels follow. Inspect the complete subject, edges and any surviving UI before binding. A successful crop operation does not establish that the chosen subject is correct.' }) }, ...result.assets.map(asset => ({ type: 'input_image', image_url: asset.url }))];
         return creativeResultForModel(result);
       }
@@ -459,7 +467,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           const cropInspectionId = crypto.randomUUID();
           cropInspections.current.set(cropInspectionId, { assetId: asset.id, rect: inspection.rect, sourceSize: inspection.sourceSize, sourcePixels: pixels });
           while (cropInspections.current.size > 8) cropInspections.current.delete(cropInspections.current.keys().next().value!);
-          return [{ type: 'input_text', text: JSON.stringify({ cropSourceAssetId: asset.id, cropInspectionId, sourceSize: inspection.sourceSize, cropPixels: inspection.rect, contextRect: inspection.contextRect, note: 'The outline marks the exact selection on original source pixels. The second image is the unmasked selection. Exclude surrounding controls, notification badges, white rings and shadows; verify the entire subject is inside. Refine by inspecting a new pixelRect, then pass this exact rectangle, sourceSize and cropInspectionId to prepare_asset. A receipt proves inspection, not subject correctness.' }) }, { type: 'input_image', image_url: inspection.contextPixels }, { type: 'input_image', image_url: inspection.pixels }];
+          return [{ type: 'input_text', text: JSON.stringify({ cropSourceAssetId: asset.id, cropInspectionId, sourceSize: inspection.sourceSize, cropPixels: inspection.rect, contextRect: inspection.contextRect, note: 'The outline marks the exact selection on original source pixels. The second image is the unmasked selection. Exclude surrounding controls, notification badges, white rings and shadows; verify the entire subject is inside. Refine by inspecting a new pixelRect, then pass this exact rectangle, sourceSize and cropInspectionId to prepare_asset or adjust_image_region. A receipt proves inspection, not subject correctness.' }) }, { type: 'input_image', image_url: inspection.contextPixels }, { type: 'input_image', image_url: inspection.pixels }];
         }
         return [{ type: 'input_text', text: JSON.stringify({ evidenceId: asset.id, label: asset.label, source: asset.source, app: asset.app, flow: asset.flow, sequenceIndex: asset.sequenceIndex, sourceSize: inspection?.sourceSize, note: still ? 'Original image dimensions and unchanged source pixels. Choose an integer pixelRect and inspect it to obtain crop boundaries and a cropInspectionId before extraction. Never use display-scaled coordinates.' : undefined }) }, { type: 'input_image', image_url: pixels }];
       }
@@ -632,9 +640,11 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             note: 'Most recent rejected draft only. These are actual captured detail pixels, not the public canvas or a committed revision.' }) },
           { type: 'input_image', image_url: rejectedTarget.screenshotDataUrl },
         ];
-        if (args.nodeId && !target) throw new Error('That composition has no detail capture. Review the overview or read the object instead.');
+        const nativeTarget = args.nodeId && engine.readNativeScene()?.revisionId === revision.id ? engine.readNativeScene()?.nodes.find(node => node.sourceNodeId === args.nodeId) : undefined;
+        if (args.nodeId && !target && !nativeTarget) throw new Error('That composition has no detail capture. Review the overview or read the object instead.');
         return [
           { type: 'input_text', text: JSON.stringify({ theme: themeContext, renderedTheme: observation.theme ?? "unknown", revisionId: revision.id, captureRole: target ? 'design-detail' : 'overview', ...(!target && observation.captureCamera ? { captureCamera: observation.captureCamera } : {}), layoutFeedback: engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, islands: buildCanvasV2IslandRegistry({ observation }), spatial: observation.spatial, plan: compositionPlan.current,
+            ...(!target && nativeTarget ? { requestedObject: { nodeId: nativeTarget.sourceNodeId, kind: nativeTarget.kind, bounds: nativeTarget.geometry }, detailUnavailable: true, note: 'Actual canvas overview, not a magnified object capture. Use inspect_asset for a native image’s source pixels; use this overview for placement. Do not claim fine-detail verification from this overview.' } : {}),
             rejected: rejected ? { revisionId: rejected.observation.revisionId, failures: rejected.failures, note: 'Rejected draft only; public canvas unchanged.' } : undefined }) },
           { type: 'input_image', image_url: target?.screenshotDataUrl ?? observation.screenshotDataUrl },
           ...(rejected ? [{ type: 'input_text', text: JSON.stringify({ revisionId: rejected.observation.revisionId, committed: false, captureRole: 'rejected-candidate-overview', captureCamera: rejected.observation.captureCamera, note: 'Most recent rejected draft only; public canvas unchanged.' }) }, { type: 'input_image', image_url: rejected.observation.screenshotDataUrl }] : []),

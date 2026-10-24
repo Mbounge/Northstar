@@ -5,6 +5,7 @@ import { DirectAssetScenario } from './direct-asset-scenario';
 import { ThreeFamilyScenario } from './three-family-scenario';
 import { SelectedLayerFeedbackScenario } from './selected-layer-feedback-scenario';
 import { DesignerStudioScenario } from '../designer-studio/scenario';
+import { RasterAdjustmentScenario } from './raster-adjustment-scenario';
 import { AppsScenario } from './apps-scenario';
 import { findCanvasV2SourceNodeRange } from '@/lib/canvas-v2/source-patch';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -15,6 +16,7 @@ import { object, string, type JsonObject } from '@/lib/canvas-v2/managed-agent/p
 
 /** Deterministic App Server protocol peer. No provider or model is called. */
 export class FixtureCodex implements CodexTransport {
+  private rasterAdjustmentScenario?: RasterAdjustmentScenario;
   private creativeAssetScenario?: CreativeAssetScenario;
   private appsScenario?: AppsScenario;
   private creativeScreenScenario?: CreativeScreenScenario;
@@ -72,6 +74,7 @@ export class FixtureCodex implements CodexTransport {
       this.threeFamilyScenario=editingFamily?new ThreeFamilyScenario(this,editingFamily):undefined;
       this.selectedLayerFeedbackScenario=/editing workspace feedback/i.test(message)?new SelectedLayerFeedbackScenario(this):undefined;
       this.designerStudioScenario=message.trim().toLowerCase()==='designer studio fixture'?new DesignerStudioScenario(this):undefined;
+      this.rasterAdjustmentScenario=/^raster adjustment (reuse )?fixture$/i.test(message.trim())?new RasterAdjustmentScenario(this,/reuse/.test(message)):undefined;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
       this.readableChat = /chat readable parity/i.test(message);
       if (this.readableChat) {
@@ -95,6 +98,7 @@ export class FixtureCodex implements CodexTransport {
       if (this.threeFamilyScenario) { this.threeFamilyScenario.start(); return { turn: { id: this.turn } }; }
       if (this.selectedLayerFeedbackScenario) { this.selectedLayerFeedbackScenario.start(); return { turn: { id: this.turn } }; }
       if (this.designerStudioScenario) { this.designerStudioScenario.start(); return { turn: { id: this.turn } }; }
+      if (this.rasterAdjustmentScenario) { this.rasterAdjustmentScenario.start(); return { turn: { id: this.turn } }; }
       if (this.appsScenario) { this.appsScenario.start(); return { turn: { id: this.turn } }; }
       if (this.mediaParity) this.tool('read_source', {url: this.sourcePhoto ? 'https://www.abrielle.ca/menus' : this.origin + '/canvas-v2-e2e/codex/media/article', focus: this.sourcePhoto ? 'breakfast restaurant' : 'reference'});
       else if (/canvas|composition parity|oversize parity|overlap parity|selection parity|repair parity/i.test(message)) this.tool('canvas_read', {});
@@ -120,6 +124,7 @@ export class FixtureCodex implements CodexTransport {
     if (this.threeFamilyScenario) { this.threeFamilyScenario.reply(r); return; }
     if (this.selectedLayerFeedbackScenario) { this.selectedLayerFeedbackScenario.reply(r); return; }
     if (this.designerStudioScenario) { this.designerStudioScenario.reply(r); return; }
+    if (this.rasterAdjustmentScenario) { this.rasterAdjustmentScenario.reply(r); return; }
     if (this.creativeAssetScenario) { this.creativeAssetScenario.reply(r); return; }
     if (this.screenScenario) { this.screenScenario.reply(r); return; }
     if (this.appsScenario) { this.appsScenario.reply(r); return; }
