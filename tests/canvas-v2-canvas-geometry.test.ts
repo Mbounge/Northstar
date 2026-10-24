@@ -199,13 +199,13 @@ test("camera preview keeps the real contextual toolbar near its visible object a
     ts.forEachChild(node, visit);
   };
   visit(tree); assert.ok(callback);
-  const style: Record<string, string> = {}, surface = { style: { transform: "" } };
+  const style: Record<string, string> = {}, readout: Record<string, string> = {}, ruler: Record<string, string> = {}, surface = { style: { transform: "" } };
   const viewport = { left: 0, top: 96, right: 1000, bottom: 800 };
   const code = ts.transpileModule(`exports.apply = (${callback.getText(tree)});`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const exports: { apply?: (next: { x: number; y: number; scale: number }) => void } = {};
   const published: Array<{x:number;y:number;scale:number}> = [];
   vm.runInNewContext(code, { exports, resolveCanvasV2ContextToolbarPosition, nativeViewportStore:createCanvasV2NativeViewportStore(), canvasV2VisibleWorkspaceBounds,CANVAS_V2_EMPTY_INSETS,workspaceSizeRef:{current:{width:1000,height:800}},publishViewRef: {current:(next:{x:number;y:number;scale:number})=>published.push(next)},
-    workspaceSurfaceRef: { current: surface }, gridOverlayRef: {}, zoomPercentageRef: {}, contextualToolbarRef: { current: { style } },
+    workspaceSurfaceRef: { current: surface }, selectionSizeRef: { current: { style: readout } }, measurementHostRef: { current: { style: { setProperty: (name: string, value: string) => { ruler[name] = value; } } } }, gridOverlayRef: {}, zoomPercentageRef: {}, contextualToolbarRef: { current: { style } },
     activeSelectionBoundsRef: { current: { x: 400, y: 300, width: 200, height: 100 } }, toolbarPreviewGeometry: { current: { viewport, toolbar: { width: 336, height: 56 }, chrome: [] } },
     atmosphereLayerRef: {}, workspaceRef: {},
   });
@@ -224,6 +224,9 @@ test("camera preview keeps the real contextual toolbar near its visible object a
   const before = check({ x: 0, y: 0, scale: 1 }), after = check({ x: 150, y: 50, scale: 1 });
   assert.equal(after - before, 150, "moving the camera must immediately move its contextual controls");
   check({ x: 0, y: 0, scale: 1.5 });
+  assert.equal(readout.transform, 'translateX(-50%) scale(0.6666666666666666)');
+  assert.equal(readout.top, 'calc(100% + 4px)');
+  assert.equal(ruler['--canvas-v2-measure-inverse-scale'], '0.6666666666666666');
   exports.apply!({ x: -2000, y: 0, scale: 1 }); assert.equal(style.visibility, "hidden");
   check({ x: 0, y: 0, scale: 1 }); assert.equal(surface.style.transform, "translate(0px, 0px) scale(1)");
 });

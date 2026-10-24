@@ -20,6 +20,56 @@ export interface CanvasV2SnapResult {
   guides: CanvasV2SnapGuide[];
 }
 
+export interface CanvasV2SpacingMeasurement {
+  axis: "x" | "y";
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  value: number;
+  kind: "gap" | "inset" | "offset";
+}
+
+export function formatCanvasV2DesignPixels(value: number): string {
+  return String(Math.round(value * 10) / 10);
+}
+
+/** World-aligned visible envelope for rulers around a rotated design object. */
+export function canvasV2ObjectVisualBounds(bounds: CanvasV2ObjectBounds, rotation = 0): CanvasV2ObjectBounds {
+  const angle = rotation * Math.PI / 180;
+  const width = Math.abs(bounds.width * Math.cos(angle)) + Math.abs(bounds.height * Math.sin(angle));
+  const height = Math.abs(bounds.width * Math.sin(angle)) + Math.abs(bounds.height * Math.cos(angle));
+  return { x: bounds.x + (bounds.width - width) / 2, y: bounds.y + (bounds.height - height) / 2, width, height };
+}
+
+/** Distances belong to design coordinates, never the current camera zoom. */
+export function canvasV2SpacingMeasurements(selected: CanvasV2ObjectBounds, other: CanvasV2ObjectBounds): CanvasV2SpacingMeasurement[] {
+  if ([selected, other].some(rect => Object.values(rect).some(value => !Number.isFinite(value)) || rect.width <= 0 || rect.height <= 0)) return [];
+  const contains = (outer: CanvasV2ObjectBounds, inner: CanvasV2ObjectBounds) => outer.x <= inner.x && outer.y <= inner.y
+    && outer.x + outer.width >= inner.x + inner.width && outer.y + outer.height >= inner.y + inner.height;
+  const measurement = (axis: "x" | "y", start: number, end: number, cross: number, kind: CanvasV2SpacingMeasurement["kind"]): CanvasV2SpacingMeasurement => ({
+    axis, from: axis === "x" ? { x: start, y: cross } : { x: cross, y: start },
+    to: axis === "x" ? { x: end, y: cross } : { x: cross, y: end }, value: Math.abs(end - start), kind,
+  });
+  if (contains(other, selected) || contains(selected, other)) {
+    const [outer, inner] = contains(other, selected) ? [other, selected] : [selected, other];
+    return [
+      measurement("x", outer.x, inner.x, inner.y + inner.height / 2, "inset"),
+      measurement("x", inner.x + inner.width, outer.x + outer.width, inner.y + inner.height / 2, "inset"),
+      measurement("y", outer.y, inner.y, inner.x + inner.width / 2, "inset"),
+      measurement("y", inner.y + inner.height, outer.y + outer.height, inner.x + inner.width / 2, "inset"),
+    ].filter(item => item.value > 0);
+  }
+  return (["x", "y"] as const).flatMap(axis => {
+    const crossAxis = axis === "x" ? "y" : "x", extent = axis === "x" ? "width" : "height", crossExtent = axis === "x" ? "height" : "width";
+    const a = selected[axis], b = other[axis], endA = a + selected[extent], endB = b + other[extent];
+    const overlapStart = Math.max(selected[crossAxis], other[crossAxis]), overlapEnd = Math.min(selected[crossAxis] + selected[crossExtent], other[crossAxis] + other[crossExtent]);
+    const cross = overlapEnd >= overlapStart ? (overlapStart + overlapEnd) / 2 : selected[crossAxis] + selected[crossExtent] / 2;
+    if (endA <= b) return [measurement(axis, endA, b, cross, "gap")];
+    if (endB <= a) return [measurement(axis, endB, a, cross, "gap")];
+    // Overlap is not empty spacing: explicitly label corresponding-edge offsets.
+    return a === b ? [] : [measurement(axis, a, b, cross, "offset")];
+  });
+}
+
 const MIN_OBJECT_SIZE = 24;
 
 export function unionCanvasV2ObjectBounds(bounds: readonly CanvasV2ObjectBounds[]): CanvasV2ObjectBounds | undefined {

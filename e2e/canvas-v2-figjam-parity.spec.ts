@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { createCanvasV2DiscoveryState } from '../lib/canvas-v2/discovery-state';
 
 const workspace = (page: Page) => page.getByRole("region", { name: "Canvas workspace" });
 const scene = (page: Page) => workspace(page).getByTestId("canvas-v2-native-scene");
@@ -131,7 +132,9 @@ test("quick connected objects keep a native labeled relationship after movement"
 
 test("image crop repositions pixels, preserves the source and travels through undo and redo", async ({ page }) => {
   // A local, one-pixel PNG exercises image ingestion without a network source.
-  await page.getByLabel("Choose images for the canvas").setInputFiles({ name: "crop.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII=", "base64") });
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Upload image, GIF, or video', exact: true }).click();
+  await (await chooser).setFiles({ name: "crop.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPYt+rOfwAHsgNEF/cauAAAAABJRU5ErkJggg==", "base64") });
   const image = scene(page).locator('img[data-canvas-v2-local-image="true"]');
   await expect(image).toHaveCount(1);
   const source = await image.getAttribute("src");
@@ -151,16 +154,28 @@ test("image crop repositions pixels, preserves the source and travels through un
   await expect(frame.locator("img")).toHaveAttribute("src", source!);
 });
 
-test("a human edit interrupts an outstanding AI response on the production canvas", async ({ page }) => {
+test("a human edit rejects an old AI response and continuation receives the latest wording", async ({ page }) => {
   let release!: () => void;
   const responseGate = new Promise<void>((resolve) => { release = resolve; });
   let requested = false;
   let settled = false;
+  const requests: Array<{ revision: { document: { html: string } } }> = [];
   await page.route("**/api/canvas-v2/route", async (route) => {
     const response = await route.fetch({ url: new URL("/canvas-v2-e2e/route", route.request().url()).toString() });
     await route.fulfill({ response });
   });
-  await page.route("**/api/canvas-v2/design", async (route) => {
+  await page.route(/\/(?:api\/canvas-v2|canvas-v2-e2e)\/design$/, async (route) => {
+    requests.push(route.request().postDataJSON());
+    if (requests.length > 1) {
+      await route.fulfill({ json: {
+        discoveryState: createCanvasV2DiscoveryState({ now: '2026-10-24T16:00:00Z', interpretation: {
+          relationship: 'new', objective: 'Retain human work', desiredOutcome: 'Preserve edits', framing: 'Canvas editing', inquiryKind: 'exploratory-discovery', evidenceNeed: 'optional', sourceCategories: ['canvas'], materialUnknowns: [], completionCriteria: [], rationale: 'Held-response regression',
+        } }),
+        discoveryProgress: { stage: 'waiting', label: 'Human revision incorporated', detail: 'The current wording is preserved.' },
+        discoveryQuestion: { question: 'Human revision incorporated', whyItMatters: 'Continue from the latest authored canvas.' },
+      } });
+      return;
+    }
     requested = true;
     await responseGate;
     try {
@@ -170,15 +185,18 @@ test("a human edit interrupts an outstanding AI response on the production canva
   });
   await placeText(page, "Human starting point"); await editor(page).press("Escape");
   const text = scene(page).locator('[data-canvas-v2-primitive="text"]').first();
+  await page.getByRole("button", { name: "Open North Star panel", exact: true }).click();
   const camera = await workspace(page).getByTestId("canvas-v2-workspace-surface").getAttribute("style");
   await page.getByLabel("Message North Star").fill("Exercise collaboration continuation closure");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect.poll(() => requested).toBe(true);
   await text.dblclick(); await editor(page).fill("The human owns this decision"); await editor(page).press("Escape");
+  await expect(text).toHaveText("The human owns this decision");
   release();
   await expect.poll(() => settled).toBe(true);
   await expect(text).toHaveText("The human owns this decision");
-  await expect(page.getByTestId("canvas-v2-loop-status")).toContainText("stopped");
+  await expect(page.getByText('Human revision incorporated', { exact: true }).last()).toBeVisible();
+  expect(requests.at(-1)?.revision.document.html).toContain('The human owns this decision');
   await expect(workspace(page).getByTestId("canvas-v2-workspace-surface")).toHaveAttribute("style", camera!);
 });
 
@@ -210,8 +228,9 @@ test("mixed text colors, intrinsic bounds and deletion chrome follow visible aut
   await editor(page).press("ControlOrMeta+a");
   await page.getByRole("button", { name: "Text range colors", exact: true }).click();
   await page.getByRole("button", { name: "Use Blue", exact: true }).click();
+  // Collapse the prior whole-line selection. Otherwise Chromium treats a
+  // held gesture inside it as dragging the selected text, not selecting letters.
   await editor(page).press("ArrowRight");
-  await editor(page).press("Shift+Home");
   // A physical range selects only the first word, preserving its neighbors.
   const range = await editor(page).evaluate(element => {
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -220,6 +239,7 @@ test("mixed text colors, intrinsic bounds and deletion chrome follow visible aut
     const rect = range.getBoundingClientRect(); return { x: rect.left, end: rect.right, y: rect.top + rect.height / 2 };
   });
   await page.mouse.move(range.x + 1, range.y); await page.mouse.down(); await page.mouse.move(range.end - 1, range.y, { steps: 12 }); await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe('Evidence');
   await page.getByRole("button", { name: "Text range colors", exact: true }).click();
   await page.getByRole("button", { name: "Use White", exact: true }).click();
   await page.getByRole("button", { name: "Finish text editing" }).click();
@@ -336,7 +356,7 @@ test("side resizing text preserves typography and clears the sizing lock before 
 // The menu's content, not only its toolbar, must remain reachable near an edge.
 test("object and range menus flip into the viewport near its top edge", async ({ page }) => {
   await page.getByRole("button", { name: "Collapse North Star panel", exact: true }).click();
-  await placeText(page,"Near the top",160,175); await editor(page).press("Escape");
+  await placeText(page,"Near the top",320,175); await editor(page).press("Escape");
   await page.getByRole("button",{name:"Font size",exact:true}).click();
   const menu = page.getByLabel("Font size menu",{exact:true});
   const bounds = await menu.boundingBox();

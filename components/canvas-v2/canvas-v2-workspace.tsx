@@ -26,6 +26,7 @@ import { MODEL_ATTRIBUTE } from '@/lib/canvas-v2/model-object';
 import { prepareCanvasModelImport, MAX_MODEL_IMPORT_BYTES } from '@/lib/canvas-v2/model-import';
 import { findCanvasV2OpenPlacement } from '@/lib/canvas-v2/multiplayer-placement';
 import { BoardDesignInspector } from './board-design-inspector';
+import { CanvasV2DesignMeasurements } from './design-measurements';
 import { CANVAS_V2_SCREEN_COMMAND, CanvasV2ScreenEditing, CanvasV2ScreenAssets, CanvasV2ScreenIdentities, interruptCanvasV2ScreenPresentation } from './interactive-screen';
 import { SCREEN_ASSET_DROP_EVENT, SCREEN_ASSET_DRAG_TYPE, projectImageAssets, uploadedProjectImage, uploadedProjectModel, replaceScreenAsset, type ScreenAssetDrop } from '@/lib/canvas-v2/screen-asset-edit';
 import { CANVAS_V2_EDIT_SELECTION_FEEDBACK } from '@/lib/canvas-v2/screen-feedback';
@@ -166,6 +167,8 @@ import {
   canvasV2BoundsIntersect,
   constrainCanvasV2ResizeAspectRatio,
   canvasV2RotationFromPointer,
+  canvasV2ObjectVisualBounds,
+  formatCanvasV2DesignPixels,
   scaleCanvasV2FontSize,
   scaleCanvasV2ObjectBounds,
   snapCanvasV2ObjectDelta,
@@ -957,6 +960,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const workspaceSurfaceRef = useRef<HTMLDivElement>(null);
   const canvasSceneRef = useRef<CanvasV2CanvasSceneHandle>(null);
   const selectionOverlayRef = useRef<HTMLDivElement>(null);
+  const selectionSizeRef = useRef<HTMLOutputElement>(null);
+  const measurementHostRef = useRef<HTMLDivElement>(null);
   const selectionRequestEpochRef = useRef(0);
   const selectionMemberOverlayRefs = useRef(new Map<string, HTMLDivElement>());
   const snapGuideRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -1372,6 +1377,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     if (surface) {
       surface.style.transform = `translate(${next.x}px, ${next.y}px) scale(${next.scale})`;
     }
+    // Billboard only the small readouts during live camera frames. Updating
+    // a variable on the entire native scene would invalidate all its artwork.
+    if (selectionSizeRef.current) {
+      selectionSizeRef.current.style.transform = `translateX(-50%) scale(${1 / next.scale})`;
+      selectionSizeRef.current.style.top = `calc(100% + ${6 / next.scale}px)`;
+    }
+    measurementHostRef.current?.style.setProperty('--canvas-v2-measure-inverse-scale', String(1 / next.scale));
     const grid = gridOverlayRef.current;
     if (grid) {
       const backgroundSize = `${CANVAS_V2_WORKSPACE.grid * next.scale}px ${CANVAS_V2_WORKSPACE.grid * next.scale}px`;
@@ -1962,6 +1974,10 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     canvasSceneRef.current?.applyTransientGeometry({...remoteTransientRef.current,...transientGeometryForDirectGesture(gesture, preview)});
     collaboration?.motion(Object.entries(preview.elementBounds).map(([nodeId,bounds])=>({nodeId,...bounds})));
     const selection = selectionOverlayRef.current;
+    if (selectionSizeRef.current) {
+      selectionSizeRef.current.textContent = `${formatCanvasV2DesignPixels(preview.bounds.width)} × ${formatCanvasV2DesignPixels(preview.bounds.height)}`;
+      selectionSizeRef.current.style.rotate = gesture.originals.length === 1 ? `${-(preview.rotations?.[gesture.originals[0].nodeId] ?? gesture.originals[0].rotation ?? 0)}deg` : '';
+    }
     if (selection) {
       selection.style.left = `${preview.bounds.x}px`;
       selection.style.top = `${preview.bounds.y}px`;
@@ -2003,6 +2019,10 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const restoreDirectGesturePreview = (gesture: DirectGesture) => {
     canvasSceneRef.current?.applyTransientGeometry();
+    if (selectionSizeRef.current) {
+      selectionSizeRef.current.textContent = `${formatCanvasV2DesignPixels(gesture.original.width)} × ${formatCanvasV2DesignPixels(gesture.original.height)}`;
+      selectionSizeRef.current.style.rotate = gesture.originals.length === 1 ? `${-(gesture.originals[0].rotation ?? 0)}deg` : '';
+    }
     const selection = selectionOverlayRef.current;
     if (selection) {
       selection.style.left = `${gesture.original.x}px`;
@@ -3842,6 +3862,16 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       if (visualFeedbackActive) return;
       const command = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
+      // Keyboard tools must enter authoring through the same path as their
+      // toolbar buttons, including when the person starts from Preview.
+      if (!command && !event.altKey && !event.shiftKey && ["t", "s", "r", "o", "l", "h", "v", "p", "f"].includes(key)) {
+        event.preventDefault();
+        if (key === "h" || key === "v" || key === "p") {
+          if (key !== "h") setCanvasView("design");
+          selectElement(undefined); setTool(key === "h" ? "pan" : key === "p" ? "draw" : "select");
+        } else activatePrimitive(key === "t" ? "text" : key === "s" ? "note" : key === "l" ? "connector" : key === "f" ? "frame" : "shape", key === "o" ? { shapeVariant: "ellipse" } : key === "r" ? { shapeVariant: "rectangle" } : {});
+        return;
+      }
       if(canvasView==='preview'){
         if(event.code==='Space'){event.preventDefault();setSpacePan(true)}
         else if(event.key==='Escape'){setObjectMenu(undefined);setZoomMenuOpen(false)}
@@ -3859,10 +3889,6 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         const index = items.findIndex((item) => item.nodeId === selectedElement?.nodeId);
         const next = items[(index + (event.shiftKey ? -1 : 1) + items.length) % items.length];
         if (next) selectElement(next, { additive: false, range: false, directEdit: false });
-      } else if (!command && !event.altKey && !event.shiftKey && ["t", "s", "r", "o", "l", "h", "v", "p", "f"].includes(key)) {
-        event.preventDefault();
-        if (key === "h" || key === "v" || key === "p") { selectElement(undefined); setTool(key === "h" ? "pan" : key === "p" ? "draw" : "select"); }
-        else activatePrimitive(key === "t" ? "text" : key === "s" ? "note" : key === "l" ? "connector" : key === "f" ? "frame" : "shape", key === "o" ? { shapeVariant: "ellipse" } : key === "r" ? { shapeVariant: "rectangle" } : {});
       } else if (event.code === "Space") {
         if (target?.closest('[data-canvas-v2-media-control], button')) return;
         event.preventDefault();
@@ -3870,10 +3896,12 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           if (!event.repeat) toggleSelectedMedia();
         } else setSpacePan(true);
       } else if (event.key === "Escape") {
+        // Cancel the active transform first. Designers can immediately retry
+        // with the same selection; a second Escape clears that selection.
+        if (directGestureRef.current) { event.preventDefault(); finishDirectGesture(directGestureRef.current.pointerId, true); return; }
+        if (connectorGestureRef.current) { event.preventDefault(); finishConnectorGesture(connectorGestureRef.current.pointerId, true); return; }
         setCropDraft(undefined); setConnectorLabelDraft(undefined); setZoomMenuOpen(false);
         tidyGestureRef.current=undefined;setTidyDraft(undefined);
-        if(directGestureRef.current)finishDirectGesture(directGestureRef.current.pointerId,true);
-        if(connectorGestureRef.current)finishConnectorGesture(connectorGestureRef.current.pointerId,true);
         cancelDrawingGesture();
         setTool("select");
         placementRef.current = undefined; setPlacement(undefined);
@@ -3948,10 +3976,11 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const target = event.target as HTMLElement | null;
     if (target?.closest('input, textarea, select, [data-canvas-v2-media-control], [data-canvas-v2-screen-control], [data-canvas-v2-rich-toolbar], [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
     if (visualFeedbackActive) { event.preventDefault(); return; }
-    if(canvasView==='preview')return;
-    if (!engine.interactionReady || engine.applyingManualEdit) return;
+    if (canvasView === 'preview' && !workspaceRef.current?.contains(target)) return;
+    if (!engine.interactionReady || engine.applyingManualEdit || collaborationReadOnly) return;
+    const author = () => { setCanvasView('design'); setTool('select'); };
     const snapshot = decodeCanvasV2Clipboard(event.clipboardData?.getData("text/html") ?? "");
-    if (snapshot) { event.preventDefault(); internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); return; }
+    if (snapshot) { event.preventDefault(); author(); internalClipboardRef.current = { snapshot, pasteCount: 0 }; pasteInternalClipboard(); return; }
     const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => (file.type.startsWith("image/") || file.type.startsWith("video/")));
     const itemFiles = directFiles.length ? [] : Array.from(event.clipboardData?.items ?? [])
       .filter((item) => item.kind === "file" && (item.type.startsWith("image/") || item.type.startsWith("video/")))
@@ -3959,13 +3988,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       .filter((file): file is File => Boolean(file));
     const images = directFiles.length ? directFiles : itemFiles;
     if (images.length) {
-      event.preventDefault();
+      event.preventDefault(); author();
       void addLocalImages(images, lastCanvasPointerRef.current);
       return;
     }
     const text = event.clipboardData?.getData("text/plain") ?? "";
-    if (text) { event.preventDefault(); pasteExternalText(text, event.clipboardData?.getData("text/html")); }
-    else if (internalClipboardRef.current.snapshot && !event.clipboardData?.types.length) { event.preventDefault(); pasteInternalClipboard(); }
+    if (text) { event.preventDefault(); author(); pasteExternalText(text, event.clipboardData?.getData("text/html")); }
+    else if (internalClipboardRef.current.snapshot && !event.clipboardData?.types.length) { event.preventDefault(); author(); pasteInternalClipboard(); }
   };
 
   useEffect(() => {
@@ -4081,6 +4110,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     refreshSelection(elements);
   }, [refreshSelection, selectionRefreshEpoch]);
   const activeSelectionBounds = unionCanvasV2ObjectBounds(selectedElements.map((item) => item.bounds));
+  // A teammate can move the hovered object without moving our pointer.
+  // Refresh rulers from the current scene instead of retaining stale hover geometry.
+  const hoveredMeasurementElement = hoveredElement && sceneElements.find(item => item.nodeId === hoveredElement.nodeId);
   const compactResizeHandles = Boolean(activeSelectionBounds && (
     activeSelectionBounds.width * viewport.scale < 18
     || activeSelectionBounds.height * viewport.scale < 18
@@ -4587,6 +4619,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               style={{ left: element.bounds.x, top: element.bounds.y, width: element.bounds.width, height: element.bounds.height, rotate: `${element.rotation ?? 0}deg` }}
             />)}
             {canvasView === "design" && !screenEditNodeId && !editingNodeId && !cropDraft && !connectorLabelDraft && selectedElement && activeSelectionBounds && <div ref={selectionOverlayRef} data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: selectedElements.length === 1 && selectedElement.kind === "connector" ? 0 : 1 / viewport.scale, rotate: selectedElements.length === 1 ? `${selectedElement.rotation ?? 0}deg` : undefined }}>
+              {selectedElement.kind !== "connector" && <output ref={selectionSizeRef} data-testid="canvas-v2-selection-size" aria-label="Selected dimensions in pixels" aria-live="off" title="Width × height · design pixels" className="pointer-events-none absolute left-1/2 whitespace-nowrap rounded-[3px] border border-[#d9d6e2]/80 bg-[#f9f8fc]/95 px-1 py-px font-mono text-[9px] leading-3 text-[#625b73] dark:border-[#4e485e]/60 dark:bg-[#25222e]/95 dark:text-[#cdc7dd]" style={{ top: `calc(100% + ${6 / viewport.scale}px)`, transform: `translateX(-50%) scale(${1 / viewport.scale})`, transformOrigin: 'top center', rotate: selectedElements.length === 1 ? `${-(selectedElement.rotation ?? 0)}deg` : undefined }}>{formatCanvasV2DesignPixels(activeSelectionBounds.width)} × {formatCanvasV2DesignPixels(activeSelectionBounds.height)}</output>}
               {selectedElements.length > 1 && !selectionPermanent && <button
                 type="button"
                 aria-label={`Move ${selectedElements.length} selected objects`}
@@ -4619,6 +4652,12 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
                 return <button key={corner} aria-label={`Rotate selected objects from ${corner}`} title="Drag to rotate" onPointerDown={(event) => beginDirectGesture("rotate", event)} style={{ scale: `${0.6 / viewport.scale}`, ...(corner.includes("west") ? { left: offset } : { right: offset }), ...(corner.includes("north") ? { top: offset } : { bottom: offset }) }} className={`group pointer-events-auto absolute z-20 h-7 w-7 cursor-grab rounded-full bg-transparent active:cursor-grabbing ${className}`}><span className={`pointer-events-none absolute grid h-6 w-6 scale-75 place-items-center rounded-full border border-[#dad6ff] bg-white text-[#6d59ed] opacity-0 shadow-lg transition group-hover:scale-100 group-hover:opacity-100 group-focus-visible:scale-100 group-focus-visible:opacity-100 dark:border-[#554a89] dark:bg-[#211e2b] dark:text-[#b9adff] ${iconClassName}`}><RotateCw className="h-3.5 w-3.5" /></span></button>;
               })}
             </div>}
+            {canvasView === "design" && tool === "select" && !spacePan && !screenEditNodeId && !editingNodeId && !cropDraft && !connectorLabelDraft && !visualFeedbackActive && selectedElement && activeSelectionBounds && <CanvasV2DesignMeasurements
+              selected={unionCanvasV2ObjectBounds(selectedElements.map(item => canvasV2ObjectVisualBounds(item.bounds, item.rotation)))!}
+              hovered={hoveredMeasurementElement && !selectionNodeIds.includes(hoveredMeasurementElement.nodeId) && hoveredMeasurementElement.kind !== 'root' && hoveredMeasurementElement.kind !== 'connector' ? canvasV2ObjectVisualBounds(hoveredMeasurementElement.bounds, hoveredMeasurementElement.rotation) : undefined}
+              scale={viewport.scale}
+              hostRef={measurementHostRef}
+            />}
             {!editingNodeId && !connectorLabelDraft && selectedElements.length === 1 && selectedElement?.connector && <>
               <svg aria-hidden className="pointer-events-none absolute inset-0 z-40 overflow-visible" width={CANVAS_V2_WORKSPACE.width} height={CANVAS_V2_WORKSPACE.height}>
                 <path ref={connectorPreviewPathRef} data-testid="canvas-v2-connector-gesture-preview" visibility="hidden" fill="none" stroke="#6d59ed" strokeWidth={4} strokeLinecap="round" />

@@ -4,12 +4,40 @@ import test from "node:test";
 import {
   canvasV2BoundsIntersect,
   canvasV2RotationFromPointer,
+  canvasV2SpacingMeasurements,
+  canvasV2ObjectVisualBounds,
+  formatCanvasV2DesignPixels,
   constrainCanvasV2ResizeAspectRatio,
   scaleCanvasV2FontSize,
   scaleCanvasV2ObjectBounds,
   snapCanvasV2ObjectDelta,
   unionCanvasV2ObjectBounds,
 } from "../lib/canvas-v2/object-interaction";
+
+test("design rulers distinguish real gaps, container insets and overlapping edge offsets without mutating bounds", () => {
+  const selected = { x: 40, y: 50, width: 100, height: 60 }, before = { ...selected };
+  const gap = canvasV2SpacingMeasurements(selected, { x: 172, y: 50, width: 80, height: 60 });
+  assert.deepEqual(gap, [{ axis: 'x', from: { x: 140, y: 80 }, to: { x: 172, y: 80 }, value: 32, kind: 'gap' }]);
+  const insets = canvasV2SpacingMeasurements(selected, { x: 10, y: 20, width: 200, height: 150 });
+  assert.deepEqual(insets.map(item => [item.axis, item.kind, item.value]), [['x', 'inset', 30], ['x', 'inset', 70], ['y', 'inset', 30], ['y', 'inset', 60]]);
+  assert.deepEqual(canvasV2SpacingMeasurements({ x: 10, y: 20, width: 200, height: 150 }, selected), insets);
+  assert.deepEqual(canvasV2SpacingMeasurements(selected, selected), []);
+  assert.deepEqual(canvasV2SpacingMeasurements(selected, { x: 80, y: 70, width: 100, height: 60 }).map(item => [item.axis, item.kind, item.value]), [['x', 'offset', 40], ['y', 'offset', 20]]);
+  assert.deepEqual(selected, before);
+});
+
+test("design rulers retain subpixel world distances and reject invalid geometry", () => {
+  const selected = { x: 65000.25, y: 65000, width: 99.5, height: 80 };
+  const ruler = canvasV2SpacingMeasurements(selected, { x: 65132.25, y: 65000, width: 100, height: 80 })[0];
+  assert.equal(ruler.value, 32.5);
+  assert.equal(formatCanvasV2DesignPixels(ruler.value), '32.5');
+  assert.equal(formatCanvasV2DesignPixels(32.00000000001), '32');
+  assert.deepEqual(canvasV2SpacingMeasurements(selected, { x: NaN, y: 0, width: 100, height: 80 }), []);
+  assert.deepEqual(canvasV2SpacingMeasurements(selected, { x: 0, y: 0, width: -100, height: 80 }), []);
+  const rotated = canvasV2ObjectVisualBounds({ x: 100, y: 100, width: 100, height: 60 }, 90);
+  assert.equal(Math.round(rotated.x), 120); assert.equal(Math.round(rotated.y), 80);
+  assert.equal(Math.round(rotated.width), 60); assert.equal(Math.round(rotated.height), 100);
+});
 
 test("multi-object bounds preserve the visual union", () => {
   assert.deepEqual(unionCanvasV2ObjectBounds([

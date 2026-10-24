@@ -42,6 +42,26 @@ async function design(page: Page) {
 
 async function waitSaved(page: Page) { await expect.poll(async () => (await state(page)).pending).toBe(0); }
 
+test('spacing rulers refresh after a teammate moves the hovered object without moving our pointer or selection', async ({ context }) => {
+  test.setTimeout(120000);
+  const room = 'rulers-' + randomUUID(), alice = await openPeer(context, room, 'alice'), bob = await openPeer(context, room, 'bob');
+  try {
+    await design(alice); await design(bob);
+    await object(alice, 'note-alice').click();
+    const ownBefore = await geometry(alice, 'note-alice');
+    const first = (await geometry(alice, 'note-alice')).map(parseFloat), second = (await geometry(alice, 'note-bob')).map(parseFloat);
+    const initialGap = second[0] - first[0] - first[2];
+    await object(alice, 'note-bob').hover(); await alice.keyboard.down('Alt');
+    const ruler = alice.getByTestId('canvas-v2-spacing-measurements').locator('[data-measurement-kind="gap"][data-measurement-axis="x"]');
+    await expect.poll(async () => Number(await ruler.getAttribute('data-measurement-pixels'))).toBeCloseTo(initialGap, 2);
+    await object(bob, 'note-bob').click(); await bob.keyboard.press('Shift+ArrowRight'); await waitSaved(bob);
+    await expect.poll(async () => Number(await ruler.getAttribute('data-measurement-pixels'))).toBeCloseTo(initialGap + 10, 2);
+    expect(await geometry(alice, 'note-alice')).toEqual(ownBefore);
+    await expect(alice.getByRole('button', { name: /^Resize note-alice from/ })).toHaveCount(8);
+    await alice.keyboard.up('Alt'); await expect(alice.getByTestId('canvas-v2-spacing-measurements')).toHaveCount(0);
+  } finally { await alice.close(); await bob.close(); }
+});
+
 async function openPrivatePeer(context: BrowserContext, room: string, peer: 'alice' | 'bob', device = 'first') {
   const page = await context.newPage();
   await page.goto(`/canvas-v2-e2e/human-multiplayer?room=${room}&peer=${peer}&device=${device}&personal=1&hardening=1`);

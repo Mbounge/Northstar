@@ -1470,7 +1470,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
       block-size:var(--canvas-v2-native-height)!important;
       flex-shrink:0!important;
     }
-    [data-canvas-v2-native-scene="true"] [data-canvas-v2-native-runtime-node="true"][data-canvas-v2-native-layout="flow"] {
+    [data-canvas-v2-native-scene="true"] [data-canvas-v2-native-runtime-node="true"][data-canvas-v2-native-layout="flow"]:not([data-canvas-v2-crop-source="true"]) {
       /* Native layers must participate in stacking even for ordinary flow text.
          Otherwise a positioned background at layer 999 paints over static
          content whose nominal layer 1000 has no effect. */
