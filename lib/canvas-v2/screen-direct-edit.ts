@@ -142,11 +142,11 @@ export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, 
   return {x,y,...(text ? {text} : {}),...(appearance ? {appearance} : {}),...(section && section !== doc.body && section !== hit.closest('main') ? {section:describe(section),arrangementNeedsAgent} : {})};
 }
 
-function currentElement(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser) {
+function currentElement(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser, inspectLocked = false) {
   if (screen.simulation) throw new Error('Create an editable version of this reference first.');
   const doc = parser.parseFromString(screen.html, 'text/html'), matches = doc.body.querySelectorAll(target.selector), element = matches[0];
   if (matches.length !== 1 || !(element instanceof HTMLElement||element&&screenVectorElement(element)) || element === doc.body || element.localName !== target.tag || element.closest('[data-northstar-raster-interface]')) throw new Error('This item changed. Select it again.');
-  if(element.closest('[data-northstar-locked="true"]')||element.querySelector('[data-northstar-locked="true"]'))throw new Error('Unlock this layer before editing.');
+  if(!inspectLocked&&(element.closest('[data-northstar-locked="true"]')||element.querySelector('[data-northstar-locked="true"]')))throw new Error('Unlock this layer before editing.');
   return {doc,element};
 }
 
@@ -222,7 +222,9 @@ export function editScreenRichText(screen:CanvasV2InteractiveScreen,target:Canva
  * appearance must be changed in its owning code rather than patched temporarily. */
 export function screenAppearanceCanEditDirectly(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser): boolean {
   try {
-    const {doc,element}=currentElement(screen,target,parser);
+    // A lock changes edit permission, not the kind of appearance this layer
+    // supports. Keep its inspector stable; actual mutations still enforce it.
+    const {doc,element}=currentElement(screen,target,parser,true);
     return !['SCRIPT','STYLE','IFRAME','CANVAS','VIDEO'].includes(element.tagName)
       // A normal inline change cannot override an important product rule.
       // Ask for a source-aware edit instead of reporting a visual no-op.

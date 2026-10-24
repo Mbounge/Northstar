@@ -10,6 +10,11 @@ const fixture = globalThis as typeof globalThis & { northstarCodexFixtureHost?: 
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === 'production' || process.env.NORTHSTAR_E2E !== '1') return new Response(null, { status: 404 });
   const body = object(await request.json());
+  // Next's internal Request URL can say localhost while Chromium uses 127.0.0.1.
+  // Keep fixture media on the browser's actual same origin, without widening CORS.
+  const requestedOrigin = request.headers.get('origin');
+  const browserOrigin = requestedOrigin && ['localhost','127.0.0.1'].includes(new URL(requestedOrigin).hostname)
+    && new URL(requestedOrigin).port === new URL(request.url).port ? new URL(requestedOrigin).origin : new URL(request.url).origin;
   // Browser contexts close without reliably delivering pagehide/keepalive.
   // Separate deterministic tests share the fixture account, but never its
   // abandoned processes. This operation cannot exist on the production route.
@@ -25,10 +30,10 @@ export async function POST(request: Request) {
     fixture.northstarCodexFixtureVersion = 17;
   }
   fixture.northstarCodexFixtureFactory = fixtureCodex;
-  try { return await (fixture.northstarCodexFixtureHost ??= new CodexSessionHost(() => fixture.northstarCodexFixtureFactory!(new URL(request.url).origin), (action, signal) => readNorthstarSource(action, signal, async url => {
+  try { return await (fixture.northstarCodexFixtureHost ??= new CodexSessionHost(() => fixture.northstarCodexFixtureFactory!(browserOrigin), (action, signal) => readNorthstarSource(action, signal, async url => {
     // Explicit real-source integration case; ordinary fixtures remain local and deterministic.
     if (url === 'https://www.abrielle.ca/menus' || ['https://images.squarespace-cdn.com', 'https://static1.squarespace.com', 'http://static1.squarespace.com'].includes(new URL(url).origin)) return readCanvasV2PublicMedia(url, signal);
-    const base = new URL(request.url).origin + '/canvas-v2-e2e/codex/media/';
+    const base = browserOrigin + '/canvas-v2-e2e/codex/media/';
     if (url === base + 'article') return { url, mimeType: 'text/html', bytes: Buffer.from(`<h1>A source with useful media</h1><p>Compare a still reference with a short motion demonstration.</p><img src="${base}reference.png" alt="Reference diagram"><img src="${base}motion.gif" alt="Animated reference"><video src="${base}demo.mp4" title="Motion demonstration"></video>`) };
     const name = url.slice(base.length);
     if (!url.startsWith(base) || !['reference.png','motion.gif'].includes(name)) throw new Error('Fixture allows only its known source page and images.');

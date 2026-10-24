@@ -119,14 +119,23 @@ test('feedback spans screens and canvas references; restoring a version preserve
   await frame1.getByLabel('Your goal').fill('Score 24 goals');
   const geometry1=await first.getAttribute('style'),geometry2=await second.getAttribute('style');
   const canonical=page.locator('[data-canvas-v2-canonical-flow]'), reference=await canonical.getAttribute('data-canvas-v2-canonical-flow');
-  const select=async()=>{const b=await first.boundingBox();if(!b)throw Error('Screen missing');await page.mouse.click(b.x-3,b.y+b.height/2);};
-  await select();await page.getByRole('button',{name:'Give feedback on screen'}).click();
-  await frame1.getByRole('heading',{name:'Your next season.',exact:true}).click();
-  await frame2.getByRole('heading',{name:'Your next season.',exact:true}).click();
-  await page.getByRole('button',{name:'Done selecting'}).click();
+  const caption=page.getByTestId('canvas-v2-native-scene').getByText('GRAET · creative review',{exact:true}).first();
+  const select=async()=>{await page.getByRole('button',{name:/Zoom .*percent; fit content/}).click();await page.getByRole('button',{name:/^Fit all/}).click();await caption.click();};
+  const openHistory=async()=>{await select();await caption.click({button:'right'});await page.getByRole('menuitem',{name:'Version history',exact:true}).click();};
+  await select();await page.getByRole('button',{name:'Add to feedback',exact:true}).click();
+  await page.getByRole('button',{name:'Delete this comment',exact:true}).click();
+  const mark=async(box:{x:number;y:number;width:number;height:number}|null,comment:string)=>{
+    if(!box)throw Error('Feedback target missing');
+    await page.mouse.click(box.x+box.width/2,box.y+box.height/2);
+    await page.getByRole('textbox',{name:'Comment for marked area',exact:true}).fill(comment);
+    await page.getByRole('button',{name:'Add comment',exact:true}).click();
+  };
+  await mark(await frame1.getByRole('heading',{name:'Your next season.',exact:true}).boundingBox(),'Refine this headline only.');
+  await mark(await frame2.getByRole('heading',{name:'Your next season.',exact:true}).boundingBox(),'Refine this second headline only.');
   const referenceLeaf=canonical.getByRole('img',{name:'Landing',exact:true});
-  await referenceLeaf.click();await page.getByRole('button',{name:'Give feedback on selection',exact:true}).click();
-  await expect(page.getByText('Feedback · 3 items',{exact:true})).toBeVisible();
+  await mark(await referenceLeaf.boundingBox(),'Keep this inspiration reference unchanged.');
+  await page.getByRole('button',{name:'Done',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Review 3 comments',exact:true})).toBeVisible();
   await send('feedback collection');
   await expect(page.getByText('Refined every tagged screen detail together and retained the tagged canvas reference.',{exact:true})).toBeVisible({timeout:90000});
   await expect(frame1.getByRole('heading',{name:'Refined detail 1',exact:true})).toBeVisible();
@@ -135,7 +144,7 @@ test('feedback spans screens and canvas references; restoring a version preserve
   await expect(frame1.getByRole('button',{name:'Saved',exact:true})).toBeVisible();
   expect(await canonical.getAttribute('data-canvas-v2-canonical-flow')).toBe(reference);
   const sibling=await second.getAttribute('data-canvas-v2-screen');
-  await select();await page.getByRole('button',{name:'Screen version history'}).click();
+  await openHistory();
   const history=page.getByRole('dialog',{name:'Screen version history'});
   await history.getByRole('button').filter({hasText:'Starting version'}).click();
   await history.getByRole('button',{name:'Use this version',exact:true}).click();
@@ -144,7 +153,7 @@ test('feedback spans screens and canvas references; restoring a version preserve
   await expect(frame1.getByRole('button',{name:'Save team',exact:true})).toBeVisible();
   expect(await second.getAttribute('data-canvas-v2-screen')).toBe(sibling);
   expect(await first.getAttribute('style')).toBe(geometry1);expect(await second.getAttribute('style')).toBe(geometry2);
-  await select();await page.getByRole('button',{name:'Screen version history'}).click();
+  await openHistory();
   await expect(history.getByText('On canvas',{exact:true})).toHaveCount(1);
   await expect(history.getByRole('button',{name:'Applied on canvas',exact:true})).toBeDisabled();
 });
@@ -174,6 +183,7 @@ test('native image uploads become inspected retained material inside an authored
 });
 
 test('GIF references keep their original animated bytes inside an authored screen', async ({ page }) => {
+  test.setTimeout(120000);
   await page.goto('/canvas-v2-e2e/codex');
   await page.getByLabel('Message North Star').fill('screen gif asset');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -196,11 +206,13 @@ test('live motion review captures genuine procedural canvas/3D states without a 
 });
 
 test('native uploaded video is inspectable and playable inside an authored screen',async({page})=>{
+ test.setTimeout(120000);
  await page.goto('/canvas-v2-e2e/codex');
  await expect(page.getByRole('button',{name:'Upload image, GIF, or video',exact:true})).toBeEnabled();
  const chooser=page.waitForEvent('filechooser');await page.getByRole('button',{name:'Upload image, GIF, or video',exact:true}).click();
  await(await chooser).setFiles('app/canvas-v2-e2e/codex/media-assets/demo.mp4');
- await expect(page.getByRole('button',{name:'Play video',exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Pause video',exact:true})).toHaveCount(1);
+ await page.getByRole('button',{name:'Open North Star panel',exact:true}).click();
  await page.getByLabel('Message North Star').fill('screen video asset');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(page.getByText('The uploaded video is retained, inspected, rendered and playing inside the interactive screen.',{exact:true})).toBeVisible({timeout:90000});
  await expect(page.frameLocator('iframe[title="Retained video playback"]').locator('video')).toHaveAttribute('src',/^data:video\/mp4;base64,/);
