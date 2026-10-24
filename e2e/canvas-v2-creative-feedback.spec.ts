@@ -119,23 +119,30 @@ test('feedback spans screens and canvas references; restoring a version preserve
   await frame1.getByLabel('Your goal').fill('Score 24 goals');
   const geometry1=await first.getAttribute('style'),geometry2=await second.getAttribute('style');
   const canonical=page.locator('[data-canvas-v2-canonical-flow]'), reference=await canonical.getAttribute('data-canvas-v2-canonical-flow');
-  const caption=page.getByTestId('canvas-v2-native-scene').getByText('GRAET · creative review',{exact:true}).first();
-  const select=async()=>{await page.getByRole('button',{name:/Zoom .*percent; fit content/}).click();await page.getByRole('button',{name:/^Fit all/}).click();await caption.click();};
-  const openHistory=async()=>{await select();await caption.click({button:'right'});await page.getByRole('menuitem',{name:'Version history',exact:true}).click();};
-  await select();await page.getByRole('button',{name:'Add to feedback',exact:true}).click();
-  await page.getByRole('button',{name:'Delete this comment',exact:true}).click();
-  const mark=async(box:{x:number;y:number;width:number;height:number}|null,comment:string)=>{
-    if(!box)throw Error('Feedback target missing');
-    await page.mouse.click(box.x+box.width/2,box.y+box.height/2);
-    await page.getByRole('textbox',{name:'Comment for marked area',exact:true}).fill(comment);
-    await page.getByRole('button',{name:'Add comment',exact:true}).click();
-  };
-  await mark(await frame1.getByRole('heading',{name:'Your next season.',exact:true}).boundingBox(),'Refine this headline only.');
-  await mark(await frame2.getByRole('heading',{name:'Your next season.',exact:true}).boundingBox(),'Refine this second headline only.');
+  const mode=page.getByRole('button',{name:'Design view',exact:true});
+  const fit=async()=>{const board=page.getByRole('region',{name:'Canvas workspace',exact:true});await board.focus();await board.press('Shift+Digit1');};
+  const back=async()=>{const button=page.getByRole('button',{name:'Back to canvas',exact:true});if(await button.isVisible())await button.click();};
+  const collapse=async()=>{const button=page.getByRole('button',{name:'Collapse North Star panel',exact:true});if(await button.isVisible())await button.click();};
+  const caption=page.getByTestId('canvas-v2-native-scene').getByText('GRAET · creative review',{exact:true});
+  const openHistory=async()=>{await collapse();await back();await fit();await caption.first().click({button:'right'});await page.getByRole('menuitem',{name:'Version history',exact:true}).click();};
+  // A person can accumulate precise comments across separate Design scopes.
+  // Each Done keeps earlier comments attached to the same pending request.
+  for(let index=0;index<2;index++){
+    await collapse();await back();
+    if(await mode.getAttribute('aria-pressed')!=='true')await mode.click();
+    await fit();await caption.nth(index).click();
+    await page.getByRole('tree',{name:'Editable layers'}).locator('[data-layer-selector="#headline"]').click();
+    await page.getByRole('button',{name:'Ask Northstar about selection',exact:true}).click();
+    await page.getByRole('textbox',{name:'Comment for marked area',exact:true}).fill('Refine only this selected headline.');
+    await page.getByRole('button',{name:'Done',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Review 1 comments',exact:true})).toHaveCount(index+1);
+  }
+  await collapse();await back();await fit();
   const referenceLeaf=canonical.getByRole('img',{name:'Landing',exact:true});
-  await mark(await referenceLeaf.boundingBox(),'Keep this inspiration reference unchanged.');
+  await referenceLeaf.click();await page.getByRole('button',{name:'Give feedback on selection',exact:true}).click();
+  await page.getByRole('textbox',{name:'Comment for marked area',exact:true}).fill('Keep this reference unchanged.');
   await page.getByRole('button',{name:'Done',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Review 3 comments',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Review 1 comments',exact:true})).toHaveCount(3);
   await send('feedback collection');
   await expect(page.getByText('Refined every tagged screen detail together and retained the tagged canvas reference.',{exact:true})).toBeVisible({timeout:90000});
   await expect(frame1.getByRole('heading',{name:'Refined detail 1',exact:true})).toBeVisible();

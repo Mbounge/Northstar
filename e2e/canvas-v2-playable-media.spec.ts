@@ -33,11 +33,12 @@ test("video is a clean native frame and Space toggles playback without moving or
   const revision = await scene.getAttribute("data-revision-id");
   const video = scene.locator("video");
   const workspace = page.getByRole("region",{name:"Canvas workspace",exact:true});
+  await expect.poll(()=>video.evaluate(v=>(v as HTMLVideoElement).paused)).toBe(false);
   await workspace.focus();
   await workspace.press("Space");
-  await expect.poll(()=>video.evaluate(v=>(v as HTMLVideoElement).paused)).toBe(false);
-  await workspace.press("Space");
   await expect.poll(()=>video.evaluate(v=>(v as HTMLVideoElement).paused)).toBe(true);
+  await workspace.press("Space");
+  await expect.poll(()=>video.evaluate(v=>(v as HTMLVideoElement).paused)).toBe(false);
   expect(await scene.getAttribute("data-revision-id")).toBe(revision);
   expect(await media.boundingBox()).toEqual(geometry);
   await page.getByRole("button",{name:"Undo canvas action",exact:true}).click();

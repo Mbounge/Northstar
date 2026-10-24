@@ -3666,7 +3666,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const beginPrimitiveDrag = (event: ReactDragEvent<HTMLElement>, primitive: CanvasV2ManualPrimitive, shapeVariant?: CanvasV2ShapeVariant, connectorVariant?: CanvasV2ConnectorVariant) => {
-    setCanvasView("design");setScreenEditNodeId(undefined);
+    // Do not move/unmount a native HTML drag's source while Chromium owns it.
+    // Enter Design after the drop, keeping the artwork under the pointer.
     const payload = { primitive, ...(shapeVariant ? { shapeVariant } : {}), ...(connectorVariant ? { connectorVariant } : {}) };
     primitiveDragRef.current = payload;
     setPrimitiveDrag(payload);
@@ -3700,10 +3701,14 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
 
   const dropOnCanvas = (event: ReactDragEvent<HTMLElement>) => {
     event.preventDefault();
-    if(canvasView === "preview")return;
+    if(canvasView === "preview"&&!primitiveDragRef.current)return;
     event.stopPropagation();
     if (!engine.interactionReady || engine.applyingManualEdit) return;
     const origin = workspacePoint(event.clientX, event.clientY);
+    if(primitiveDragRef.current){
+      previousCameraFrame.current=undefined;
+      setCanvasView("design");setScreenEditNodeId(undefined);
+    }
     const imageFiles = Array.from(event.dataTransfer.files).filter((file) => (file.type.startsWith("image/") || file.type.startsWith("video/")));
     clearPrimitiveDrag();
     if (imageFiles.length) {
@@ -4108,12 +4113,15 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const selectedScreenDescriptor=useMemo(()=>selectedScreen?parseCanvasV2Screen(selectedScreen):undefined,[selectedScreen]);
   useEffect(()=>{
     if(canvasView!=='design')return;
+    // Selecting for a context menu must leave its actions available instead
+    // of entering the app and dismissing the menu before a choice is made.
+    if(objectMenu)return;
     // Keep the host pointer surface stable until its held gesture ends.
     // Enter the app's internal layers after release, never during a drag.
     if(directGestureRef.current||drawingGestureRef.current||connectorGestureRef.current)return;
     const focus=!collaborationReadOnly&&selectedElements.length===1&&!selectedElement?.locked&&selectedScreenDescriptor&&!selectedScreenDescriptor.simulation?selectedElement?.nodeId:undefined;
     setScreenEditNodeId(focus);
-  },[canvasView,collaborationReadOnly,humanEditing,selectedElements.length,selectedElement?.nodeId,selectedElement?.locked,selectedScreenDescriptor]);
+  },[canvasView,objectMenu,collaborationReadOnly,humanEditing,selectedElements.length,selectedElement?.nodeId,selectedElement?.locked,selectedScreenDescriptor]);
   const changeCanvasView = async (next:'design'|'preview') => {
     const intent=++viewIntentRef.current;
     if(next===canvasView)return;

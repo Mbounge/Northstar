@@ -14,6 +14,7 @@ function scene(page: Page) {
 }
 
 async function openCleanCanvas(page: Page, path: "/canvas-v2-e2e" | "/canvas") {
+  await page.setViewportSize({width:1512,height:1000});
   await page.goto(path);
   await page.evaluate(() => window.localStorage.clear());
   await page.reload();
@@ -47,7 +48,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     expect(Math.abs((paintedRectangle!.x + paintedRectangle!.width / 2) - (bounds!.x + rectangleDrop.x))).toBeLessThan(10);
     expect(Math.abs((paintedRectangle!.y + paintedRectangle!.height / 2) - (bounds!.y + rectangleDrop.y))).toBeLessThan(10);
 
-    await app(page).getByRole("button", { name: "shapes" }).click();
+    await app(page).getByRole("button", { name: "More creation tools", exact:true }).click();
     await app(page).getByRole("button", { name: "Diamond", exact: true }).dragTo(board, { targetPosition: { x: rectangleDrop.x + 230, y: rectangleDrop.y + 150 } });
     const shapes = scene(page).locator('[data-canvas-v2-primitive="shape"]');
     await expect(shapes).toHaveCount(2);
@@ -115,12 +116,14 @@ test("notes, lines, drawings and local images are separate selectable objects", 
   await openCleanCanvas(page, "/canvas-v2-e2e");
   await expect(workspace(page)).toHaveAttribute("data-canvas-v2-cursor", "select");
   await expect.poll(() => workspace(page).evaluate((element) => getComputedStyle(element).cursor)).toContain("url");
-  await app(page).getByRole("button", { name: "shapes" }).click();
+  await app(page).getByRole("button", { name: "More creation tools", exact:true }).click();
   await app(page).getByRole("tab", { name: "Basics" }).click();
   await app(page).getByRole("button", { name: "Note", exact: true }).click();
+  await placeActivatedTool(page);
   await app(page).getByRole("tab", { name: "Diagram" }).click();
   await expect(app(page).getByRole("button", { name: "Table", exact: true })).toHaveCount(0);
   await app(page).getByRole("button", { name: /^Divider/ }).click();
+  await placeActivatedTool(page);
   await app(page).getByRole("tab", { name: "Media" }).click();
   await app(page).getByRole("button", { name: "Drawing", exact: true }).click();
   await expect(app(page).getByRole("button", { name: "Draw freehand" })).toHaveAttribute("aria-pressed", "true");
@@ -169,11 +172,13 @@ test("notes, lines, drawings and local images are separate selectable objects", 
 test("a canvas screenshot copies as a PNG that other apps can paste", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await openCleanCanvas(page, "/canvas-v2-e2e");
+  await app(page).getByRole("button",{name:"Design view",exact:true}).click();
   await page.getByLabel("Choose images for the canvas").setInputFiles("public/northstar/design-references/evidence-canvas.png");
   const screenshot = scene(page).locator('img[data-canvas-v2-local-image="true"]');
   await expect(screenshot).toHaveCount(1);
   await screenshot.click({ button: "right" });
   await app(page).getByRole("menuitem", { name: "Copy image" }).click();
+  await expect.poll(()=>page.evaluate(async()=> (await navigator.clipboard.read()).some(item=>item.types.includes('image/png')))).toBe(true);
   const copied = await page.evaluate(async () => {
     const items = await navigator.clipboard.read();
     const image = items.find((item) => item.types.includes("image/png"));
@@ -187,18 +192,20 @@ test("a canvas screenshot copies as a PNG that other apps can paste", async ({ p
 
 test("connector library exposes straight, arrow and independently adjustable curve variants", async ({ page }) => {
   await openCleanCanvas(page, "/canvas-v2-e2e");
-  await app(page).getByRole("button", { name: "shapes" }).click();
+  await app(page).getByRole("button", { name: "More creation tools", exact:true }).click();
   await app(page).getByRole("tab", { name: "Connectors" }).click();
   await expect(app(page).getByRole("button", { name: /^Straight/ })).toBeVisible();
   await expect(app(page).getByRole("button", { name: /^Arrow/ })).toBeVisible();
   await expect(app(page).getByRole("button", { name: /^Curve/ })).toBeVisible();
 
   await app(page).getByRole("button", { name: /^Curve/ }).click();
+  await placeActivatedTool(page);
   const curve = scene(page).locator('[data-canvas-v2-connector-variant="curve"]');
   await expect(curve).toHaveCount(1);
   await expect(app(page).getByRole("button", { name: /^Move connector (start|end)/ })).toHaveCount(2);
   const curveHandle = app(page).getByRole("button", { name: "Adjust connector curve" });
   await expect(curveHandle).toBeVisible();
+  await curveHandle.hover();
   const before = await curve.getAttribute("data-canvas-v2-connector-control-y");
   const handleBounds = await curveHandle.boundingBox();
   await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
@@ -208,6 +215,7 @@ test("connector library exposes straight, arrow and independently adjustable cur
   await expect.poll(() => curve.getAttribute("data-canvas-v2-connector-control-y")).not.toBe(before);
 
   const endpointHandle = app(page).getByRole("button", { name: /^Move connector start/ });
+  await endpointHandle.hover();
   const endpointBounds = await endpointHandle.boundingBox();
   await page.mouse.move(endpointBounds!.x + endpointBounds!.width / 2, endpointBounds!.y + endpointBounds!.height / 2);
   await page.mouse.down();
@@ -322,7 +330,7 @@ test("semantic paint and line controls persist hue, transparency and line style"
   const line = app(page).getByTestId("canvas-v2-line-palette");
   await expect(line).toBeVisible();
   await line.getByRole("button", { name: "Dashed line" }).click();
-  await line.getByRole("button", { name: "Use Blue line" }).click();
+  await line.getByRole("button", { name: "Use Blue", exact:true }).click();
   await expect(rectangle).toHaveCSS("border-style", "dashed");
   await expect(rectangle).toHaveCSS("border-width", "2px");
   await expect(rectangle).toHaveCSS("border-color", "rgb(66, 168, 238)");
@@ -343,7 +351,7 @@ test("audit closure: Escape commits text and copy survives deletion with reversi
   await text.dblclick();
   await expect(text).toHaveAttribute("contenteditable", "true");
   await text.fill("Escape keeps my Northstar idea");
-  await text.press("Escape");
+  await page.keyboard.press("Escape");
   const edited = scene(page).getByText("Escape keeps my Northstar idea", { exact: true });
   await expect(edited).toBeVisible();
   await expect(edited).not.toHaveAttribute("contenteditable");
@@ -379,6 +387,7 @@ test("audit closure: deleting canonical evidence permits the next canvas edits",
   await app(page).getByRole("button", { name: "Send message", exact: true }).click();
   await expect(scene(page).getByRole("img", { name: "Landing", exact: true })).toHaveCount(1);
   await expect(app(page).getByTitle("Create Shape · drag to place")).toBeEnabled({ timeout: 60_000 });
+  await app(page).getByRole("button",{name:"Design view",exact:true}).click();
   await fitAllCanvas(page);
   const landing = scene(page).getByRole("img", { name: "Landing", exact: true });
   await landing.click({ button: "right" });
