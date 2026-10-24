@@ -1,4 +1,5 @@
 'use client';
+import { requireLiveScreenInteraction } from '@/lib/canvas-v2/screen-interaction-sequence';
 import {VISUAL_FEEDBACK_BATCH,assertVisualFeedbackSourcesCurrent} from '@/lib/canvas-v2/visual-feedback';
 import { captureValidationIsPending } from '@/lib/canvas-v2/capture-batch';
 import { retainSimulationSourceAssets } from '@/lib/canvas-v2/simulation-source-assets';
@@ -589,6 +590,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         });
       }
       if (action.name === 'canvas_screen_interact') {
+        requireLiveScreenInteraction(args.action,args.live);
         const revision = engine.readCommittedRevision();
         requireCodexCanvasReadRevision(readRevision.current, revision.id);
         const item = readCanvasV2Screens(revision.document.html).find(item => item.nodeId === args.nodeId);
@@ -596,7 +598,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (args.action === 'journey') {
           const result = await testCanvasV2ScreenJourney(item.nodeId, item.encoded, [...revision.evidence, ...assets.current.values()], args.steps, args.motionPreference === 'reduce' ? 'reduce' : 'no-preference', signal);
           if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this journey check. Read it again.');
-          return [{ type: 'input_text', text: JSON.stringify({ verification: screenJourneyOutcome(result.state), nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), journeyLabel:string(args.label).slice(0,80),state: result.state, note: 'Observed journey in a fresh isolated copy of the current authored source. Motion preference is simulated for CSS media queries and matchMedia. No live user state or canvas geometry was changed. Focus is suppressed and audio is muted in the private copy. Requested step delays can advance CSS/Web Animation timelines to compensate offscreen throttling; JavaScript timers use actual elapsed time. This checks the supplied journey only, not keyboard/focus behavior, every path or frame rate.' }) }, { type: 'input_image', image_url: result.image }];
+          return [{ type: 'input_text', text: JSON.stringify({ verification: screenJourneyOutcome(result.state), nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), journeyLabel:string(args.label).slice(0,80),journeyCaptures:result.captures.map(({label,step,passed,state})=>({label,step,passed,state})),state: result.state, note: 'Observed journey in a fresh isolated copy of the current authored source. Motion preference is simulated for CSS media queries and matchMedia. No live user state or canvas geometry was changed. Focus is suppressed and audio is muted in the private copy. Requested step delays can advance CSS/Web Animation timelines to compensate offscreen throttling; JavaScript timers use actual elapsed time. This checks the supplied journey only, not keyboard/focus behavior, every path or frame rate.' }) }, { type: 'input_image', image_url: result.image }, ...result.captures.flatMap(capture=>[{type:'input_text',text:JSON.stringify({nodeId:item.nodeId,sourceVersion:canvasV2FeedbackFingerprint(item.encoded),journeyLabel:string(args.label).slice(0,80),journeyCheckpoint:{label:capture.label,step:capture.step,passed:capture.passed},state:capture.state,note:'Actual settled pixels captured at this named step of the same private journey, before subsequent actions. Review this state without replaying an already-proven path.'})},{type:'input_image',image_url:capture.image}])];
         }
         const result = await inspectCanvasV2Screen(item.nodeId, item.encoded, { action: string(args.action) as ScreenAction['action'], selector: typeof args.selector === 'string' ? args.selector : undefined, value: typeof args.value === 'string' ? args.value : undefined, x: typeof args.x === 'number' ? args.x : undefined, y: typeof args.y === 'number' ? args.y : undefined, drag: args.action === 'drag' ? args.drag as ScreenAction['drag'] : undefined }, signal);
         if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this screen action. Read it again.');

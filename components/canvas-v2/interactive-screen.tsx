@@ -112,7 +112,17 @@ export async function testCanvasV2ScreenJourney(nodeId: string, encoded: string,
       window.addEventListener('message', receive); signal.addEventListener('abort', abort, { once: true });
       document.body.appendChild(frame);
     });
-    return await rasterizeScreenSnapshot(nodeId, encoded, signal, result, true);
+    const { journeyCaptures: rawCaptures, ...finalSnapshot } = result;
+    const final = await rasterizeScreenSnapshot(nodeId, encoded, signal, finalSnapshot, true);
+    const captures: Array<{label:string;step:number;passed:boolean;image:string;state:ScreenResult}> = [];
+    for (const raw of Array.isArray(rawCaptures) ? rawCaptures : []) {
+      signal.throwIfAborted();
+      const capture = raw as {label:string;step:number;passed:boolean;state:ScreenResult};
+      const pixels = await rasterizeScreenSnapshot(nodeId, encoded, signal, capture.state, true);
+      captures.push({label:capture.label,step:capture.step,passed:capture.passed,...pixels});
+    }
+    if (final.image.length + captures.reduce((size, capture) => size + capture.image.length, 0) > 8_000_000) throw new Error('Journey captures exceed the transport budget. Use fewer named states or a smaller viewport.');
+    return {...final,captures};
   } finally { frame.remove(); }
 }
 

@@ -14,6 +14,9 @@ export type ScreenInteractionStep = {
   expectedValue?: string;
   expectedVisibleSelector?: string;
   expectedHiddenSelector?: string;
+  /** Retain this settled state's pixels without replaying the journey. */
+  capture?: string;
+  expectedDisabled?: boolean;
   /** Assert the finite numeric delta across this step (after - before). */
   expectedNumericChange?: ScreenNumericChangeExpectation;
 };
@@ -34,6 +37,14 @@ export type ScreenNumericChangeExpectation = {
   min: number;
   max: number;
 };
+
+/** Author verification defaults to private journeys. Operating the person's
+ * current preview is a distinct, explicit tool choice, never test cleanup. */
+export function requireLiveScreenInteraction(action: unknown, live: unknown): void {
+  if (['click','fill','scroll','drag'].includes(String(action)) && live !== true) {
+    throw new Error('Verification must preserve the live preview. Use action=journey with named captures for testing. Set live=true only to carry out a user-requested action in their current preview; never reset live inputs to tidy up after verification.');
+  }
+}
 
 /** Read a dynamic numeric DOM value without treating text or a static screenshot as state. */
 export function readScreenNumericValue(element: Element | null | undefined, attribute: string): number | undefined {
@@ -68,6 +79,7 @@ export function screenMotionTargetCropRect(rectangles:unknown[],viewportWidth:nu
 export function validateScreenInteractionSequence(input: unknown): ScreenInteractionStep[] {
   if (!Array.isArray(input) || !input.length || input.length > 20) throw new Error('Choose 1–20 steps for this product journey.');
   let duration = 0;
+  const captures = new Set<string>();
   return input.map(raw => {
     const step = raw as ScreenInteractionStep;
     if (!step || !['click', 'fill', 'scroll', 'wait', 'drag'].includes(step.action)) throw new Error('Use click, fill, scroll, wait or drag journey steps.');
@@ -93,6 +105,11 @@ export function validateScreenInteractionSequence(input: unknown): ScreenInterac
     if (['expectedText', 'absentText', 'expectedVisibleSelector', 'expectedHiddenSelector'].some(key => typeof step[key as keyof ScreenInteractionStep] === 'string' && !String(step[key as keyof ScreenInteractionStep]).trim())) throw new Error('Text expectations must identify an observable state.');
     if (['click', 'fill', 'drag'].includes(step.action) && !step.selector?.trim()) throw new Error('Choose a visible control, field or drag target for this step.');
     if (step.expectedValue !== undefined && !step.selector?.trim()) throw new Error('Choose the field whose saved value should be checked.');
+    if (step.expectedDisabled !== undefined && (typeof step.expectedDisabled !== 'boolean' || !step.selector?.trim())) throw new Error('Disabled-state assertions need a selector and boolean expectedDisabled.');
+    if (step.capture !== undefined) {
+      if (typeof step.capture !== 'string' || !step.capture.trim() || step.capture.length > 80 || captures.has(step.capture) || captures.size >= 6) throw new Error('Use at most six unique, concise journey capture labels.');
+      captures.add(step.capture);
+    }
     if (step.expectedNumericChange !== undefined) {
       const expectation = step.expectedNumericChange;
       if (!expectation || typeof expectation.selector !== 'string' || !expectation.selector.trim() || expectation.selector.length > 1000
@@ -103,7 +120,7 @@ export function validateScreenInteractionSequence(input: unknown): ScreenInterac
       }
     }
     for (const key of ['x', 'y'] as const) if (step[key] !== undefined && (!Number.isFinite(step[key]) || Math.abs(step[key]!) > 100000)) throw new Error('Use finite scroll positions.');
-    return { action: step.action, delayMs, ...(drag ? { drag } : {}), ...Object.fromEntries(['selector', 'value', 'x', 'y', 'expectedText', 'absentText', 'expectedValue', 'expectedVisibleSelector', 'expectedHiddenSelector', 'expectedNumericChange'].filter(key => step[key as keyof ScreenInteractionStep] !== undefined).map(key => [key, step[key as keyof ScreenInteractionStep]])) };
+    return { action: step.action, delayMs, ...(drag ? { drag } : {}), ...Object.fromEntries(['selector', 'value', 'x', 'y', 'expectedText', 'absentText', 'expectedValue', 'expectedVisibleSelector', 'expectedHiddenSelector', 'expectedNumericChange', 'expectedDisabled', 'capture'].filter(key => step[key as keyof ScreenInteractionStep] !== undefined).map(key => [key, step[key as keyof ScreenInteractionStep]])) };
   });
 }
 

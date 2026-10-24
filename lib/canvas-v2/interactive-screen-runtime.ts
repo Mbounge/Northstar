@@ -612,7 +612,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         if(command.action==='test-sequence'){
           if(!testMotionPreference)throw Error('Journey checks need a private test copy.');
           await waitTrustedRuntime();
-          const steps=(${validateScreenInteractionSequence.toString()})(command.steps),readNumericJourneyValue=(${readScreenNumericValue.toString()}),numericJourneyResult=(${screenNumericChangeResult.toString()}),trace=[],started=performance.now(),journeyAnimations=new Map();let journeyTime=0;
+          const steps=(${validateScreenInteractionSequence.toString()})(command.steps),readNumericJourneyValue=(${readScreenNumericValue.toString()}),numericJourneyResult=(${screenNumericChangeResult.toString()}),trace=[],captures=[],started=performance.now(),journeyAnimations=new Map();let journeyTime=0;
           const tickJourney=()=>{void document.body.offsetHeight;advanceJourneyMotion(document.getAnimations().filter(a=>a.effect instanceof KeyframeEffect&&(a.currentTime===null||typeof a.currentTime==='number')),journeyTime,journeyAnimations)};
           for(const [index,step] of steps.entries()){
             try {
@@ -629,6 +629,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
             tickJourney();
             if(step.delayMs){await new Promise(resolve=>setTimeout(resolve,step.delayMs));journeyTime+=step.delayMs;tickJourney();}
             void document.body.offsetHeight;
+            if(step.capture)await settle();
             const state=inspect(),text=state.text;
             const target=step.expectedVisibleSelector?document.querySelector(step.expectedVisibleSelector):undefined, hidden=step.expectedHiddenSelector?document.querySelector(step.expectedHiddenSelector):undefined;
             const visibleTarget=step.expectedVisibleSelector?{selector:step.expectedVisibleSelector,visible:Boolean(target&&visible(target)),text:target?.innerText||target?.textContent||'',insideNavigation:Boolean(target?.closest('nav,[role="navigation"],[role="tablist"]')),containsTrigger:Boolean(target&&step.selector&&target.contains(document.querySelector(step.selector)))}:undefined;
@@ -638,13 +639,14 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
             const numericDelta=numericResult?.delta;
             const numericChangePassed=!numericExpectation||numericResult?.passed===true;
             const observedText=visibleTarget?visibleTarget.text:text;
-            const passed=(!visibleTarget||visibleTarget.visible)&&(!step.expectedHiddenSelector||!hidden||!visible(hidden))&&(step.expectedText===undefined||observedText.includes(step.expectedText))&&(step.absentText===undefined||!text.includes(step.absentText))&&(step.expectedValue===undefined||(el&&visible(el)&&el.value===step.expectedValue))&&numericChangePassed&&!state.errors.length&&!state.overflow.horizontal&&!state.hiddenPainted.length;
-            trace.push({step:index+1,action:step.action,selector:step.selector,gesture,expectedText:step.expectedText,absentText:step.absentText,expectedValue:step.expectedValue,actualValue:el?.value,expectedNumericChange:numericExpectation,numericBefore,numericAfter,numericDelta,numericChangePassed,visibleTargetBefore,visibleTarget,expectedHiddenSelector:step.expectedHiddenSelector,passed,actualElapsedMs:performance.now()-started,text:text.slice(0,4000),scroll:state.scroll,scrollRegions:state.scrollRegions,components:state.components,navigationClearance:state.navigationClearance,controls:state.controls.slice(0,30),errors:state.errors});
+            const passed=(!visibleTarget||visibleTarget.visible)&&(!step.expectedHiddenSelector||!hidden||!visible(hidden))&&(step.expectedText===undefined||observedText.includes(step.expectedText))&&(step.absentText===undefined||!text.includes(step.absentText))&&(step.expectedValue===undefined||(el&&visible(el)&&el.value===step.expectedValue))&&(step.expectedDisabled===undefined||el&&visible(el)&&typeof el.disabled==='boolean'&&el.disabled===step.expectedDisabled)&&numericChangePassed&&!state.errors.length&&!state.overflow.horizontal&&!state.hiddenPainted.length;
+            trace.push({step:index+1,action:step.action,selector:step.selector,gesture,expectedText:step.expectedText,absentText:step.absentText,expectedValue:step.expectedValue,actualValue:el?.value,expectedDisabled:step.expectedDisabled,actualDisabled:el?.disabled,capture:step.capture,expectedNumericChange:numericExpectation,numericBefore,numericAfter,numericDelta,numericChangePassed,visibleTargetBefore,visibleTarget,expectedHiddenSelector:step.expectedHiddenSelector,passed,actualElapsedMs:performance.now()-started,text:text.slice(0,4000),scroll:state.scroll,scrollRegions:state.scrollRegions,components:state.components,navigationClearance:state.navigationClearance,controls:state.controls.slice(0,30),errors:state.errors});
+            if(step.capture)captures.push({label:step.capture,step:index+1,passed,state:snapshot()});
             if(!passed)break;
             }catch(error){const state=inspect();trace.push({step:index+1,action:step.action,selector:step.selector,gesture:error?.gesture,passed:false,failure:String(error),actualElapsedMs:performance.now()-started,text:state.text.slice(0,4000),controls:state.controls.slice(0,30),errors:state.errors,note:'This copy starts from the initial saved screen. Open the relevant view before filling; allow its transition to make fields reachable with delayMs when needed. An unreachable field is not an unsupported field type.'});break;}
           }
           await settle();
-          parent.postMessage({protocol,token,requestId,result:{...snapshot(),journey:{mode:'isolated-copy',motionClock:'CSS/Web Animation timelines advance by requested step delays when offscreen playback is throttled. JavaScript timers use actual elapsed time; this is not live playback or frame-rate evidence.',motionPreference:testMotionPreference,focusSuppressed:true,audioMuted:audioIsolation?.audioMuted??false,audioIsolation:audioIsolation?{...audioIsolation}:null,passed:trace.length===steps.length&&trace.every(step=>step.passed)&&!errors.length,steps:trace,requestedStepCount:steps.length}}},'*');return;
+          parent.postMessage({protocol,token,requestId,result:{...snapshot(),journeyCaptures:captures,journey:{mode:'isolated-copy',motionClock:'CSS/Web Animation timelines advance by requested step delays when offscreen playback is throttled. JavaScript timers use actual elapsed time; this is not live playback or frame-rate evidence.',motionPreference:testMotionPreference,focusSuppressed:true,audioMuted:audioIsolation?.audioMuted??false,audioIsolation:audioIsolation?{...audioIsolation}:null,passed:trace.length===steps.length&&trace.every(step=>step.passed)&&!errors.length,steps:trace,requestedStepCount:steps.length}}},'*');return;
         }
         if(command.action==='live-motion'){
           await waitTrustedRuntime();

@@ -1,8 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readScreenNumericValue, screenMotionTargetCropRect, screenNumericChangeResult, validateScreenInteractionSequence } from '../lib/canvas-v2/screen-interaction-sequence';
+import { readScreenNumericValue, requireLiveScreenInteraction, screenMotionTargetCropRect, screenNumericChangeResult, validateScreenInteractionSequence } from '../lib/canvas-v2/screen-interaction-sequence';
 import { advanceScreenJourneyMotion } from '../lib/canvas-v2/screen-motion-timeline';
 import { signalCanvasV2ScreenRuntimeReady } from '../lib/canvas-v2/interactive-screen-runtime';
+
+test('verification cannot silently mutate the live preview',()=>{
+ for(const action of ['click','fill','scroll','drag']) {
+  for(const value of [undefined,false,'true'])assert.throws(()=>requireLiveScreenInteraction(action,value),/preserve the live preview/);
+  assert.doesNotThrow(()=>requireLiveScreenInteraction(action,true));
+ }
+ for(const action of ['inspect','journey'])assert.doesNotThrow(()=>requireLiveScreenInteraction(action,undefined));
+});
+
+test('one journey can retain named intermediate states and check a disabled boundary without clicking it',()=>{
+ const steps=validateScreenInteractionSequence([
+  {action:'click',selector:'#reserve',expectedText:'Enter your name',capture:'validation'},
+  {action:'wait',selector:'#plus',expectedDisabled:true,capture:'four-seat-boundary'},
+  {action:'click',selector:'#reserve',expectedText:'Reserved',capture:'confirmation'},
+  {action:'click',selector:'#edit'},
+  {action:'wait',selector:'#name',expectedValue:'Casey',capture:'edit-return'},
+ ]);
+ assert.equal(steps[1].expectedDisabled,true);assert.equal(steps[2].capture,'confirmation');
+ assert.throws(()=>validateScreenInteractionSequence([{action:'wait',expectedDisabled:true}]),/selector/);
+ assert.throws(()=>validateScreenInteractionSequence([{action:'wait',capture:'same'},{action:'wait',capture:'same'}]),/unique/);
+ assert.throws(()=>validateScreenInteractionSequence(Array.from({length:7},(_,i)=>({action:'wait',capture:String(i)}))),/six/);
+});
 
 test('runtime readiness waits for parser-completed authored initialization and announces once', async () => {
  const document=Object.assign(new EventTarget(),{readyState:'loading'}),order:string[]=[];

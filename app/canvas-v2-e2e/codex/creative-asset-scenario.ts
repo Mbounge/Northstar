@@ -46,7 +46,7 @@ export class CreativeAssetScenario {
       this.stage = 'review'; this.peer.tool('canvas_review', { nodeId: this.nodeId }); return;
     }
     if(this.stage==='play'){if((value.videos as JsonObject[]??[]).some(video=>video.loaded&&video.paused===false))this.peer.finish('The uploaded video is retained, inspected, rendered and playing inside the interactive screen.');else this.peer.finish('Asset check failed: video did not play');return;}
-    if(this.video){if(!parts.some(part=>part.type==='inputImage')||!(object(value.state).videos as JsonObject[]??[]).some(video=>video.loaded)){this.peer.finish('Asset check failed: video frame missing');return;}this.stage='play';this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'click',selector:'#play'});return;}
+    if(this.video){if(!parts.some(part=>part.type==='inputImage')||!(object(value.state).videos as JsonObject[]??[]).some(video=>video.loaded)){this.peer.finish('Asset check failed: video frame missing');return;}this.stage='play';this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,live:true,action:'click',selector:'#play'});return;}
     if (parts.some(part => part.type === 'inputImage')) this.peer.finish(this.gif ? 'The retained GIF is loaded inside the interactive screen.' : 'The native canvas image is retained, inspected and loaded inside the interactive screen.');
     else this.peer.finish('Asset check failed: live review pixels missing');
   }

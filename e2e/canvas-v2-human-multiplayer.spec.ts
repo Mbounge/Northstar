@@ -307,6 +307,19 @@ test('a shared in-app text/style edit preserves each peer private input and Java
       await expect(frame.getByRole('textbox', { name: 'Your draft', exact: true })).toHaveValue(name + ' private unsaved runtime draft');
       await expect(frame.locator('#status')).toHaveText('Saved 1 · ' + name + ' saved runtime draft');
     }
+    // Moving a running app must retain the same iframe and its private JS
+    // closure as well as its text fields, on both accounts.
+    await alice.getByRole('button', { name: 'Back to canvas', exact: true }).click();
+    const beforeX=parseFloat((await geometry(alice,'journal-a'))[0]);
+    const caption=await object(alice,'journal-a').locator('[title="Drag to move · double-click or right-click to edit design"]').boundingBox();
+    if(!caption)throw new Error('The screen move handle is not visible');
+    await a.locator('body').evaluate(el=>{el.dataset.continuityMarker='alice-running';});
+    await b.locator('body').evaluate(el=>{el.dataset.continuityMarker='bob-running';});
+    await alice.mouse.move(caption.x+caption.width/2,caption.y+caption.height/2);
+    await alice.mouse.down();await alice.mouse.move(caption.x+caption.width/2+30,caption.y+caption.height/2,{steps:8});await alice.mouse.up();await waitSaved(alice);
+    await expect.poll(async()=>parseFloat((await geometry(bob,'journal-a'))[0])).toBeGreaterThan(beforeX+10);
+    await expect(a.locator('body')).toHaveAttribute('data-continuity-marker','alice-running');
+    await expect(b.locator('body')).toHaveAttribute('data-continuity-marker','bob-running');
     await alice.getByRole('button', { name: 'Design view', exact: true }).click();
     for (const [frame, name] of [[a, 'Alice'], [b, 'Bob']] as const) {
       await frame.getByRole('button', { name: 'Save draft', exact: true }).click();

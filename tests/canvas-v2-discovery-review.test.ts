@@ -24,6 +24,31 @@ const goodDesignDirection = () => ({
   visualIdentity: 'The visual choices form a specific identity grounded in the brief.',
 });
 const tick = () => new Promise(resolve => setTimeout(resolve, 25));
+test('large canvas source cannot truncate measured scope readback and named journey states survive focused review',async()=>{
+  const {productReviewBatches}=await import('../lib/canvas-v2/codex-app-server/discovery-review');
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  context.user([{type:'text',text:'Correct the workshop date and preserve the other objects.',text_elements:[]}]);
+  const observation={nodes:[{nodeId:'note',x:100,y:200,width:300,height:80}],connectors:[]};
+  context.tool('canvas_read',{},[text({document:{html:'x'.repeat(100000),css:''},screens:[{nodeId:'screen',sourceVersion:'v1'}],observation})]);
+  context.tool('canvas_screen',{nodeId:'screen'},[text({nodeId:'screen',committed:true})]);
+  context.tool('canvas_review',{},[text({nodeId:'screen',sourceVersion:'v2',viewport:{width:640,height:560},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,default'}]);
+  const journey={passed:true,steps:[{step:1,action:'click',passed:true,expectedText:'Reserved'},{step:2,action:'click',passed:true}]};
+  context.tool('canvas_screen_interact',{nodeId:'screen',action:'journey',label:'reservation'},[
+    text({nodeId:'screen',sourceVersion:'v2',journeyLabel:'reservation',state:{journey},journeyCaptures:[{label:'confirmation',step:1,passed:true,state:{text:'Reserved'}}]}),{type:'inputImage',imageUrl:'data:image/png;base64,final'},
+    text({nodeId:'screen',sourceVersion:'v2',journeyLabel:'reservation',journeyCheckpoint:{label:'confirmation',step:1,passed:true},state:{text:'Reserved'}}),{type:'inputImage',imageUrl:'data:image/png;base64,confirmation'},
+  ]);
+  const [batch]=productReviewBatches(context.packet('Date corrected.')),packet=JSON.parse(batch.packet.text);
+  const read=packet.investigation.find((entry:string)=>entry.startsWith('Tool canvas_read:'));
+  const payload=JSON.parse(read.slice('Tool canvas_read: '.length));
+  assert.deepEqual(JSON.parse(payload.result[0].text).observation,observation);
+  assert.equal(JSON.parse(payload.result[0].text).document,undefined);
+  assert.equal(packet.productWork[0].interactions.length,1,'intermediate pixels must not overwrite the full successful journey');
+  assert.equal(packet.productWork[0].interactions[0].journey.passed,true);
+  const checkpoint=packet.imageDirectory.find((entry:{role:string})=>entry.role.endsWith(':checkpoint:confirmation'));
+  assert.equal(checkpoint.sourceVersion,'v2');assert.equal(checkpoint.captureRole,'journey-checkpoint');
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'screen',sourceVersion:'peer-v3'}]})]);
+  assert.equal(context.packet('').images.some(image=>image.type==='image'&&image.url.includes('confirmation')),false,'a peer source change invalidates intermediate pixels too');
+});
 test('reading an unrelated prototype during raster work does not create a product-quality task or draft warning',()=>{
   const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
   context.user([{type:'text',text:'Change only the photograph panel colour; preserve the workshop.',text_elements:[]}]);

@@ -142,29 +142,36 @@ export class CreativeScreenScenario {
     }
   }
   private checkJourney(result: JsonObject, parts: JsonObject[], value: JsonObject) {
-    if (!result.success || value.committed === false) { this.peer.finish('Journey check failed: '+string(parts[0]?.text));return; }
+    const expectedLiveRejection=this.step===2&&!result.success&&string(parts[0]?.text).includes('Verification must preserve the live preview');
+    if ((!result.success&&!expectedLiveRejection) || value.committed === false) { this.peer.finish('Journey check failed: '+string(parts[0]?.text));return; }
     const steps=(preference:string)=>[
       {action:'wait',expectedText:preference==='reduce'?'Calm motion':'Expressive motion',delayMs:1000},
       {action:'click',selector:'#toggle'}, {action:'click',selector:'#toggle',delayMs:10}, {action:'click',selector:'#toggle',delayMs:20},
-      {action:'click',selector:'#edit'}, {action:'fill',selector:'#goal',value:'Twelve goals'}, {action:'click',selector:'#save',expectedText:'Twelve goals'},
-      {action:'click',selector:'#edit'}, {action:'wait',selector:'#goal',expectedValue:'Twelve goals',delayMs:400},
+      {action:'click',selector:'#edit'}, {action:'fill',selector:'#goal',value:'Twelve goals'}, {action:'click',selector:'#save',expectedText:'Twelve goals',capture:'saved-goal'},
+      {action:'click',selector:'#edit'}, {action:'wait',selector:'#goal',expectedValue:'Twelve goals',delayMs:400,capture:'reopened-editor'},
     ];
     switch(this.step++){
       case 0:this.peer.tool('canvas_screen',{title:'Product journey checks',width:390,height:844,html:'<main><header><h1>Your season</h1><h2 id="mode"></h2></header><button id="toggle">Open details</button><section id="details" hidden><p>Ready to play</p></section><p id="saved">Ten goals</p><button id="edit">Edit goal</button><div id="editor" hidden><label>Your goal<input id="goal"></label><button id="save">Save goal</button></div></main>',css:'body{font-family:"Mona Sans",sans-serif}main{padding:28px}header{margin-bottom:24px}h1{font-size:30px}#mode{font-size:14px;font-weight:500}button{padding:14px;border:0;border-radius:12px;background:#7255e8;color:white;margin-bottom:14px}#details{padding:24px;background:#ece7fc;border-radius:16px;animation:reveal 300ms ease-out}input{display:block;padding:16px;font-size:16px;margin:12px 0}@keyframes reveal{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){#details{animation:none}#mode{font-weight:800}}',javascript:"let goal='Ten goals';const q=s=>document.querySelector(s);q('#mode').textContent=matchMedia('(prefers-reduced-motion: reduce)').matches?'Calm motion':'Expressive motion';q('#toggle').onclick=()=>{q('#details').hidden=!q('#details').hidden};q('#edit').onclick=()=>{q('#goal').value=goal;q('#editor').hidden=false;q('#goal').focus()};q('#save').onclick=()=>{goal=q('#goal').value;q('#saved').textContent=goal;q('#editor').hidden=true}",referenceAssetIds:[],summary:'Exercise isolated product journeys'});break;
       case 1:this.nodeId=string(value.nodeId);this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'click',selector:'#edit'});break;
-      case 2:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'fill',selector:'#goal',value:'User live goal'});break;
-      case 3:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'click',selector:'#save'});break;
-      case 4:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'journey',motionPreference:'no-preference',steps:steps('no-preference')});break;
-      case 5:case 6:{
-        const state=object(value.state),journey=object(state.journey),preference=this.step===6?'no-preference':'reduce';
+      case 2:if(!expectedLiveRejection){this.peer.finish('Journey check failed: a verification command changed the live preview');return;}this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,live:true,action:'click',selector:'#edit'});break;
+      case 3:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,live:true,action:'fill',selector:'#goal',value:'User live goal'});break;
+      case 4:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,live:true,action:'click',selector:'#save'});break;
+      case 5:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'journey',motionPreference:'no-preference',steps:steps('no-preference')});break;
+      case 6:case 7:{
+        const state=object(value.state),journey=object(state.journey),preference=this.step===7?'no-preference':'reduce';
         const mode=(state.components as JsonObject[]??[]).find(component=>component.selector==='#mode');
-        if(!(state.fonts as JsonObject[]??[]).some(font=>font.family==='Mona Sans'&&font.status==='loaded')||journey.passed!==true||journey.motionPreference!==preference||object(mode?.typography).fontWeight!==(preference==='reduce'?'800':'500')||parts.filter(part=>part.type==='inputImage').length!==1){this.peer.finish('Journey check failed: private assertions, CSS or JavaScript preference did not agree');return;}
-        if(this.step===6)this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'journey',motionPreference:'reduce',steps:steps('reduce')});
+        const captures=(Array.isArray(value.journeyCaptures)?value.journeyCaptures:[]).map(object);
+        const saved=object(captures[0]?.state),reopened=object(captures[1]?.state);
+        const capturedStates=captures.length===2&&captures[0].label==='saved-goal'&&captures[1].label==='reopened-editor'
+          &&string(saved.text).includes('Twelve goals')
+          &&(Array.isArray(reopened.controls)?reopened.controls:[]).map(object).some(control=>control.id==='goal'&&control.value==='Twelve goals');
+        if(!(state.fonts as JsonObject[]??[]).some(font=>font.family==='Mona Sans'&&font.status==='loaded')||journey.passed!==true||journey.motionPreference!==preference||object(mode?.typography).fontWeight!==(preference==='reduce'?'800':'500')||parts.filter(part=>part.type==='inputImage').length!==3||!capturedStates){this.peer.finish('Journey check failed: private assertions, named state pixels, CSS or JavaScript preference did not agree');return;}
+        if(this.step===7)this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'journey',motionPreference:'reduce',steps:steps('reduce')});
         else this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'inspect'});break;
       }
-      case 7:if(!string(value.text).includes('User live goal')||string(value.text).includes('Twelve goals')){this.peer.finish('Journey check failed: the user live mock data was changed');return;}this.peer.tool('canvas_read',{nodeId:this.nodeId});break;
-      case 8:this.peer.tool('canvas_screen',{nodeId:this.nodeId,css:'body{font-family:GraetMona,sans-serif}#mode{letter-spacing:0.4px}',summary:'Refine typography without resetting the user goal'});break;
-      case 9:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'inspect'});break;
+      case 8:if(!string(value.text).includes('User live goal')||string(value.text).includes('Twelve goals')){this.peer.finish('Journey check failed: the user live mock data was changed');return;}this.peer.tool('canvas_read',{nodeId:this.nodeId});break;
+      case 9:this.peer.tool('canvas_screen',{nodeId:this.nodeId,css:'body{font-family:GraetMona,sans-serif}#mode{letter-spacing:0.4px}',summary:'Refine typography without resetting the user goal'});break;
+      case 10:this.peer.tool('canvas_screen_interact',{nodeId:this.nodeId,action:'inspect'});break;
       default:if(!string(value.text).includes('User live goal')||!(value.components as JsonObject[]??[]).some(component=>component.selector==='#mode'&&object(component.typography).letterSpacing==='0.4px')){this.peer.finish('Journey check failed: stylesheet refinement reset mock state or missed the actual style');return;}this.peer.finish('Verified rapid reversals, save/reopen continuity and both motion preferences in private copies. The live user goal is unchanged.');
     }
   }
@@ -177,9 +184,9 @@ export class CreativeScreenScenario {
       case 1: this.nodeId = string(value.nodeId); this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'inspect' }); break;
       case 2:
         if ((value.controls as JsonObject[]).some(control => ['clipped','transparent','covered'].includes(string(control.id)))) { this.peer.finish('Reachability failed: hidden controls were listed as visible'); return; }
-        this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#clipped' }); break;
-      case 3: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#transparent' }); break;
-      case 4: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#covered' }); break;
+        this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, live:true,action: 'click', selector: '#clipped' }); break;
+      case 3: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, live:true,action: 'click', selector: '#transparent' }); break;
+      case 4: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, live:true,action: 'click', selector: '#covered' }); break;
       case 5: this.peer.tool('canvas_screen_motion_review', { nodeId: this.nodeId, triggerSelector: '#real' }); break;
       default:
         if (parts.filter(part => part.type === 'inputImage').length !== 3 || new Set(parts.filter(part => part.type === 'inputImage').map(part => part.imageUrl)).size !== 3) { this.peer.finish('Reachability failed: short transition was missed'); return; }

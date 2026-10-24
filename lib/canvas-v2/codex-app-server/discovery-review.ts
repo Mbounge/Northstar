@@ -195,7 +195,7 @@ export const DISCOVERY_REVIEW_INSTRUCTIONS = `You are an independent thinking pa
 
 Keep verification proportional to the latest requested change. A small wording/style refinement is not a new product build or a request to recertify every unchanged feature. Use current rendered pixels, the pre-edit baseline, relevant current-source journeys and sourceChangeReceipt together. A sourceChangeReceipt is the editor's exact comparison of the saved fields at commit time: unchanged.javascript establishes only that saved JavaScript field, not all HTML behaviour, visual fidelity or private runtime state. Do not demand a new export, workspace diff or repeated inspection to re-prove an unchanged field already measured by a matching sourceVersion receipt. Do request the missing comparison when no current receipt establishes a material preservation claim. Never use a receipt to waive a visible defect or failed interaction.
 
-Respect reviewCapabilities. Private screen journeys cannot exercise trusted keyboard/focus behaviour or native browser default gestures. An acknowledged unavailable check must stay explicitly unverified; do not repeatedly ask the author to perform it with the same unsupported tool, or turn it into a new blocking investigation merely because it was mentioned in a prior brief. Require repair of an observed accessibility defect and correction of unsupported success claims. A qualified completion may state the verified interactions and the genuine remaining limit without claiming that check passed. After a capture target proves unavailable, use the available current screen/object pixels and canvas_read geometry for the requested scope rather than repeating the same failed root capture. Distinguish the author's guarded mutation from concurrent teammate changes: preserve the current human work, and never restore an unrelated object to an older baseline just to make historical snapshots identical. Resolve prior mistaken or no-longer-needed work explicitly by its retained id; do not leave it open while asking for the same already-supplied evidence.
+Respect reviewCapabilities. Private screen journeys cannot exercise trusted keyboard/focus behaviour or native browser default gestures. An acknowledged unavailable check must stay explicitly unverified; do not repeatedly ask the author to perform it with the same unsupported tool, or turn it into a new blocking investigation merely because it was mentioned in a prior brief. Require repair of an observed accessibility defect and correction of unsupported success claims. A qualified completion may state the verified interactions and the genuine remaining limit without claiming that check passed. After a capture target proves unavailable, use the available current screen/object pixels and canvas_read geometry for the requested scope rather than repeating the same failed root capture. Distinguish the author's guarded mutation from concurrent teammate changes: preserve the current human work, and never restore an unrelated object to an older baseline just to make historical snapshots identical. A journey may include named captures of validation, confirmation and return states from the same execution. Inspect their current-source journey-checkpoint pixels alongside the parent journey assertions; do not ask for a replay merely because a state occurred before its final image. Resolve prior mistaken or no-longer-needed work explicitly by its retained id; do not leave it open while asking for the same already-supplied evidence.
 
 ${NORTHSTAR_COMPONENT_ASSET_REVIEW}
 
@@ -325,7 +325,10 @@ export class DiscoveryReviewContext {
         const value=object(JSON.parse(string(part.text)));
         if (value.reusableSource) value.reusableSource = { note: 'Original reusable implementation is available to the author; assess actual rendered/reference pixels independently.' };
         if(Array.isArray(value.screens))value.screens=value.screens.map(rawScreen=>{const screen=object(rawScreen),source=object(screen.source);return {...screen,...(typeof source.html==='string'?{source:{title:source.title,width:source.width,height:source.height,referenceAssetIds:source.referenceAssetIds,productIdentityId:source.productIdentityId,boundAssetIds:canvasV2ScreenBoundAssets(source as unknown as CanvasV2InteractiveScreen)}}:{})};});
-        if (value.document && typeof object(value.document).html==='string') { const document=object(value.document); value.document={...document,html:string(document.html).replace(/data-canvas-v2-screen="[A-Za-z0-9+/=]+"/g,'data-canvas-v2-screen="[isolated screen source omitted; current pixels supplied separately]"')}; }
+        // Strip source before the bounded history serialization, not only at
+        // final batching. Large documents otherwise consume the entire entry
+        // and silently cut off the measured geometry at its end.
+        delete value.document;
         return {...part,text:JSON.stringify(value)};
       }catch{return raw;}
     });
@@ -412,12 +415,18 @@ export class DiscoveryReviewContext {
         }
         if (name === 'canvas_screen_interact' && value.nodeId) {
           const id = string(value.nodeId), previous = this.productScreens.get(id), input = object(args), state = input.action === 'journey' ? object(value.state) : value;
-          if (previous) {
+          const checkpoint = object(value.journeyCheckpoint);
+          if (previous && !checkpoint.label) {
             const interactions = (Array.isArray(previous.interactions) ? previous.interactions : []).map(object);
             const key = JSON.stringify([input.action,input.selector,input.motionPreference,input.steps,input.label]);
-            this.productScreens.set(id, { ...previous, interactions: [...interactions.filter(check=>check.key!==key),{key,checkNumber:this.sequence,action:input.action,selector:input.selector,sourceVersion:value.sourceVersion,motionPreference:input.motionPreference,journey:state.journey,errors:state.errors,hiddenPainted:state.hiddenPainted,overflow:state.overflow,text:string(state.text).slice(0,4000),controls:state.controls,productData:state.productData,scroll:state.scroll,scrollRegions:state.scrollRegions,viewportLayout:state.viewportLayout,components:state.components,navigationClearance:state.navigationClearance,imageRole:input.action==='journey'?`screen:${id}:journey:${string(input.motionPreference)||'no-preference'}${value.journeyLabel?':'+encodeURIComponent(string(value.journeyLabel)):''}`:undefined}].slice(-24) });
+            this.productScreens.set(id, { ...previous, interactions: [...interactions.filter(check=>check.key!==key),{key,checkNumber:this.sequence,action:input.action,selector:input.selector,sourceVersion:value.sourceVersion,motionPreference:input.motionPreference,journey:state.journey,captures:value.journeyCaptures,errors:state.errors,hiddenPainted:state.hiddenPainted,overflow:state.overflow,text:string(state.text).slice(0,4000),controls:state.controls,productData:state.productData,scroll:state.scroll,scrollRegions:state.scrollRegions,viewportLayout:state.viewportLayout,components:state.components,navigationClearance:state.navigationClearance,imageRole:input.action==='journey'?`screen:${id}:journey:${string(input.motionPreference)||'no-preference'}${value.journeyLabel?':'+encodeURIComponent(string(value.journeyLabel)):''}`:undefined}].slice(-24) });
           }
-          if(input.action==='journey'){captureNode=id;nextImageKey=`screen:${id}:journey:${string(input.motionPreference)||'no-preference'}${value.journeyLabel?':'+encodeURIComponent(string(value.journeyLabel)):''}`;}
+          if(input.action==='journey'){
+            captureNode=id;
+            nextImageKey=`screen:${id}:journey:${string(input.motionPreference)||'no-preference'}${value.journeyLabel?':'+encodeURIComponent(string(value.journeyLabel)):''}${checkpoint.label?':checkpoint:'+encodeURIComponent(string(checkpoint.label)):''}`;
+            nextImageSourceVersion=string(value.sourceVersion)||undefined;
+            nextCaptureRole=checkpoint.label?'journey-checkpoint':'journey';
+          }
         }
         if ((name === 'canvas_screen_motion_review' || name==='canvas_compare_reference') && value.nodeId && typeof value.motionFrame === 'number') {
           captureNode = string(value.nodeId);
@@ -868,8 +877,8 @@ export function productReviewBatches(packet: ReturnType<DiscoveryReviewContext['
         if(Array.isArray(payload.result))payload.result=payload.result.map(rawPart=>{
           const part=object(rawPart);if(part.type!=='inputText')return rawPart;
           const current=object(JSON.parse(string(part.text)));
-          const context={...current};delete context.document;delete context.observation;if(Array.isArray(context.productIdentities))context.productIdentities=context.productIdentities.map(raw=>{const identity={...object(raw)};if(Array.isArray(identity.reusableComponents))identity.reusableComponents=identity.reusableComponents.map(raw=>{const component={...object(raw)};delete component.html;delete component.css;delete component.javascript;return component;});return identity;});if(Array.isArray(context.screens))context.screens=context.screens.map(raw=>{const screen={...object(raw)};delete screen.source;return screen;});
-          return {...part,text:JSON.stringify({...context,sourceOmitted:'Assess current rendered pixels; interface source and board geometry omitted from visual review.'})};
+          const context={...current};delete context.document;if(Array.isArray(context.productIdentities))context.productIdentities=context.productIdentities.map(raw=>{const identity={...object(raw)};if(Array.isArray(identity.reusableComponents))identity.reusableComponents=identity.reusableComponents.map(raw=>{const component={...object(raw)};delete component.html;delete component.css;delete component.javascript;return component;});return identity;});if(Array.isArray(context.screens))context.screens=context.screens.map(raw=>{const screen={...object(raw)};delete screen.source;return screen;});
+          return {...part,text:JSON.stringify({...context,sourceOmitted:'Interface source omitted. Retained observation contains the actual measured canvas geometry; use it for placement and scope checks, and current pixels for appearance.'})};
         });
         return ['Tool canvas_read: '+JSON.stringify(payload)];
       }catch{return [entry];}

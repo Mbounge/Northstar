@@ -29,9 +29,9 @@ export class ScreenScenario {
           this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'inspect' });
         }
         break;
-      case 2: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#apply' }); break;
-      case 3: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'fill', selector: '#name', value: 'Jordan Smith' }); break;
-      case 4: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, action: 'click', selector: '#send' }); break;
+      case 2: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, live:true,action: 'click', selector: '#apply' }); break;
+      case 3: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, live:true,action: 'fill', selector: '#name', value: 'Jordan Smith' }); break;
+      case 4: this.peer.tool('canvas_screen_interact', { nodeId: this.nodeId, live:true,action: 'click', selector: '#send' }); break;
       case 5:
         if (!string(value.text).includes('Application prepared for Jordan Smith')) { this.peer.finish('Screen fixture failed: mock application interaction did not work.'); return; }
         this.peer.tool('canvas_review', { nodeId: this.nodeId }); break;
