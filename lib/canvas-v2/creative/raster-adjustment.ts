@@ -34,10 +34,23 @@ export function parseRasterAdjustment(args: JsonObject, inspected: { assetId: st
   if (Boolean(included.length) === Boolean(maskAssetId)) throw new Error('Supply polygons or one retained grayscale PNG mask, never both.');
   if (!/^#[0-9a-f]{6}$/i.test(string(args.color))) throw new Error('Choose a six-digit #RRGGBB target colour.');
   const color = [1, 3, 5].map(i => parseInt(string(args.color).slice(i, i + 2), 16)) as [number, number, number];
-  const strength = args.strength ?? 1, featherPixels = args.featherPixels ?? 1;
+  // A retained mask already contains its feathered edges. Reusing it must not
+  // progressively erode those edges unless refinement was explicitly requested.
+  const strength = args.strength ?? 1, featherPixels = args.featherPixels ?? (maskAssetId ? 0 : 1);
   if (typeof strength !== 'number' || !Number.isFinite(strength) || strength <= 0 || strength > 1) throw new Error('Colour strength must be greater than zero and at most one.');
   if (!Number.isInteger(featherPixels) || Number(featherPixels) < 0 || Number(featherPixels) > 8) throw new Error('Inward feathering must be 0–8 original pixels.');
   return { assetId, label, sourceSize, rect, polygons: included, protectedPolygons, maskAssetId, color, strength, featherPixels: Number(featherPixels) };
+}
+
+/** Compare the processed mask with the actual retained PNG pixels, not merely
+ * the requested options: explicit refinements can leave an existing mask intact. */
+export function rasterMaskMatchesSource(mask: Uint8Array, supplied: Uint8ClampedArray): boolean {
+  if (supplied.length !== mask.length * 4) return false;
+  for (let i = 0; i < mask.length; i++) {
+    const at = i * 4, value = mask[i];
+    if (supplied[at] !== value || supplied[at + 1] !== value || supplied[at + 2] !== value || supplied[at + 3] !== 255) return false;
+  }
+  return true;
 }
 
 function fillPolygon(mask: Uint8Array, width: number, points: PixelPoint[], value: number) {

@@ -1,6 +1,7 @@
 import type { CreativeContext, CreativeResult, NorthstarArtifact } from './types';
 import type { CanvasV2EvidenceAsset } from '../types';
 import type { RasterAdjustment, recolorRasterPixels } from './raster-adjustment';
+import { rasterMaskMatchesSource } from './raster-adjustment';
 
 type PixelResult = ReturnType<typeof recolorRasterPixels>;
 function drawing(width: number, height: number) {
@@ -62,16 +63,19 @@ export async function adjustRetainedImage(config: RasterAdjustment, inputs: Crea
   const processedAt = performance.now();
   signal.throwIfAborted();
   const adjusted = drawing(width, height); adjusted.context.putImageData(new ImageData(new Uint8ClampedArray(processed.pixels), width, height), 0, 0);
-  const mask = drawing(width, height);
-  for (let row = 0; row < height; row += 128) {
+  const maskReused = !!maskSource && rasterMaskMatchesSource(processed.mask, maskSource.context.getImageData(0, 0, width, height).data);
+  const mask = maskReused ? undefined : drawing(width, height);
+  for (let row = 0; mask && row < height; row += 128) {
     const rows = Math.min(128, height - row), data = mask.context.createImageData(width, rows);
     for (let i = 0; i < width * rows; i++) { const value = processed.mask[row * width + i]; data.data[i * 4] = data.data[i * 4 + 1] = data.data[i * 4 + 2] = value; data.data[i * 4 + 3] = 255; }
     mask.context.putImageData(data, 0, row);
   }
   const stem = config.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'adjusted-image';
-  const imageFile = await retain(adjusted.canvas, config.label, stem + '.png', [config.assetId]);
-  const maskFile = await retain(mask.canvas, config.label + ' · reusable mask', stem + '-mask.png', [config.assetId]);
-  adjusted.canvas.width = 0; mask.canvas.width = 0; processed.pixels = new Uint8ClampedArray(0);
+  const inputAssetIds = [config.assetId, ...(suppliedMask ? [suppliedMask.id] : [])];
+  const imageFile = await retain(adjusted.canvas, config.label, stem + '.png', inputAssetIds);
+  const maskFile = mask ? await retain(mask.canvas, config.label + ' · reusable mask', stem + '-mask.png', inputAssetIds) : undefined;
+  const maskAssetId = maskFile?.asset.id ?? suppliedMask!.id;
+  adjusted.canvas.width = 0; if (mask) mask.canvas.width = 0; processed.pixels = new Uint8ClampedArray(0);
   // Verify the actual encoded deliverable after decoding, including alpha.
   const roundtrip = await decode(imageFile.artifact.dataUrl, config, signal);
   for (let row = 0; row < height; row += 128) {
@@ -96,7 +100,7 @@ export async function adjustRetainedImage(config: RasterAdjustment, inputs: Crea
     review.context.fillStyle = '#fff'; review.context.font = '13px system-ui'; review.context.fillText(['Original', 'Mask', 'Adjusted'][index], index * panelW + 8, 22);
   }
   signal.throwIfAborted();
-  const result: CreativeResult = { summary: `Adjusted ${config.label} from original pixels without hosted execution. The canvas has not been changed.`, artifacts: [imageFile.artifact, maskFile.artifact], assets: [imageFile.asset, maskFile.asset], warnings: ['Inspect the original, mask boundaries and adjusted pixels. Zero changes outside this mask does not prove the mask follows the intended subject.', ...(processed.verification.clippedPixels ? [`${processed.verification.clippedPixels} selected pixels reached the target colour range; inspect highlight/shadow detail.`] : [])] };
+  const result: CreativeResult = { summary: `Adjusted ${config.label} from original pixels without hosted execution. ${maskReused ? 'The retained mask is pixel-identical and keeps its existing maskAssetId; no duplicate mask was created. ' : ''}The canvas has not been changed.`, artifacts: [imageFile.artifact, ...(maskFile ? [maskFile.artifact] : [])], assets: [imageFile.asset, ...(maskFile ? [maskFile.asset] : [])], warnings: ['Inspect the original, mask boundaries and adjusted pixels. Zero changes outside this mask does not prove the mask follows the intended subject.', ...(processed.verification.clippedPixels ? [`${processed.verification.clippedPixels} selected pixels reached the target colour range; inspect highlight/shadow detail.`] : [])] };
   const reviewPixels = review.canvas.toDataURL('image/png'), finished = performance.now();
-  return { result, reviewPixels, verification: { ...processed.verification, originalAssetId: config.assetId, outputAssetId: imageFile.asset.id, maskAssetId: maskFile.asset.id, sourceSize: config.sourceSize, inspectedRect: config.rect, preservationBasis: 'browser-decoded-RGBA', encodedPngVerified: true, timings: { decodeMs: Math.round(decodedAt - started), pixelWorkerMs: Math.round(processedAt - decodedAt), encodeVerifyMs: Math.round(finished - processedAt), totalMs: Math.round(finished - started) } } };
+  return { result, reviewPixels, verification: { ...processed.verification, originalAssetId: config.assetId, outputAssetId: imageFile.asset.id, maskAssetId, maskReused, ...(suppliedMask ? { inputMaskAssetId: suppliedMask.id } : {}), sourceSize: config.sourceSize, inspectedRect: config.rect, preservationBasis: 'browser-decoded-RGBA', encodedPngVerified: true, timings: { decodeMs: Math.round(decodedAt - started), pixelWorkerMs: Math.round(processedAt - decodedAt), encodeVerifyMs: Math.round(finished - processedAt), totalMs: Math.round(finished - started) } } };
 }

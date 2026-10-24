@@ -59,9 +59,26 @@ test('a colour request uses the actual local pixel worker, retains downloadable 
     expect(secondEdit[at + 3]).toBe(before[at + 3]);
     if (x < 3 || x >= 13 || y < 3 || y >= 9 || (y === 5 && x >= 4 && x < 11)) expect(secondEdit.slice(at, at + 4)).toEqual(before.slice(at, at + 4));
   }
+  const secondEditedUrl = await images.first().getAttribute('src');
+  await page.getByRole('textbox', { name: 'Message North Star', exact: true }).fill('raster adjustment refine fixture'); await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  const refined = page.getByText('The explicitly refined mask has its own identity and protects the new detail.', { exact: true });
+  await expect(refined.or(failure)).toBeVisible({ timeout: 60_000 }); await expect(refined).toBeVisible({ timeout: 1000 });
+  const thirdEdit = await pixels(images.first()); expect(thirdEdit).not.toEqual(secondEdit); expect(hostedCreativeCalls).toBe(0);
+  await expect(images).toHaveCount(2); await expect(images.nth(1)).toHaveAttribute('src', protectedUrl!); expect(await appearance(images.first())).toEqual(geometry);
+  for (let y = 0; y < 12; y++) for (let x = 0; x < 16; x++) {
+    const at = (y * 16 + x) * 4;
+    expect(thirdEdit[at + 3]).toBe(before[at + 3]);
+    if (x < 3 || x >= 13 || y < 3 || y >= 9 || (y === 5 && x >= 4 && x < 11) || (x >= 6 && x < 8 && y >= 6 && y < 8)) expect(thirdEdit.slice(at, at + 4)).toEqual(secondEdit.slice(at, at + 4));
+  }
+  await page.getByRole('region', { name: 'Created assets', exact: true }).last().getByRole('button', { expanded: false }).click();
+  const refinedMaskDownload = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download Refined red panel · reusable mask', exact: true }).click();
+  const refinedMaskFile = await (await refinedMaskDownload).path(), refinedMaskBytes = await readFile(refinedMaskFile!);
+  expect(refinedMaskBytes.readUInt32BE(16)).toBe(16); expect(refinedMaskBytes.readUInt32BE(20)).toBe(12);
   await page.getByRole('button', { name: 'Collapse North Star panel', exact: true }).click();
+  await page.getByRole('button', { name: 'Undo canvas action', exact: true }).click(); await expect(images.first()).toHaveAttribute('src', secondEditedUrl!);
   await page.getByRole('button', { name: 'Undo canvas action', exact: true }).click(); await expect(images.first()).toHaveAttribute('src', firstEditedUrl!);
   await page.getByRole('button', { name: 'Undo canvas action', exact: true }).click(); await expect(images.first()).toHaveAttribute('src', beforeUrl!);
   await page.getByRole('button', { name: 'Redo canvas action', exact: true }).click(); expect(await pixels(images.first())).toEqual(after);
   await page.getByRole('button', { name: 'Redo canvas action', exact: true }).click(); expect(await pixels(images.first())).toEqual(secondEdit);
+  await page.getByRole('button', { name: 'Redo canvas action', exact: true }).click(); expect(await pixels(images.first())).toEqual(thirdEdit);
 });

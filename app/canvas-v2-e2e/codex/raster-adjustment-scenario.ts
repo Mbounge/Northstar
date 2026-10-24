@@ -5,7 +5,7 @@ import { object, string, type JsonObject } from '@/lib/canvas-v2/managed-agent/p
 /** Real browser pixel worker, retention, permissions and source commit; no model. */
 export class RasterAdjustmentScenario {
   private step = 0; private assetId = ''; private nodeId = ''; private outputId = ''; private maskId = '';
-  constructor(private peer: FixtureCodex, private reuse = false) {}
+  constructor(private peer: FixtureCodex, private reuse = false, private refine = false) {}
   start() { this.peer.tool('canvas_read', {}); }
   reply(result: JsonObject) {
     const parts = (result.contentItems as JsonObject[] ?? []).map(object); let value: JsonObject = {};
@@ -21,11 +21,13 @@ export class RasterAdjustmentScenario {
         this.peer.tool('inspect_asset', { evidenceId: this.assetId, pixelRect: { x: 2, y: 2, width: 12, height: 8 }, sourceSize: { width: 16, height: 12 } }); return;
       }
       case 1:
-        this.peer.tool('adjust_image_region', { assetId: this.assetId, cropInspectionId: value.cropInspectionId, sourceSize: value.sourceSize, cropPixels: value.cropPixels, label: this.reuse ? 'Blue panel' : 'Ivory panel', color: this.reuse ? '#496497' : '#c5c1b8', featherPixels: this.reuse ? 0 : 1,
-          ...(this.reuse ? { maskAssetId: this.maskId } : { polygons: [[{ x: 3, y: 3 }, { x: 13, y: 3 }, { x: 13, y: 9 }, { x: 3, y: 9 }]], protectedPolygons: [[{ x: 4, y: 5 }, { x: 11, y: 5 }, { x: 11, y: 6 }, { x: 4, y: 6 }]] }) }); return;
+        this.peer.tool('adjust_image_region', { assetId: this.assetId, cropInspectionId: value.cropInspectionId, sourceSize: value.sourceSize, cropPixels: value.cropPixels, label: this.refine ? 'Refined red panel' : this.reuse ? 'Blue panel' : 'Ivory panel', color: this.refine ? '#a54638' : this.reuse ? '#496497' : '#c5c1b8',
+          ...(this.reuse ? { maskAssetId: this.maskId, ...(this.refine ? { protectedPolygons: [[{ x: 6, y: 6 }, { x: 8, y: 6 }, { x: 8, y: 8 }, { x: 6, y: 8 }]] } : {}) } : { featherPixels: 1, polygons: [[{ x: 3, y: 3 }, { x: 13, y: 3 }, { x: 13, y: 9 }, { x: 3, y: 9 }]], protectedPolygons: [[{ x: 4, y: 5 }, { x: 11, y: 5 }, { x: 11, y: 6 }, { x: 4, y: 6 }]] }) }); return;
       case 2: {
         const receipt = object(value.rasterAdjustment);
         if (receipt.changedOutsideMask !== 0 || receipt.alphaChangedPixels !== 0 || receipt.encodedPngVerified !== true || receipt.semanticBoundaryVerified !== false || !parts.some(part => part.type === 'inputImage')) { this.peer.finish('Raster adjustment fixture lacks encoded-pixel checks or an actual visual review.'); return; }
+        const assets = value.assets as JsonObject[] ?? [], artifacts = value.artifacts as JsonObject[] ?? [];
+        if (this.reuse && (receipt.inputMaskAssetId !== this.maskId || receipt.maskReused !== !this.refine || (this.refine ? receipt.maskAssetId === this.maskId : receipt.maskAssetId !== this.maskId) || assets.length !== (this.refine ? 2 : 1) || artifacts.length !== assets.length || !artifacts.every(item => (item.inputAssetIds as string[] ?? []).includes(this.maskId)))) { this.peer.finish('Raster adjustment fixture failed: retained mask identity, exports or lineage changed unexpectedly.'); return; }
         this.outputId = string(receipt.outputAssetId); this.peer.tool('canvas_read', {}); return;
       }
       case 3: {
@@ -36,7 +38,7 @@ export class RasterAdjustmentScenario {
         this.peer.tool('canvas_edit', { summary: 'Adjusted the selected image colour and retained its protected seam', selectionPolicy: 'modify', patch: JSON.stringify({ operations: [{ op: 'replace-node', targetNodeId: this.nodeId, html: fragment }] }) }); return;
       }
       case 4: this.peer.tool('canvas_review', { nodeId: this.nodeId }); return;
-      default: this.peer.finish(this.reuse ? 'The retained mask was reused for the next colour without changing protected pixels.' : 'The retained image was adjusted in place with its protected seam and alpha preserved.');
+      default: this.peer.finish(this.refine ? 'The explicitly refined mask has its own identity and protects the new detail.' : this.reuse ? 'The retained mask was reused for the next colour without changing protected pixels.' : 'The retained image was adjusted in place with its protected seam and alpha preserved.');
     }
   }
 }

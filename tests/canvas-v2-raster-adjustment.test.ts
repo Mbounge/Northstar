@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseRasterAdjustment, rasterAdjustmentMask, recolorRasterPixels } from '../lib/canvas-v2/creative/raster-adjustment';
+import { parseRasterAdjustment, rasterAdjustmentMask, rasterMaskMatchesSource, recolorRasterPixels } from '../lib/canvas-v2/creative/raster-adjustment';
 
 const sourceSize = { width: 16, height: 12 }, rect = { x: 2, y: 2, width: 12, height: 8 };
 const box = (x: number, y: number, width: number, height: number) => [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }];
@@ -53,6 +53,34 @@ test('stale sources, display-space polygons, malformed masks and unsupported ope
   assert.throws(() => parseRasterAdjustment({ ...args(), sourceSize: { width: 32, height: 24 } }, inspected), /dimensions differ/);
   assert.throws(() => parseRasterAdjustment({ ...args(), cropPixels: { ...rect, x: 1 } }, inspected), /differs/);
   for (const change of [{ color: 'ivory' }, { strength: NaN }, { strength: 0 }, { featherPixels: 9 }, { polygons: [box(0, 0, 4, 4)] }, { polygons: [box(3, 3, 0, 0)] }, { maskAssetId: 'mask' }, { polygons: [] }]) assert.throws(() => parseRasterAdjustment({ ...args(), ...change }, inspected));
+});
+test('repeated colour edits keep an already feathered retained mask pixel-identical by default', () => {
+  const initial = parseRasterAdjustment({ ...args(), featherPixels: undefined, protectedPolygons: [box(4, 5, 7, 1)] }, inspected);
+  assert.equal(initial.featherPixels, 1, 'new polygon selections still feather inward by default');
+  const expected = rasterAdjustmentMask(initial), rgba = new Uint8ClampedArray(expected.length * 4);
+  for (let p = 0; p < expected.length; p++) rgba.set([expected[p], expected[p], expected[p], 255], p * 4);
+  const saved = rgba.slice(); let pixels = source();
+  for (const color of ['#496497', '#e45d28', '#28855d']) {
+    const config = parseRasterAdjustment({ ...args(), polygons: undefined, maskAssetId: 'retained-mask', featherPixels: undefined, color }, inspected);
+    assert.equal(config.featherPixels, 0);
+    const reused = rasterAdjustmentMask(config, rgba);
+    assert.deepEqual(reused, expected); assert.equal(rasterMaskMatchesSource(reused, rgba), true);
+    pixels = recolorRasterPixels(pixels, reused, config).pixels;
+  }
+  assert.deepEqual(rgba, saved, 'the retained mask is never mutated');
+});
+test('explicit mask refinements preserve lineage only when their actual pixels stay identical', () => {
+  const initial = parseRasterAdjustment(args(), inspected), expected = rasterAdjustmentMask(initial), rgba = new Uint8ClampedArray(expected.length * 4);
+  for (let p = 0; p < expected.length; p++) rgba.set([expected[p], expected[p], expected[p], 255], p * 4);
+  const reuse = { ...args(), polygons: undefined, maskAssetId: 'retained-mask', featherPixels: undefined };
+  const unchanged = rasterAdjustmentMask(parseRasterAdjustment({ ...reuse, protectedPolygons: [box(2, 2, 1, 1)] }, inspected), rgba);
+  assert.equal(rasterMaskMatchesSource(unchanged, rgba), true, 'already protected pixels do not invent a new identity');
+  const refined = rasterAdjustmentMask(parseRasterAdjustment({ ...reuse, protectedPolygons: [box(4, 4, 2, 1)] }, inspected), rgba);
+  assert.equal(refined[4 * 16 + 4], 0); assert.equal(rasterMaskMatchesSource(refined, rgba), false);
+  const feathered = rasterAdjustmentMask(parseRasterAdjustment({ ...reuse, featherPixels: 2 }, inspected), rgba);
+  assert.equal(rasterMaskMatchesSource(feathered, rgba), false, 'explicit inward refinement must get a distinct retained mask');
+  assert.equal(rasterMaskMatchesSource(expected, rgba.slice(4)), false);
+  const nonGray = rgba.slice(); nonGray[(4 * 16 + 4) * 4 + 1] = 0; assert.equal(rasterMaskMatchesSource(expected, nonGray), false);
 });
 test('transparent selected pixels are preserved and all-transparent or no-change adjustments are not claimed as success', () => {
   const config = parseRasterAdjustment(args(), inspected), mask = rasterAdjustmentMask(config), original = source(), at = (4 * 16 + 5) * 4;

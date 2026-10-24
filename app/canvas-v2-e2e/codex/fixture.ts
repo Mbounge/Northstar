@@ -74,7 +74,7 @@ export class FixtureCodex implements CodexTransport {
       this.threeFamilyScenario=editingFamily?new ThreeFamilyScenario(this,editingFamily):undefined;
       this.selectedLayerFeedbackScenario=/editing workspace feedback/i.test(message)?new SelectedLayerFeedbackScenario(this):undefined;
       this.designerStudioScenario=message.trim().toLowerCase()==='designer studio fixture'?new DesignerStudioScenario(this):undefined;
-      this.rasterAdjustmentScenario=/^raster adjustment (reuse )?fixture$/i.test(message.trim())?new RasterAdjustmentScenario(this,/reuse/.test(message)):undefined;
+      this.rasterAdjustmentScenario=/^raster adjustment ((reuse|refine) )?fixture$/i.test(message.trim())?new RasterAdjustmentScenario(this,/reuse|refine/.test(message),/refine/.test(message)):undefined;
       this.appsScenario = /apps parity|apps followup|account pixel smoke/i.test(message) ? new AppsScenario(this, /apps followup/i.test(message), /account pixel smoke/i.test(message)) : undefined;
       this.readableChat = /chat readable parity/i.test(message);
       if (this.readableChat) {
