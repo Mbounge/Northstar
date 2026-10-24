@@ -3,7 +3,7 @@
 import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
 import { observeCanvasV2ImageVisibility, type CanvasV2ImageVisibilityObserver } from "./native-image-visibility";
-import { createCanvasV2WarmViewport, outsideVisibleCanvas, sameNativeViewportPresence, type CanvasV2NativeViewportStore } from "@/lib/canvas-v2/native-viewport-reuse";
+import { canvasV2StableRuntimeRenderScene, createCanvasV2WarmViewport, outsideVisibleCanvas, sameNativeViewportPresence, type CanvasV2NativeViewportStore } from "@/lib/canvas-v2/native-viewport-reuse";
 import { canvasV2NativeRenderStyle } from '@/lib/canvas-v2/native-render-style';
 import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
 
@@ -1518,10 +1518,12 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
     () => scopeCanvasV2ArtifactCss(renderedScene?.css ?? revision.document.css),
     [renderedScene?.css, revision.document.css],
   );
-  const renderedRootNodes = useMemo(() => renderedScene?.rootIds.map((rootId) => {
-    const node = byId.get(rootId);
-    return node ? <NativeNode key={node.id} node={node} byId={byId} visibleBounds={cullBounds} protectedNodeIds={protectedNodeIds} /> : null;
-  }), [renderedScene, byId, cullBounds, protectedNodeIds]);
+  const runtimeRenderTree=useMemo(()=>renderedScene?canvasV2StableRuntimeRenderScene(renderedScene):undefined,[renderedScene]);
+  const runtimeRenderNodes=useMemo(()=>runtimeRenderTree===renderedScene?byId:runtimeRenderTree?canvasV2NativeSceneNodeMap(runtimeRenderTree):byId,[runtimeRenderTree,renderedScene,byId]);
+  const renderedRootNodes = useMemo(() => runtimeRenderTree?.rootIds.map((rootId) => {
+    const node = runtimeRenderNodes.get(rootId);
+    return node ? <NativeNode key={node.id} node={node} byId={runtimeRenderNodes} visibleBounds={cullBounds} protectedNodeIds={protectedNodeIds} /> : null;
+  }), [runtimeRenderTree, runtimeRenderNodes, cullBounds, protectedNodeIds]);
 
   return (
     <div className="relative" style={{ width, height, pointerEvents: framePointerEvents }}>

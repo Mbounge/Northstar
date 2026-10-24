@@ -1,10 +1,40 @@
-import type { CanvasV2NativeSceneNode } from './native-scene';
+import type { CanvasV2NativeSceneDocument, CanvasV2NativeSceneNode } from './native-scene';
 import type { CanvasV2ElementBounds } from './types';
 import { SCREEN_ATTRIBUTE } from './interactive-screen';
 import { MODEL_ATTRIBUTE } from './model-object';
 import { MEDIA_ATTRIBUTE } from './canvas-media';
 
 const CULL_MARGIN = 900;
+
+/** Geometry detachment must not reparent a running iframe in React. For a
+ * plain top-level source wrapper, keep its original render slot and express
+ * world placement relative to that wrapper. Truth/serialization stay detached.
+ * Clipped, transformed and nested groups retain their existing paint semantics.
+ */
+export function canvasV2StableRuntimeRenderScene(scene: CanvasV2NativeSceneDocument): CanvasV2NativeSceneDocument {
+ const byId=new Map(scene.nodes.map(node=>[node.id,node])),restored=new Map<string,CanvasV2NativeSceneNode[]>();
+ for(const node of scene.nodes){
+  if(node.parentId||!node.detachedFromParentId||!(node.attributes[SCREEN_ATTRIBUTE]||node.attributes[MODEL_ATTRIBUTE]||node.attributes[MEDIA_ATTRIBUTE]))continue;
+  const parent=byId.get(node.detachedFromParentId);if(!parent||parent.parentId||parent.hidden||parent.geometry.rotation)continue;
+  const style={...parent.resolvedStyle,...parent.inlineStyle};
+  if(['overflow','overflow-x','overflow-y'].some(key=>style[key]&&style[key]!=='visible')
+   ||['transform','translate','rotate','scale','filter','perspective','clip-path'].some(key=>style[key]&&style[key]!=='none')
+   ||style.opacity&&Number(style.opacity)!==1)continue;
+  const siblings=restored.get(parent.id)??[];siblings.push(node);restored.set(parent.id,siblings);
+ }
+ if(!restored.size)return scene;
+ const moved=new Set<string>();
+ for(const [parentId,children] of restored){
+  const parent=byId.get(parentId)!;const content=[...parent.content];
+  for(const child of children.sort((a,b)=>(a.detachedFromParentIndex??Infinity)-(b.detachedFromParentIndex??Infinity))){
+   moved.add(child.id);
+   content.splice(Math.min(content.length,Math.max(0,child.detachedFromParentIndex??content.length)),0,{kind:'node',id:child.id});
+   byId.set(child.id,{...child,parentId,geometry:{...child.geometry,x:child.geometry.x-parent.geometry.x,y:child.geometry.y-parent.geometry.y}});
+  }
+  byId.set(parentId,{...parent,content,childIds:content.flatMap(item=>item.kind==='node'?[item.id]:[])});
+ }
+ return {...scene,rootIds:scene.rootIds.filter(id=>!moved.has(id)),nodes:scene.nodes.map(node=>byId.get(node.id)!)};
+}
 
 export function canvasV2LayerWindow(count:number,scrollTop:number,height:number,rowHeight=32,overscan=4) {
   const length=Math.max(0,Math.floor(count));

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-import type { CanvasV2NativeSceneNode } from "@/lib/canvas-v2/native-scene";
+import type { CanvasV2NativeSceneDocument, CanvasV2NativeSceneNode } from "@/lib/canvas-v2/native-scene";
 import { sameCanvasV2NativeRenderedSubtree } from "@/lib/canvas-v2/native-scene-subtree-equality";
-import {canvasV2LayerWindow,createCanvasV2WarmViewport,sameNativeViewportPresence} from '../lib/canvas-v2/native-viewport-reuse';
+import {canvasV2StableRuntimeRenderScene,canvasV2LayerWindow,createCanvasV2WarmViewport,sameNativeViewportPresence} from '../lib/canvas-v2/native-viewport-reuse';
 
 function node(id: string, parentId?: string): CanvasV2NativeSceneNode {
   return {
@@ -17,6 +17,22 @@ function node(id: string, parentId?: string): CanvasV2NativeSceneNode {
     inlineStyle: {}, content: [],
   };
 }
+
+test('detaching live screens from a plain canvas wrapper keeps their original render parent without changing scene truth',()=>{
+ const parent=node('wrapper');parent.geometry.x=100;parent.geometry.y=200;
+ const text=node('text',parent.id);parent.content=[{kind:'node',id:text.id}];parent.childIds=[text.id];
+ const app=node('app');app.attributes={'data-canvas-v2-screen':'retained source'};app.detachedFromParentId=parent.id;app.detachedFromParentIndex=0;app.geometry.x=450;app.geometry.y=520;
+ const scene:CanvasV2NativeSceneDocument={schema:'canvas-v2.native-scene.v1',revisionId:'move',width:2000,height:2000,css:'',rootIds:[parent.id,app.id],nodes:[parent,text,app]};
+ const before=structuredClone(scene),tree=canvasV2StableRuntimeRenderScene(scene),rendered=tree.nodes.find(n=>n.id===app.id)!;
+ assert.deepEqual(scene,before);assert.deepEqual(tree.rootIds,[parent.id]);assert.equal(rendered.parentId,parent.id);
+ assert.equal(rendered.geometry.x+parent.geometry.x,app.geometry.x);assert.equal(rendered.geometry.y+parent.geometry.y,app.geometry.y);
+ assert.equal(rendered.attributes,app.attributes);assert.equal(rendered.inlineStyle,app.inlineStyle);
+ assert.deepEqual(tree.nodes[0].content,[{kind:'node',id:app.id},{kind:'node',id:text.id}]);
+ for(const styles of [{overflow:'hidden'},{transform:'scale(2)'},{opacity:'.5'}] as Array<Record<string,string>>){
+  const unsafe={...scene,nodes:[{...parent,inlineStyle:styles},text,app]};assert.equal(canvasV2StableRuntimeRenderScene(unsafe),unsafe,'unsafe ancestry must retain its existing paint semantics');
+ }
+ const ordinary={...scene,nodes:[parent,text,{...app,attributes:{}}]};assert.equal(canvasV2StableRuntimeRenderScene(ordinary),ordinary);
+});
 
 test("a manual move refreshes only the changed native subtree", () => {
   const root = node("root");
