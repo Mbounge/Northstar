@@ -102,6 +102,7 @@ test('runtime checks reject clipped, transparent and covered controls and hold s
 
 test('feedback spans screens and canvas references; restoring a version preserves siblings and geometry', async ({ page }) => {
   test.setTimeout(180000);
+  page.setDefaultTimeout(15000);
   await page.goto('/canvas-v2-e2e/codex');
   const send = async (message: string) => { await page.getByLabel('Message North Star').fill(message); await page.getByRole('button',{name:'Send message',exact:true}).click(); };
   for(let i=1;i<=2;i++) {
@@ -152,17 +153,18 @@ test('feedback spans screens and canvas references; restoring a version preserve
   expect(await canonical.getAttribute('data-canvas-v2-canonical-flow')).toBe(reference);
   const sibling=await second.getAttribute('data-canvas-v2-screen');
   await openHistory();
-  const history=page.getByRole('dialog',{name:'Screen version history'});
+  const history=page.getByRole('dialog',{name:'Compare design changes',exact:true});
   await history.getByRole('button').filter({hasText:'Starting version'}).click();
   await history.getByRole('button',{name:'Use this version',exact:true}).click();
   await expect(history).toHaveCount(0);
   await expect(frame1.getByRole('heading',{name:'Your next season.',exact:true})).toBeVisible();
+  // Explicit version restoration restarts this app with the restored seed.
   await expect(frame1.getByRole('button',{name:'Save team',exact:true})).toBeVisible();
   expect(await second.getAttribute('data-canvas-v2-screen')).toBe(sibling);
   expect(await first.getAttribute('style')).toBe(geometry1);expect(await second.getAttribute('style')).toBe(geometry2);
   await openHistory();
   await expect(history.getByText('On canvas',{exact:true})).toHaveCount(1);
-  await expect(history.getByRole('button',{name:'Applied on canvas',exact:true})).toBeDisabled();
+  await expect(history.getByRole('button',{name:'On canvas',exact:true})).toBeDisabled();
 });
 
 

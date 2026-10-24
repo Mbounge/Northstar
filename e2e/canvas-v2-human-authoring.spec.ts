@@ -220,7 +220,7 @@ test("connector library exposes straight, arrow and independently adjustable cur
   await page.mouse.move(endpointBounds!.x + endpointBounds!.width / 2, endpointBounds!.y + endpointBounds!.height / 2);
   await page.mouse.down();
   await page.mouse.move(endpointBounds!.x - 70, endpointBounds!.y + 35, { steps: 6 });
-  const endpointPreview = app(page).getByTestId("canvas-v2-connector-gesture-preview");
+  const endpointPreview = app(page).locator('[data-testid="canvas-v2-connector-gesture-preview"] + g [data-canvas-v2-connector-part="path"]');
   await expect(endpointPreview).toHaveAttribute("d", / Q /);
   await expect(endpointPreview).toHaveCSS("visibility", "visible");
   await expect(curve).toHaveCSS("visibility", "hidden");

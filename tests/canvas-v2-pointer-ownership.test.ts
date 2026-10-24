@@ -56,10 +56,12 @@ test('Native cancellation reaches the actual Workspace drawing callback as cance
 
 test('actual app-selection effect preserves held host ownership until real move commits, then opens internal design',()=>{
  const h=workspaceHarness(),context=h.context,opened:unknown[]=[];
+ Object.assign(context,{objectMenu:undefined});
  Object.assign(context,{canvasView:'design',collaborationReadOnly:false,selectedElements:[app],selectedElement:app,selectedScreenDescriptor:{simulation:false},setScreenEditNodeId:(id:unknown)=>opened.push(id),humanEditing:false,engine:{applyingManualEdit:false},collaboration:undefined,contextualToolbarRef:{current:undefined},sceneElementsRef:{current:[]},viewportRef:{current:{scale:1}},snapCanvasV2ObjectDelta,translateCanvasV2WorkspaceBounds,translateCanvasV2ObjectBounds,unionCanvasV2ObjectBounds,publishDirectGesturePreview:()=>{},beginHumanEdit:()=>{context.humanEditing=true},endHumanEdit:()=>{context.humanEditing=false}});
  for(const name of ['startDirectGesture','updateDirectGesture'])run('const '+declaration(workspace,name).getText(workspace)+';',context);
  const focus=find(workspace,(node):node is ts.CallExpression=>ts.isCallExpression(node)&&node.expression.getText(workspace)==='useEffect'&&!!node.arguments[0]?.getText(workspace).includes('selectedScreenDescriptor.simulation'));
  const focusEffect=run('('+focus.arguments[0].getText(workspace)+')',context);
+ context.objectMenu={x:10,y:10};focusEffect();assert.deepEqual(opened,[],'Context-menu selection must not enter the app and dismiss its actions');context.objectMenu=undefined;
  run('startDirectGesture',context)('move',7,200,200,[app]);focusEffect();assert.deepEqual(opened,[],'Selection must not switch ownership to internal studio while pointer remains held');
  h.forward(1);run('finishDirectGesture',context)(7);assert.equal(h.mutations.length,1);assert.deepEqual(h.mutations,[{kind:'batch',label:'Moved 1 selected object.',mutations:[{kind:'move',nodeId:'app',deltaX:700,deltaY:700}]}]);
  focusEffect();assert.deepEqual(opened,['app'],'Release opens the selected app after host edit ownership ends');
