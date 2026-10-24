@@ -93,5 +93,5 @@ test('one fixture instruction reads all selected owners and sends exactly one pr
   assert.deepEqual(calls[2],{name:'canvas_read',args:{nodeId:'screen-b'}});reply({screens:[{nodeId:'screen-b'}]});
   const edit=calls[3];assert.equal(edit.name,'canvas_screen_element');assert.equal(calls.filter(call=>call.name==='canvas_screen_element').length,1);
   assert.deepEqual(edit.args.edits,[{nodeId:'screen-a',selector:'#part-1',styles:{color:'#7b43b5'}},{nodeId:'screen-b',selector:'#part-2',styles:{fill:'#7b43b5'}}]);
-  reply({committed:true});assert.deepEqual(answers,['Refined all 2 selected layers in one canvas revision.']);
+  reply({committed:true,sourceChangeReceipts:['screen-a','screen-b'].map(nodeId=>({nodeId,basis:'exact-saved-source-comparison',operation:'refine',beforeSourceVersion:'before',sourceVersion:'after',unchanged:{javascript:true,css:true,mockData:true,viewport:true}}))});assert.deepEqual(answers,['Refined all 2 selected layers in one canvas revision.']);
 });

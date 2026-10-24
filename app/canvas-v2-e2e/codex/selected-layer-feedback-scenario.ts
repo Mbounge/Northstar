@@ -13,7 +13,11 @@ export class SelectedLayerFeedbackScenario {
     const parts=(result.contentItems as JsonObject[]??[]).map(object);let value:JsonObject={};
     try{value=object(JSON.parse(string(parts[0]?.text)))}catch{/* Failure is reported below. */}
     if(!result.success||value.committed===false){this.peer.finish('Selected layer fixture failed: '+string(parts[0]?.text));return;}
-    if(this.phase==='committing'){this.peer.finish('Refined all '+this.targets.length+' selected layers in one canvas revision.');return;}
+    if(this.phase==='committing'){
+      const receipts=(Array.isArray(value.sourceChangeReceipts)?value.sourceChangeReceipts:[]).map(object);
+      if(receipts.length!==this.owners.length||this.owners.some(nodeId=>!receipts.some(item=>item.nodeId===nodeId&&item.basis==='exact-saved-source-comparison'&&item.operation==='refine'&&item.sourceVersion!==item.beforeSourceVersion&&object(item.unchanged).javascript===true&&object(item.unchanged).css===true&&object(item.unchanged).mockData===true&&object(item.unchanged).viewport===true))){this.peer.finish('Selected layer fixture failed: missing exact source preservation receipts.');return;}
+      this.peer.finish('Refined all '+this.targets.length+' selected layers in one canvas revision.');return;
+    }
     if(this.phase==='selection'){
       this.targets=(value.screenFeedbackTargets as JsonObject[]??[]).map(object);
       if(!this.targets.length||this.targets.length>24||this.targets.some(target=>!string(target.nodeId)||!string(target.selector))){this.peer.finish('Selected layer fixture needs 1 to 24 current feedback targets.');return;}

@@ -218,7 +218,10 @@ test('ten collaborators converge through repeated concurrent edits and author-on
     const hold = f.hold(clients[round % 10].value.clientId);
     await Promise.all(clients.map((client, i) => {
       const before = client.revision();
-      return client.value.observe({ ...revision(`concurrent-${round}-${i}`, before.document.html.replace(`Designer ${i} revision ${round - 1}`, `Designer ${i} revision ${round}`)), parentId: before.id });
+      // These are disjoint text edits. Carry the real shared stylesheet too;
+      // rebuilding with revision()'s empty CSS accidentally makes all ten
+      // authors delete the normalized geometry rules in the same operation.
+      return client.value.observe({ ...revision(`concurrent-${round}-${i}`), document:{...before.document,html:before.document.html.replace(`Designer ${i} revision ${round - 1}`, `Designer ${i} revision ${round}`)}, parentId: before.id });
     }));
     await hold.entered; hold.release();
     await Promise.all(clients.map(client => client.value.sync()));
@@ -230,6 +233,7 @@ test('ten collaborators converge through repeated concurrent edits and author-on
       assert.equal(client.value.getStatus().pending, 0); assert.equal(client.value.getStatus().recovery, undefined);
     }
     for (let i = 0; i < 10; i++) assert.ok(f.html().includes(`Designer ${i} revision ${round}`));
+    assert.ok(f.commits.every(operation=>operation.changes.every(change=>change.key!=='document:css')),'disjoint text edits must not secretly mutate the shared stylesheet');
   }
   await Promise.all(clients.map(client => client.value.undo()));
   await Promise.all(clients.map(client => client.value.sync())); await Promise.all(clients.map(client => client.value.sync()));

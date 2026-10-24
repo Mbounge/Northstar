@@ -24,6 +24,31 @@ const goodDesignDirection = () => ({
   visualIdentity: 'The visual choices form a specific identity grounded in the brief.',
 });
 const tick = () => new Promise(resolve => setTimeout(resolve, 25));
+test('measured source preservation survives compact review but never substitutes for pixels or interaction evidence',async()=>{
+  const {productReviewBatches}=await import('../lib/canvas-v2/codex-app-server/discovery-review');
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  context.user([{type:'text',text:'Change only the date and keep the live form.',text_elements:[]}]);
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'screen',sourceVersion:'before',source:{html:'<p>Before</p>',javascript:'retained code'}}]})]);
+  const receipt={nodeId:'screen',basis:'exact-saved-source-comparison',operation:'refine',beforeSourceVersion:'before',sourceVersion:'after',unchanged:{html:false,javascript:true,css:true,mockData:true},changedFields:['html']};
+  context.tool('canvas_screen',{nodeId:'screen',html:'<p>After</p>'},[text({nodeId:'screen',committed:true,sourceChangeReceipts:[receipt]})]);
+  context.tool('canvas_review',{nodeId:'screen'},[text({nodeId:'screen',sourceVersion:'after',viewport:{width:640,height:560},state:{controls:[{label:'Reserve'}],errors:[]}}),{type:'inputImage',imageUrl:'data:image/png;base64,current'}]);
+  const packet=context.packet('Date corrected; saved JavaScript unchanged.');
+  const [batch]=productReviewBatches(packet),focused=JSON.parse(batch.packet.text);
+  assert.deepEqual(focused.productWork[0].sourceChangeReceipt,receipt);
+  assert.equal(focused.reviewCapabilities.trustedKeyboardAndFocus,false);
+  assert.equal(focused.reviewCapabilities.screenJourneyActions.includes('key'),false);
+  assert.ok(JSON.parse(context.reconcileFeedback(feedbackFor())).work.some((item:{id:string})=>item.id==='product-quality:screen'),'a receipt alone cannot approve appearance or behaviour');
+  context.tool('canvas_read',{},[text({screens:[{nodeId:'screen',sourceVersion:'new-human-edit'}]})]);
+  assert.equal(JSON.parse(context.packet('').text).productWork[0].sourceChangeReceipt,undefined,'later human source invalidates the measured receipt');
+});
+test('source receipts cannot leak into another user request or survive an unrelated later render',()=>{
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+  const commit=()=>context.tool('canvas_screen',{nodeId:'screen'},[text({nodeId:'screen',committed:true,sourceChangeReceipts:[{nodeId:'screen',basis:'exact-saved-source-comparison',sourceVersion:'one',unchanged:{javascript:true}}]})]);
+  commit();context.tool('canvas_review',{},[text({nodeId:'screen',sourceVersion:'two',viewport:{width:640,height:560},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,two'}]);
+  assert.equal(JSON.parse(context.packet('').text).productWork[0].sourceChangeReceipt,undefined);
+  commit();context.user([{type:'text',text:'A separate request',text_elements:[]}]);
+  assert.equal(JSON.parse(context.packet('').text).productWork[0].sourceChangeReceipt,undefined);
+});
 test('a refinement review retains the real baseline and component scope through source commits',()=>{
   const context=new DiscoveryReviewContext();
   const text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
