@@ -76,7 +76,7 @@ export class FixtureCodex implements CodexTransport {
       this.concurrentScreenScenario = message === 'screen concurrent action' ? new ConcurrentScreenScenario(this) : undefined;
       this.screenScenario = /screen parity|screen revision/i.test(message) ? new ScreenScenario(this, /screen revision/i.test(message)) : undefined;
       const adding=message.match(/Add a new section (above|below) the tagged section/)?.[1] as 'above'|'below'|undefined;
-      this.directAssetScenario = /screen direct asset/i.test(message)||adding ? new DirectAssetScenario(this, /background/i.test(message), /followup/i.test(message), /dependent/i.test(message), /gradient/i.test(message),adding,/ordered/i.test(message),/styled/i.test(message),/runtime/i.test(message)) : undefined;
+      this.directAssetScenario = /screen direct asset/i.test(message)||adding ? new DirectAssetScenario(this, /background/i.test(message), /followup/i.test(message), /dependent/i.test(message), /gradient/i.test(message),adding,/ordered/i.test(message),/styled/i.test(message),/runtime/i.test(message),/split/i.test(message)) : undefined;
       const editingFamily=message.match(/editing workspace (app|poster|svg)/i)?.[1]?.toLowerCase() as 'app'|'poster'|'svg'|undefined;
       this.threeFamilyScenario=editingFamily?new ThreeFamilyScenario(this,editingFamily):undefined;
       this.selectedLayerFeedbackScenario=/editing workspace feedback/i.test(message)?new SelectedLayerFeedbackScenario(this):undefined;

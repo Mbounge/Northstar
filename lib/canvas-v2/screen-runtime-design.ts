@@ -37,7 +37,7 @@ export function readScreenRuntimeLayers(doc:Document,sourceHTML:string){
  for(const element of doc.body.querySelectorAll('*')){
   if(layers.length>=600)break;
   if(element.closest('script,style,defs,clipPath,mask,pattern,marker,symbol,filter,linearGradient,radialGradient,[data-northstar-feedback-overlay]'))continue;
-  if(!element.matches('main,header,footer,section,article,div,nav,form,ul,ol,li,figure,img,picture,h1,h2,h3,h4,h5,h6,p,blockquote,button,a,label,input,textarea,select,svg,g,path,rect,circle,ellipse,line,polyline,polygon,text,tspan,use,image,[data-northstar-layer]'))continue;
+  if(!element.matches('main,header,footer,section,article,div,nav,form,ul,ol,li,figure,img,picture,h1,h2,h3,h4,h5,h6,p,blockquote,button,a,label,input,textarea,select,span[class],span[id],svg,g,path,rect,circle,ellipse,line,polyline,polygon,text,tspan,use,image,[data-northstar-layer]'))continue;
   let selector='';
   if(element.id&&/^[A-Za-z_][\w-]*$/.test(element.id)&&doc.querySelectorAll('#'+element.id).length===1)selector='#'+element.id;
   const classes=[...element.classList].filter(name=>/^[A-Za-z_][\w-]*$/.test(name)).slice(0,4),classSelector=element.localName+classes.map(name=>'.'+name).join('');

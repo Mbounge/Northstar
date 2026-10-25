@@ -18,7 +18,7 @@ async function clickScreen(page: Page, selector: string, options?: {button?:'lef
   return pointerScreen(page,selector,options);
 }
 
-async function createScreen(page: Page, dependent=false, gradient=false, ordered=false, styled=false, runtime=false) {
+async function createScreen(page: Page, dependent=false, gradient=false, ordered=false, styled=false, runtime=false, split=false) {
   await page.goto('/canvas-v2-e2e/codex');
 
   await page.getByRole('button',{name:'assets',exact:true}).click();
@@ -26,7 +26,7 @@ async function createScreen(page: Page, dependent=false, gradient=false, ordered
   await page.getByLabel('Choose images for the canvas',{exact:true}).setInputFiles(path.resolve('public/northstar/design-references/evidence-canvas.png'));
   await expect(page.getByRole('button',{name:'Preview evidence canvas',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'chat',exact:true}).click();
-  await page.getByRole('textbox',{name:'Message North Star'}).fill('screen direct asset'+(dependent?' dependent':'')+(gradient?' gradient':'')+(ordered?' ordered':'')+(styled?' styled':'')+(runtime?' runtime':''));
+  await page.getByRole('textbox',{name:'Message North Star'}).fill('screen direct asset'+(dependent?' dependent':'')+(gradient?' gradient':'')+(ordered?' ordered':'')+(styled?' styled':'')+(runtime?' runtime':'')+(split?' split':''));
   await page.getByRole('button',{name:'Send message',exact:true}).click();
   await expect(page.getByText('The studio screen is ready for direct editing.',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Show latest work on canvas',exact:true}).click();
@@ -574,4 +574,24 @@ test('human inspector typing previews immediately while persistence is held and 
  await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
  await expect(frame.locator('h1')).not.toHaveText('A responsive human edit.');
  await page.screenshot({path:info.outputPath('responsive-text-history.png')});
+});
+
+
+test('classed campaign text runs remain selectable through their heading outline',async({page})=>{
+  const frame=await createScreen(page,false,false,false,false,false,true);
+  await enterEdit(page);
+  const title=page.getByRole('treeitem',{name:'Select layer A little space for your ideas.',exact:true});
+  await title.click();
+  await expect(page.getByRole('button',{name:'Edit selected text on canvas',exact:true})).toHaveCount(0);
+  // A selected heading must not swallow clicks on its independently styled runs.
+  await clickScreen(page,'h1 .first');
+  await expect(page.getByRole('button',{name:'Edit selected text on canvas',exact:true})).toBeVisible();
+  await expect(page.getByRole('treeitem',{name:'Select layer A little space',exact:true})).toHaveAttribute('aria-selected','true');
+  await page.getByRole('textbox',{name:'Element text',exact:true}).fill('Your next chapter');
+  await expect(frame.locator('h1 .first')).toHaveText('Your next chapter');
+  await expect(frame.locator('h1 .second')).toHaveText('for your ideas.');
+  await expect(page.getByText('All changes saved',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+  await expect(frame.locator('h1 .first')).toHaveText('A little space');
+  await expect(frame.locator('h1 .second')).toHaveText('for your ideas.');
 });

@@ -8,11 +8,11 @@ import "./waitlist.css";
 const unbounded = Unbounded({ subsets: ["latin"], weight: ["200", "300", "600"] });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://www.usenorthstar.ai"),
+  metadataBase: new URL("https://northstar-sigma.vercel.app"),
   title: "Northstar — Join the waitlist",
   description: "Your creative studio. On one canvas. Create with AI, refine by hand, and work with your team. Join the Northstar early-access waitlist.",
-  alternates: { canonical: "https://www.usenorthstar.ai/waitlist" },
-  openGraph: { title: "Your creative studio. On one canvas.", description: "Create with AI. Refine by hand. Work together. Join the Northstar waitlist.", url: "https://www.usenorthstar.ai/waitlist", siteName: "Northstar", type: "website" },
+  alternates: { canonical: "https://northstar-sigma.vercel.app/waitlist" },
+  openGraph: { title: "Your creative studio. On one canvas.", description: "Create with AI. Refine by hand. Work together. Join the Northstar waitlist.", url: "https://northstar-sigma.vercel.app/waitlist", siteName: "Northstar", type: "website" },
   twitter: { card: "summary_large_image", title: "Northstar — Your creative studio. On one canvas.", description: "Join the early-access waitlist." },
 };
 
