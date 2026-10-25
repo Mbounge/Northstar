@@ -102,3 +102,31 @@ test('real host activity observer still sends scoped offscreen/return activity f
   assert.deepEqual(JSON.parse(JSON.stringify(messages)),[{protocol:'scoped',token:'private',viewportActive:false},{protocol:'scoped',token:'private',viewportActive:true}]);
  }
 });
+
+// Exercise the actual reference-capture closure, including the source/resource
+// boundary after its asynchronous render. The app remains live throughout.
+function referenceCaptureBoundary(globals:Record<string,unknown>) {
+ const text=fs.readFileSync(new URL('../components/canvas-v2/use-northstar-managed-chat.ts',import.meta.url),'utf8'),ast=ts.createSourceFile('chat.ts',text,ts.ScriptTarget.Latest,true);
+ let expression:ts.Expression|undefined;const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='referenceCaptureWork')expression=node.initializer;ts.forEachChild(node,visit);};visit(ast);assert.ok(expression);
+ return run(`(${expression.getText(ast)})`,globals) as ()=>Promise<unknown>;
+}
+
+test('parallel reference capture rejects changed live content, scroll attachment and saved source without replay',async()=>{
+ const {encodeCanvasV2Screen,readCanvasV2Screens}=await import('../lib/canvas-v2/interactive-screen');
+ const {requireScreenJourneySourceCurrent}=await import('../lib/canvas-v2/screen-journey-source');
+ const original={version:1 as const,title:'Original',width:383,height:820,html:'<div></div>',css:'',javascript:'',referenceAssetIds:[],simulation:{appName:'GRAET' as const,section:'home' as const}};
+ const encoded=encodeCanvasV2Screen(original),asset={id:'photo',url:'data:image/png;base64,original',label:'Original'};
+ const html=(source=encoded)=>`<div data-canvas-v2-node-id="reference" data-canvas-v2-screen="${source}"></div><p>Unrelated human work</p>`;
+ for(const change of ['none','html','css','controls','source','resource','deleted','abort'] as const){
+  const signal=new AbortController(),state={html:'<p>Current view</p>',css:'p{color:blue}',controls:[{selector:'#goal',bounds:{y:50}}]};let reads=0,captures=0;
+  const sourceChanged=change==='source'?encodeCanvasV2Screen({...original,simulation:{appName:'GRAET',section:'explore'}}):encoded;
+  const latest={document:{html:change==='deleted'?'':html(sourceChanged)},evidence:change==='resource'?[{...asset,url:'data:image/png;base64,replaced'}]:[asset]};
+  const capture=referenceCaptureBoundary({screen:{screen:{referenceNodeId:'reference'}},screenRevision:{document:{html:html()}},readCanvasV2Screens,signal:signal.signal,captureAssets:[asset],assets:{current:new Map()},engine:{readCommittedRevision:()=>latest},requireScreenJourneySourceCurrent,
+   readCanvasV2SimulationSource:async()=>{reads++;return reads===1?state:{...state,...(change==='html'?{html:'<p>Another view</p>'}:change==='css'?{css:'p{color:red}'}:change==='controls'?{controls:[{selector:'#goal',bounds:{y:90}}]}:{})};},
+   captureCanvasV2Screen:async()=>{captures++;if(change==='abort'){signal.abort(new Error('Stopped'));throw signal.signal.reason;}return {image:'actual reference pixels'};},
+  });
+  if(change==='abort')await assert.rejects(capture(),/Stopped/);
+  else {const result=await capture();assert.equal(Boolean(result),change==='none'||change==='resource',change);assert.equal(reads,2);}
+  assert.equal(captures,1,'Never replay the reference or a live user action.');
+ }
+});

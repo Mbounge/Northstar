@@ -78,14 +78,24 @@ test('private product journeys exercise rapid actions, saved values and both mot
 
 test('registered preview review waits for Career home and retains actual reference pixels for faithful variants',async({page})=>{
  test.setTimeout(90000);
+ // Next 16.1.1 treats a compilation hash changed by an iframe route as a
+ // restarted server when its development socket reconnects. Keep compilation
+ // messages/errors, but omit the dev-only sync handshake in this fixed-source test.
+ await page.routeWebSocket('**/_next/webpack-hmr*',socket=>{
+  const server=socket.connectToServer();
+  server.onMessage(message=>{try{if(JSON.parse(String(message)).type==='sync')return;}catch{}socket.send(message);});
+ });
  // The unauthenticated local fixture uses the exact bundled font bytes.
  // Production loads these same assets with the user's authenticated session.
  await page.route('**/graet-replica/fonts/MonaSans-*.ttf',async route=>{const name=path.basename(new URL(route.request().url()).pathname);await route.fulfill({path:path.join(process.cwd(),'public/graet-replica/fonts',name),contentType:'font/ttf'});});
  await page.goto('/canvas-v2-e2e/codex');
  await expect(page.getByTestId('canvas-v2-native-scene')).toHaveCount(1);
+ const originalTimeOrigin=await page.evaluate(()=>performance.timeOrigin);
  await page.getByRole('textbox',{name:'Message North Star'}).fill('screen preview reference');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect(page.getByText('Verified current light preview pixels, reusable reference assets and automatic faithful lineage. The private default-state check distinguishes a wrong dark appearance.',{exact:true})).toBeVisible({timeout:60000});
+ await expect(page.getByText(/Copied the genuine Career implementation|Source reuse check failed:/)).toBeVisible({timeout:60000});
+ expect(await page.evaluate(()=>performance.timeOrigin)).toBe(originalTimeOrigin);
+ await expect(page.getByText('Copied the genuine Career implementation with its original assets and typography, then added and tested the goal editor without redesigning the screen. This fixture checks source reuse and behavior; visual fidelity still needs comparison with the reference.',{exact:true})).toBeVisible({timeout:60000});
  const frames=page.locator('[data-northstar-device-frame="ios"]');
  await expect(frames).toHaveCount(2);
  for(const frame of await frames.all()) await expect(frame).toHaveCSS('background-color','rgba(0, 0, 0, 0)');

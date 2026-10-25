@@ -269,7 +269,24 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             }
             return cached;
           };
-          const [{capture,pixelAppearance},defaultResult] = await Promise.all([liveCapture(),defaultCaptureWork()]);
+          const referenceCaptureWork = async () => {
+            const original=screen.screen.referenceNodeId&&readCanvasV2Screens(screenRevision.document.html).find(item=>item.nodeId===screen.screen.referenceNodeId&&item.screen.simulation);
+            if(!original)return undefined;
+            try {
+              const source=await readCanvasV2SimulationSource(original.nodeId,original.encoded,signal);
+              const referenceCapture=await captureCanvasV2Screen(original.nodeId,original.encoded,signal);
+              const after=await readCanvasV2SimulationSource(original.nodeId,original.encoded,signal);
+              const latest=engine.readCommittedRevision();
+              requireScreenJourneySourceCurrent(original.nodeId,original.encoded,captureAssets,latest.document.html,[...latest.evidence,...assets.current.values()]);
+              // A live reference can navigate, scroll or change its content while
+              // captured. Never attach old geometry/source to those new pixels.
+              if(source.html!==after.html||source.css!==after.css||JSON.stringify(source.controls)!==JSON.stringify(after.controls))return undefined;
+              return {original,source,capture:referenceCapture};
+            } catch { signal.throwIfAborted(); return undefined; }
+          };
+          // These three surfaces are read independently. Preserve every real
+          // capture and validation while overlapping their renderer/asset waits.
+          const [{capture,pixelAppearance},defaultResult,referenceResult] = await Promise.all([liveCapture(),defaultCaptureWork(),referenceCaptureWork()]);
           const defaultPixelAppearance=defaultResult?.appearance, defaultCapture=defaultResult?.capture;
           // Authored snapshots are retained only on an explicit review, not every postcommit capture.
           const previewAsset = screen.screen.simulation || action.name === 'canvas_review' ? await canvasV2ScreenPreviewAsset(screen.nodeId,screen.screen,capture.image,screen.encoded) : undefined;
@@ -317,23 +334,12 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
             try{const pixels=await compareScreenReferencePixels(source,defaultCapture.image,pair.referenceRect,pair.screenRect,signal);componentPairs.push({label:pair.label,selector:pair.selector,image:pixels.image});}
             catch{signal.throwIfAborted();}
           }
-          if(defaultCapture && screen.screen.referenceNodeId){
-            const original=readCanvasV2Screens(screenRevision.document.html).find(item=>item.nodeId===screen.screen.referenceNodeId&&item.screen.simulation);
-            if(original){
-              try{
-                const source=await readCanvasV2SimulationSource(original.nodeId,original.encoded,signal);
-                const originalCapture=await captureCanvasV2Screen(original.nodeId,original.encoded,signal);
-                const after=await readCanvasV2SimulationSource(original.nodeId,original.encoded,signal);
-                // A person may scroll or navigate the reference during capture.
-                // Never pair a stale coordinate with a different visible state.
-                if(JSON.stringify(source.controls)===JSON.stringify(after.controls)){
-                  const pairs=canvasV2ComponentReferencePairs({reference:source,referenceViewport:original.screen,currentViewport:screen.screen,currentTargets:Array.isArray(object(defaultCapture.state).componentTargets)?object(defaultCapture.state).componentTargets as unknown[]:[]});
-                  for(const pair of pairs){
-                    const pixels=await compareScreenReferencePixels(originalCapture.image,defaultCapture.image,pair.referenceRect,pair.screenRect,signal);
-                    componentPairs.push({label:pair.label,selector:pair.selector,image:pixels.image});
-                  }
-                }
-              }catch{signal.throwIfAborted();}
+          if(defaultCapture && referenceResult){
+            const {original,source,capture:originalCapture}=referenceResult;
+            const pairs=canvasV2ComponentReferencePairs({reference:source,referenceViewport:original.screen,currentViewport:screen.screen,currentTargets:Array.isArray(object(defaultCapture.state).componentTargets)?object(defaultCapture.state).componentTargets as unknown[]:[]});
+            for(const pair of pairs){
+              try{const pixels=await compareScreenReferencePixels(originalCapture.image,defaultCapture.image,pair.referenceRect,pair.screenRect,signal);componentPairs.push({label:pair.label,selector:pair.selector,image:pixels.image});}
+              catch{signal.throwIfAborted();}
             }
           }
           const baselineParts=baselineImage?[{type:'input_text',text:JSON.stringify({nodeId:screen.nodeId,refinementBaseline:true,componentPlan,sourceVersion:baseline.sourceVersion,viewport:baseline.viewport,state:baseline.state,note:'Actual pre-edit render and measured runtime state. Judge the requested component and dependencies; unchanged unrelated baseline defects are not new repair work.'})},{type:'input_image',image_url:baselineImage}]:[];
