@@ -31,7 +31,7 @@ function nodes(value: unknown): ElementTree[] {
 function harness({ locked = false, readOnly = false, textEditable = true, count = 1, busyObjects = [] as string[] } = {}) {
   const selectedElement = { nodeId: 'headline', label: 'Campaign headline', kind: 'text', textEditable, locked, bounds: { x: 400, y: 200, width: 500, height: 80 } };
   let followStops = 0;
-  const context = vm.createContext({ stopFollowingRef: { current: () => { followStops++; } }, selectedElement, selectedElements: count ? Array.from({ length: count }, () => selectedElement) : [], collaborationReadOnly: readOnly, Date, beginConnectorLabel: () => assert.fail('Text must not open connector labels'), beginImageCrop: () => assert.fail('Text must not open image cropping') });
+  const context = vm.createContext({ canvasView:'design', stopFollowingRef: { current: () => { followStops++; } }, selectedElement, selectedElements: count ? Array.from({ length: count }, () => selectedElement) : [], collaborationReadOnly: readOnly, Date, beginConnectorLabel: () => assert.fail('Text must not open connector labels'), beginImageCrop: () => assert.fail('Text must not open image cropping') });
   const run = (code: string) => vm.runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, context);
   let request: { nodeId: string; nonce: number; selectAll: boolean } | undefined;
   let editingState = false;
@@ -82,7 +82,7 @@ function harness({ locked = false, readOnly = false, textEditable = true, count 
   run(`const ${declaration(native, 'beginTextEditing')};`);
   const effect = find(native, (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(native) === 'useEffect' && !!node.arguments[0]?.getText(native).includes('if (!editTextRequest || !renderedScene)'));
   const receiveRequest = run(`(${effect.arguments[0].getText(native)})`) as () => void;
-  return { button, dom, mutations, errors, accept: (value:boolean) => {accepted=value;}, changeText: (text:string) => {dom.textContent=text;dom.innerHTML=text;dom.childNodes=[{nodeType:3,textContent:text}];}, followStops: () => followStops, finish: () => finishTextEditingRef.current(), receiveRequest, request: () => request, focused: () => focused, humanBegins: () => humanBegins, humanEnds: () => humanEnds, selectedAll: () => selectedAll, editingState: () => editingState, revoke: () => { context.collaborationReadOnly = true; }, lock: () => { selectedElement.locked = true; } };
+  return { button, dom, mutations, errors, accept: (value:boolean) => {accepted=value;}, changeText: (text:string) => {dom.textContent=text;dom.innerHTML=text;dom.childNodes=[{nodeType:3,textContent:text}];}, followStops: () => followStops, finish: () => finishTextEditingRef.current(), receiveRequest, request: () => request, focused: () => focused, humanBegins: () => humanBegins, humanEnds: () => humanEnds, selectedAll: () => selectedAll, editingState: () => editingState, preview:()=>{context.canvasView='preview';}, revoke: () => { context.collaborationReadOnly = true; }, lock: () => { selectedElement.locked = true; } };
 }
 
 test('inspector Edit text starts the selected native editor, focuses/selects text and finishes normally', () => {
@@ -133,4 +133,10 @@ test('native Edit text refuses a teammate-owned selected object while unrelated 
   assert.equal(blocked.dom.contentEditable,'false');assert.equal(blocked.humanBegins(),0);assert.match(blocked.errors[0],/teammate/);
   const unrelated=harness({busyObjects:['other-object']});unrelated.button!.props.onClick!();unrelated.receiveRequest();
   assert.equal(unrelated.dom.contentEditable,'true');assert.equal(unrelated.humanBegins(),1);assert.deepEqual(unrelated.errors,[]);unrelated.finish();
+});
+
+
+test('a native text request queued in Design cannot begin editing after switching to Preview',()=>{
+ const h=harness();h.button!.props.onClick!();h.preview();h.receiveRequest();
+ assert.equal(h.dom.contentEditable,'false');assert.equal(h.humanBegins(),0);assert.equal(h.focused(),0);assert.deepEqual(h.mutations,[]);
 });

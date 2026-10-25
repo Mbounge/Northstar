@@ -2417,6 +2417,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     if(!element.hidden)window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:[element.nodeId]}}));
   };
   const forwardedElementPointer = (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => {
+    if (event.phase === "up" && event.cancelled) { releasePointerGestureHandlerRef.current(event.pointerId, true); return; }
+    if (event.phase === "move" && event.buttons === 0) { releasePointerGestureHandlerRef.current(event.pointerId); return; }
     if(canvasView==='preview'){
       // Selection is available in Preview. Starting a design gesture here would
       // move the object or expose editing chrome, so keep this path read-only.
@@ -2426,8 +2428,6 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       }
       return;
     }
-    if (event.phase === "up" && event.cancelled) { releasePointerGestureHandlerRef.current(event.pointerId, true); return; }
-    if (event.phase === "move" && event.buttons === 0) { releasePointerGestureHandlerRef.current(event.pointerId); return; }
     if (feedbackPickingRef.current && !spacePan && tool !== "pan" && event.button === 0) { if (event.phase === 'down') tagCanvasElement(event.element); return; }
     if (tool === "draw" && !spacePan) {
       if (event.phase === "down" && event.button === 0) startDrawingGestureHandlerRef.current(event.pointerId, event.clientX, event.clientY);
