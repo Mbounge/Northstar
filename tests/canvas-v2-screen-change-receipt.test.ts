@@ -50,3 +50,15 @@ test('only exact text-node refinements defer the duplicate visual call; structur
  assert.equal(screenHTMLCopyOnly('<p data-label="a>b">A</p>','<p data-label="a>b">B</p>'),true);
  for(const [a,b] of [['<script>A</script>','<script>B</script>'],['<style>A</style>','<style>B</style>'],['<textarea>A</textarea>','<textarea>B</textarea>'],['<!-- A --><p>A</p>','<!-- A --><p>B</p>'],['<p>A</p>','<p></p>'],['<p>A</p>','<p>A</p>'],['<p>A','<p>B<']])assert.equal(screenHTMLCopyOnly(a,b),false);
 });
+
+
+test('canvas preservation compares wrapper geometry and every surrounding source without masking an identical sibling payload',()=>{
+ const before=doc(screen),updated=doc({...screen,html:screen.html.replace('November 12','November 13')});
+ const sibling=before.html.replace('node-id="workshop"','node-id="sibling"');
+ const baseline={html:before.html+sibling+'<p id="human">Human work</p>',css:'[id="human"]{color:purple}'};
+ const after={...baseline,html:updated.html+sibling+'<p id="human">Human work</p>'};
+ const receipt=screenChangeReceipts(baseline,after,['workshop'])[0];
+ assert.equal(receipt.canvasPreservation.htmlOutsideTargetScreenPayloads,true);assert.equal(receipt.canvasPreservation.canvasStylesheet,true);
+ for(const html of [after.html.replace('Human work','New human work'),after.html.replace('node-id="workshop"','node-id="workshop" style="left:10px"'),after.html.replace(sibling,updated.html.replace('node-id="workshop"','node-id="sibling"')),after.html.replace(sibling,'')])assert.equal(screenChangeReceipts(baseline,{...after,html},['workshop'])[0].canvasPreservation.htmlOutsideTargetScreenPayloads,false);
+ assert.equal(screenChangeReceipts(baseline,{...after,css:'changed'},['workshop'])[0].canvasPreservation.canvasStylesheet,false);
+});
