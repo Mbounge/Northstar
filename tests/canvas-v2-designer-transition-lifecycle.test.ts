@@ -110,3 +110,15 @@ test('completed pointer transform commits once and releases human editing',()=>{
 
 for(const kind of ['connector','drawing'] as const)test(`${kind} pointercancel retires transient geometry without authoring`,()=>{const h=pointerTerminationHarness(kind);h.dispatch('pointercancel');assert.equal(h.mutations.length,0);assert.equal(h.active(),undefined);assert.equal(h.restores(),1);assert.equal(h.ends(),kind==='connector'?1:0);});
 test('Escape cancels a live connector before pointer release and releases its human ownership once',()=>{const h=pointerTerminationHarness('connector');h.escape();assert.equal(h.active(),undefined);assert.equal(h.restores(),1);assert.equal(h.ends(),1);h.dispatch('pointerup');assert.equal(h.mutations.length,0);assert.equal(h.ends(),1);});
+
+test('Preview pointer selection never starts a design gesture or changes the view',()=>{
+ const declaration=findNode((node):node is ts.VariableDeclaration=>ts.isVariableDeclaration(node)&&node.name.getText(workspaceTree)==='forwardedElementPointer');assert.ok(declaration.initializer);
+ const code=ts.transpileModule('('+declaration.initializer.getText(workspaceTree)+')',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText;
+ for(const blocked of [false,true]){
+  const selections:unknown[]=[],element={nodeId:'poster'};let focus=0;
+  const callback=vm.runInNewContext(code,{canvasView:'preview',tool:'select',spacePan:false,collaborationReadOnly:blocked,selectionRequestEpochRef:{current:0},selectCanvasElement:(...args:unknown[])=>selections.push(args),workspaceRef:{current:{focus:()=>{focus++;}}},setCanvasView:()=>{throw Error('Preview selection must retain Preview.');},startDirectGesture:()=>{throw Error('Preview must not move or edit objects.');}}) as (event:unknown)=>void;
+  for(const phase of ['down','move','up'])callback({phase,pointerId:1,button:0,buttons:phase==='up'?0:1,element,shiftKey:true});
+  assert.equal(selections.length,blocked?0:1);assert.equal(focus,blocked?0:1);
+  if(!blocked)assert.deepEqual(JSON.parse(JSON.stringify(selections[0])),[element,{additive:true,range:false,directEdit:false}]);
+ }
+});

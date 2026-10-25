@@ -130,3 +130,24 @@ test('parallel reference capture rejects changed live content, scroll attachment
   assert.equal(captures,1,'Never replay the reference or a live user action.');
  }
 });
+
+test('simulation startup retries only an empty approved document and never reloads live content or auth redirects',()=>{
+ for(const kind of ['blank','empty-approved','live','loading','auth','cross-origin','changed-src','inaccessible','ready','aborted'] as const){
+  let reloads=0,timers=0;const doc={URL:kind==='blank'?'about:blank':kind==='cross-origin'?'https://other.example/preview':kind==='auth'?'https://northstar.example/login':'https://northstar.example/preview',readyState:kind==='loading'?'loading':'complete',body:{childElementCount:kind==='live'?1:0,textContent:''}};
+  const element={get contentDocument(){if(kind==='inaccessible')throw Error('Cross origin');return doc;},getAttribute:()=>kind==='changed-src'?'/changed':'/preview',set src(value:string){assert.equal(value,'/preview');reloads++;}};
+  const recover=run(`(${declaration('recoverEmptySimulation').initializer!.getText(tree)})`,{ready:kind==='ready',aborter:{signal:{aborted:kind==='aborted'}},frame:{current:element},expectedSimulationSource:'/preview',URL,window:{location:{origin:'https://northstar.example'},setTimeout:(_callback:unknown,ms:number)=>{assert.equal(ms,6000);timers++;return timers;}},simulationStartupTimer:undefined,failSimulationStartup:()=>{}}) as ()=>void;
+  recover();assert.equal(reloads,kind==='blank'||kind==='empty-approved'?1:0,kind);assert.equal(timers,kind==='ready'||kind==='aborted'?0:1,kind);
+ }
+});
+
+test('a registered capture waits for its late controller and never rasterizes first-party inspection as authored HTML',async()=>{
+ const fn=find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='captureCanvasV2Screen');
+ for(const late of [false,true]){
+  let inspections=0,captures=0;const registry=new Map(),controller={encoded:'exact',capture:async()=>{captures++;return{image:'real registered pixels',state:{text:'Career'}};}};
+  if(!late)registry.set('preview',controller);
+  const capture=run(`(${fn.getText(tree).replace('export ','')})`,{controllers:registry,parseCanvasV2Screen:()=>({simulation:{appName:'GRAET'}}),inspectCanvasV2Screen:async()=>{inspections++;registry.set('preview',controller);return{text:'Career'};},rasterizeScreenSnapshot:()=>{throw Error('Registered data must never reach authored rasterization.');}}) as (nodeId:string,encoded:string,signal:AbortSignal)=>Promise<{image:string}>;
+  assert.equal((await capture('preview','exact',new AbortController().signal)).image,'real registered pixels');assert.equal(inspections,late?1:0);assert.equal(captures,1);
+ }
+ const capture=run(`(${fn.getText(tree).replace('export ','')})`,{controllers:new Map([['preview',{encoded:'new version'}]]),parseCanvasV2Screen:()=>({simulation:{appName:'GRAET'}}),inspectCanvasV2Screen:async()=>({text:'Old inspection'}),rasterizeScreenSnapshot:()=>{throw Error('Unsafe fallback.');}}) as (nodeId:string,encoded:string,signal:AbortSignal)=>Promise<unknown>;
+ await assert.rejects(capture('preview','exact',new AbortController().signal),/preview changed before capture/);
+});

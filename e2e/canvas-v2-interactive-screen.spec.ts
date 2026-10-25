@@ -76,14 +76,18 @@ test('private product journeys exercise rapid actions, saved values and both mot
  }
 });
 
-test('registered preview review waits for Career home and retains actual reference pixels for faithful variants',async({page})=>{
+for(const emptyInitialPreview of [false,true])test('registered preview '+(emptyInitialPreview?'recovers an empty initial document and ':'')+'review waits for Career home and retains actual reference pixels for faithful variants',async({page})=>{
  test.setTimeout(90000);
- // Next 16.1.1 treats a compilation hash changed by an iframe route as a
- // restarted server when its development socket reconnects. Keep compilation
- // messages/errors, but omit the dev-only sync handshake in this fixed-source test.
+ let previewRequests=0;
+ if(emptyInitialPreview)await page.route('**/canvas-v2-e2e/graet-preview',async route=>{
+  previewRequests++;if(previewRequests===1)await route.fulfill({contentType:'text/html',body:'<!doctype html><html><body></body></html>'});else await route.continue();
+ });
+ // Freeze development hot reload in this fixed-source browser check. Lazy
+ // iframe-route compilation must not reload and erase the temporary workspace.
+ // Actual route/build failures and browser errors still fail the test.
  await page.routeWebSocket('**/_next/webpack-hmr*',socket=>{
   const server=socket.connectToServer();
-  server.onMessage(message=>{try{if(JSON.parse(String(message)).type==='sync')return;}catch{}socket.send(message);});
+  server.onMessage(()=>{});
  });
  // The unauthenticated local fixture uses the exact bundled font bytes.
  // Production loads these same assets with the user's authenticated session.
@@ -95,6 +99,8 @@ test('registered preview review waits for Career home and retains actual referen
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(page.getByText(/Copied the genuine Career implementation|Source reuse check failed:/)).toBeVisible({timeout:60000});
  expect(await page.evaluate(()=>performance.timeOrigin)).toBe(originalTimeOrigin);
+ if(emptyInitialPreview)expect(previewRequests).toBe(2);
+ await expect(page.getByRole('status',{name:'Loading app preview',exact:true})).toHaveCount(0);
  await expect(page.getByText('Copied the genuine Career implementation with its original assets and typography, then added and tested the goal editor without redesigning the screen. This fixture checks source reuse and behavior; visual fidelity still needs comparison with the reference.',{exact:true})).toBeVisible({timeout:60000});
  const frames=page.locator('[data-northstar-device-frame="ios"]');
  await expect(frames).toHaveCount(2);
@@ -102,4 +108,25 @@ test('registered preview review waits for Career home and retains actual referen
  const original=page.frameLocator('iframe[title="GRAET · interactive simulation"]');
  await expect(original.getByRole('button',{name:'Add season goal',exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Interact with screen'})).toHaveCount(0);
+});
+
+test('a stalled registered preview offers Retry and restores the same saved object without History',async({page})=>{
+ test.setTimeout(60000);
+ await page.routeWebSocket('**/_next/webpack-hmr*',socket=>{const server=socket.connectToServer();server.onMessage(()=>{});});
+ let permitPreview=false,requests=0;
+ await page.route('**/canvas-v2-e2e/graet-preview',async route=>{requests++;if(permitPreview)await route.continue();else await route.fulfill({contentType:'text/html',body:'<!doctype html><html><body></body></html>'});});
+ await page.route('**/graet-replica/fonts/MonaSans-*.ttf',async route=>{const name=path.basename(new URL(route.request().url()).pathname);await route.fulfill({path:path.join(process.cwd(),'public/graet-replica/fonts',name),contentType:'font/ttf'});});
+ await page.goto('/canvas-v2-e2e/codex');
+ await page.getByRole('textbox',{name:'Message North Star'}).fill('screen preview reference');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ const object=page.locator('[data-canvas-v2-screen]');await expect(object).toHaveCount(1);
+ const before=await object.getAttribute('data-canvas-v2-screen');
+ await expect(page.getByRole('status',{name:'Loading app preview',exact:true})).toBeVisible();
+ await expect(page.getByText('This app preview did not finish loading. Retry to reconnect it.',{exact:true})).toBeVisible({timeout:20000});
+ expect(requests).toBe(2);permitPreview=true;
+ await page.getByRole('button',{name:'Retry preview',exact:true}).click();
+ await expect(page.frameLocator('iframe[title="GRAET · interactive simulation"]').getByRole('button',{name:'Add season goal',exact:true})).toBeVisible();
+ await expect(page.getByRole('status',{name:'Loading app preview',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Retry preview',exact:true})).toHaveCount(0);
+ await expect(object).toHaveAttribute('data-canvas-v2-screen',before!);expect(requests).toBe(3);
 });

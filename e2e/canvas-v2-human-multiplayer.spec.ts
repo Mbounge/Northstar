@@ -806,3 +806,32 @@ test('three, five and ten active fixture teammates retain matching cursor, name 
     await pages[0].screenshot({path:info.outputPath('ten-teammate-colours.png')});
   } finally {for (const page of pages) await page.close();}
 });
+
+test('first-open Preview selects objects without design edits and keeps live app interaction through mode switches and reload',async({context})=>{
+ test.setTimeout(90000);const page=await openPeer(context,'preview-select-'+randomUUID(),'alice');
+ try {
+  const mode=page.getByRole('button',{name:'Design view',exact:true}),outlines=page.getByTestId('canvas-v2-preview-selection');
+  await expect(mode).toHaveAttribute('aria-pressed','false');
+  const before=await geometry(page,'note-alice'),source=await object(page,'journal-a').getAttribute('data-canvas-v2-screen');
+  await object(page,'note-alice').click();await expect(outlines).toHaveAttribute('data-selected-node-id','note-alice');
+  await expect(mode).toHaveAttribute('aria-pressed','false');await expect(page.getByRole('tree',{name:'Editable layers'})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:/^Resize .* from/})).toHaveCount(0);
+  await object(page,'note-alice').dblclick();await expect(page.locator('[data-canvas-v2-direct-editing="true"]')).toHaveCount(0);
+  const bounds=await object(page,'note-alice').boundingBox();if(!bounds)throw Error('The first-click target is not visible.');
+  await page.mouse.move(bounds.x+30,bounds.y+30);await page.mouse.down();await page.mouse.move(bounds.x+60,bounds.y+40,{steps:6});await page.mouse.up();
+  await page.keyboard.press('ArrowRight');await page.keyboard.press('Delete');expect(await geometry(page,'note-alice')).toEqual(before);
+  await object(page,'note-bob').click({modifiers:['Shift']});await expect(outlines).toHaveCount(2);
+  await page.keyboard.press('Escape');await expect(outlines).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+A');expect(await outlines.count()).toBeGreaterThan(2);await expect(mode).toHaveAttribute('aria-pressed','false');
+  await page.keyboard.press('Escape');await expect(outlines).toHaveCount(0);
+  await object(page,'journal-a').getByText('Shared journal A',{exact:true}).click();await expect(outlines).toHaveAttribute('data-selected-node-id','journal-a');
+  const frame=page.frameLocator('iframe[title="Shared journal A"]');await frame.getByRole('textbox',{name:'Your draft',exact:true}).fill('Still live in Preview');
+  await frame.getByRole('button',{name:'Save draft',exact:true}).click();await expect(frame.locator('#status')).toHaveText('Saved 1 · Still live in Preview');
+  await mode.click();await expect(mode).toHaveAttribute('aria-pressed','true');await expect(page.getByRole('tree',{name:'Editable layers'})).toBeVisible();
+  await mode.click();await expect(outlines).toHaveAttribute('data-selected-node-id','journal-a');
+  await expect(frame.getByRole('textbox',{name:'Your draft',exact:true})).toHaveValue('Still live in Preview');
+  await expect(object(page,'journal-a')).toHaveAttribute('data-canvas-v2-screen',source!);
+  await page.reload();await expect.poll(async()=>(await state(page)).phase).toBe('live');await expect(mode).toHaveAttribute('aria-pressed','false');
+  await object(page,'note-bob').click();await expect(outlines).toHaveAttribute('data-selected-node-id','note-bob');
+ } finally {await page.close();}
+});

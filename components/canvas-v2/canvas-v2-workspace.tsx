@@ -893,7 +893,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [editChatOpen,setEditChatOpen]=useState(false),editModeNodeRef=useRef(screenEditNodeId);editModeNodeRef.current=screenEditNodeId;
   const [screenElementTargets,setScreenElementTargets]=useState<import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]>([]);
   const selectScreenParts=useCallback((nodeId?:string,targets:import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]=[])=>{setScreenElementNodeId(nodeId);setScreenElementTargets(targets)},[]);
-  const screenEditing=useMemo(()=>({mode:canvasView,readOnly:collaborationReadOnly,previewFocus:(nodeId:string)=>{previewSelection.current={ids:[nodeId],screenId:nodeId}},nodeId:screenEditNodeId,exit:()=>{setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined)},enter:(nodeId:string)=>{const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(!element||element.locked||collaborationReadOnly)return;setCanvasView('design');setSelectedElements([element]);setSelectionTarget(nodeId);setScreenEditNodeId(nodeId)},select:selectScreenParts,chatOpen:editChatOpen,openChat:()=>{setPanel('chat');setEditChatOpen(true)}}),[canvasView,screenEditNodeId,editChatOpen,selectScreenParts,collaborationReadOnly,setCanvasView]);
+  const screenEditing=useMemo(()=>({mode:canvasView,readOnly:collaborationReadOnly,previewFocus:(nodeId:string)=>{previewSelection.current={ids:[nodeId],screenId:nodeId};const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(element){setSelectedElements([element]);setSelectionTarget(nodeId)}},nodeId:screenEditNodeId,exit:()=>{setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined)},enter:(nodeId:string)=>{const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(!element||element.locked||collaborationReadOnly)return;setCanvasView('design');setSelectedElements([element]);setSelectionTarget(nodeId);setScreenEditNodeId(nodeId)},select:selectScreenParts,chatOpen:editChatOpen,openChat:()=>{setPanel('chat');setEditChatOpen(true)}}),[canvasView,screenEditNodeId,editChatOpen,selectScreenParts,collaborationReadOnly,setCanvasView]);
   // Conversation and run lifecycle belong to the workspace, not to the
   // collapsible presentation panel. Closing the panel or visiting Apps must
   // never discard a routing request, transcript, selected model, or the turn
@@ -1878,7 +1878,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     // primary button remains held. Once a select gesture owns the pointer,
     // route the complete sequence through marquee handling by pointer id.
     const activeMarquee = marqueeRef.current?.pointerId === event.pointerId;
-    if (canvasView === "design" && tool === "select" && !spacePan && (event.button === 0 || activeMarquee)) {
+    if (tool === "select" && !spacePan && (event.button === 0 || activeMarquee)) {
       const point = workspacePoint(event.clientX, event.clientY);
       if (event.phase === "down") {
         const screen = { x: event.clientX, y: event.clientY };
@@ -2417,6 +2417,15 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     if(!element.hidden)window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:[element.nodeId]}}));
   };
   const forwardedElementPointer = (event: { phase: "down" | "move" | "up"; pointerId: number; clientX: number; clientY: number; button: number; buttons?: number; cancelled?: boolean; shiftKey?: boolean; metaKey?: boolean; element: CanvasV2InspectableElement }) => {
+    if(canvasView==='preview'){
+      // Selection is available in Preview. Starting a design gesture here would
+      // move the object or expose editing chrome, so keep this path read-only.
+      if(tool==='select'&&!spacePan&&event.button===0&&!collaborationReadOnly){
+        if(event.phase==='down'){selectionRequestEpochRef.current+=1;selectCanvasElement(event.element,{additive:Boolean(event.shiftKey||event.metaKey),range:false,directEdit:false});}
+        else if(event.phase==='up')workspaceRef.current?.focus({preventScroll:true});
+      }
+      return;
+    }
     if (event.phase === "up" && event.cancelled) { releasePointerGestureHandlerRef.current(event.pointerId, true); return; }
     if (event.phase === "move" && event.buttons === 0) { releasePointerGestureHandlerRef.current(event.pointerId); return; }
     if (feedbackPickingRef.current && !spacePan && tool !== "pan" && event.button === 0) { if (event.phase === 'down') tagCanvasElement(event.element); return; }
@@ -3873,8 +3882,12 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         return;
       }
       if(canvasView==='preview'){
-        if(event.code==='Space'){event.preventDefault();setSpacePan(true)}
-        else if(event.key==='Escape'){setObjectMenu(undefined);setZoomMenuOpen(false)}
+        if(command&&key==='a'){
+          event.preventDefault();const elements=sceneElementsRef.current.filter(item=>item.nodeId!=='canvas'&&!item.hidden);
+          setSelectedElements(elements);setSelectionTarget(elements.at(-1)?.nodeId);
+        }
+        else if(event.code==='Space'){event.preventDefault();setSpacePan(true)}
+        else if(event.key==='Escape'){selectElement(undefined);setObjectMenu(undefined);setZoomMenuOpen(false)}
         else if(!command&&event.shiftKey&&event.code==='Digit1'){event.preventDefault();fitContent()}
         return;
       }
@@ -4154,6 +4167,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const focus=!collaborationReadOnly&&selectedElements.length===1&&!selectedElement?.locked&&selectedScreenDescriptor&&!selectedScreenDescriptor.simulation?selectedElement?.nodeId:undefined;
     setScreenEditNodeId(focus);
   },[canvasView,objectMenu,collaborationReadOnly,humanEditing,selectedElements.length,selectedElement?.nodeId,selectedElement?.locked,selectedScreenDescriptor]);
+  useEffect(()=>{
+    if(canvasView==='preview')previewSelection.current={ids:selectedElements.map(item=>item.nodeId),screenId:selectedElements.length===1&&selectedScreenDescriptor&&!selectedScreenDescriptor.simulation?selectedElement?.nodeId:undefined};
+  },[canvasView,selectedElements,selectedElement?.nodeId,selectedScreenDescriptor]);
   const changeCanvasView = async (next:'design'|'preview') => {
     const intent=++viewIntentRef.current;
     if(next===canvasView)return;
@@ -4163,7 +4179,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       setCanvasV2FeedbackPicking(false);setToolbarMenu(undefined);setObjectMenu(undefined);setLayersOpen(false);setEditingNodeId(undefined);setTool('select');
       if(next==='preview'){
         previewSelection.current={ids:selectedElements.map(item=>item.nodeId),screenId:screenEditNodeId};
-        setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined);setHoveredElement(undefined);
+        setScreenEditNodeId(undefined);setHoveredElement(undefined);
       }else{
         const remembered=previewSelection.current;
         const elements=remembered.ids.flatMap(id=>{const element=sceneElementsRef.current.find(item=>item.nodeId===id&&!item.hidden);return element?[element]:[]});
@@ -4557,10 +4573,10 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
             onCaptureProgress={engine.receiveCaptureProgress}
               bare
               framePointerEvents={tool === "pan" || tool === "place" || spacePan ? "none" : "auto"}
-              inspectionEnabled={canvasView === "design" && tool === "select" && !spacePan && !collaborationReadOnly}
+              inspectionEnabled={tool === "select" && !spacePan && !collaborationReadOnly}
               selectedNodeId={selectionTarget}
               selectedNodeIds={requestedSelectionNodeIds}
-              onElementHover={hoverElement}
+              onElementHover={canvasView === "design" ? hoverElement : undefined}
               onElementSelect={selectCanvasElement}
               onSelectionRefresh={guardedRefreshSelection}
               onSceneSnapshot={receiveScene}
@@ -4570,8 +4586,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               viewportScale={viewport.scale}
               viewportStore={nativeViewportStore}
               preferredPlacement={preferredAiPlacement}
-              onElementDoubleClick={(element) => { if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
+              onElementDoubleClick={(element) => { if(canvasView!=="design")return; if (element.kind === "connector") beginConnectorLabel(element); else if (element.kind === "image") beginImageCrop(element); }}
               onBeforeUserEdit={(element) => {
+                if(canvasView!=="design")return false;
                 if (collaborationReadOnly || (element && collaboration?.getStatus().busyObjects.includes(element.nodeId))) { setMutationError("A teammate is editing this element. Select another object."); return false; }
                 beginHumanEdit(); return true;
               }}
@@ -4618,6 +4635,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
               className="pointer-events-none absolute border border-[#8d7cff]/70"
               style={{ left: element.bounds.x, top: element.bounds.y, width: element.bounds.width, height: element.bounds.height, rotate: `${element.rotation ?? 0}deg` }}
             />)}
+            {canvasView==='preview'&&selectedElements.map(element=><div key={element.nodeId} data-testid="canvas-v2-preview-selection" data-selected-node-id={element.nodeId} aria-hidden className="pointer-events-none absolute z-30 border-[#1597f4]" style={{left:element.bounds.x,top:element.bounds.y,width:element.bounds.width,height:element.bounds.height,rotate:`${element.rotation??0}deg`,borderWidth:1/viewport.scale}}/>)}
             {canvasView === "design" && !screenEditNodeId && !editingNodeId && !cropDraft && !connectorLabelDraft && selectedElement && activeSelectionBounds && <div ref={selectionOverlayRef} data-testid="canvas-v2-element-selection" className="pointer-events-none absolute border-[#1597f4]" style={{ left: activeSelectionBounds.x, top: activeSelectionBounds.y, width: activeSelectionBounds.width, height: activeSelectionBounds.height, borderWidth: selectedElements.length === 1 && selectedElement.kind === "connector" ? 0 : 1 / viewport.scale, rotate: selectedElements.length === 1 ? `${selectedElement.rotation ?? 0}deg` : undefined }}>
               {selectedElement.kind !== "connector" && <output ref={selectionSizeRef} data-testid="canvas-v2-selection-size" aria-label="Selected dimensions in pixels" aria-live="off" title="Width × height · design pixels" className="pointer-events-none absolute left-1/2 whitespace-nowrap rounded-[3px] border border-[#d9d6e2]/80 bg-[#f9f8fc]/95 px-1 py-px font-mono text-[9px] leading-3 text-[#625b73] dark:border-[#4e485e]/60 dark:bg-[#25222e]/95 dark:text-[#cdc7dd]" style={{ top: `calc(100% + ${6 / viewport.scale}px)`, transform: `translateX(-50%) scale(${1 / viewport.scale})`, transformOrigin: 'top center', rotate: selectedElements.length === 1 ? `${-(selectedElement.rotation ?? 0)}deg` : undefined }}>{formatCanvasV2DesignPixels(activeSelectionBounds.width)} × {formatCanvasV2DesignPixels(activeSelectionBounds.height)}</output>}
               {selectedElements.length > 1 && !selectionPermanent && <button
