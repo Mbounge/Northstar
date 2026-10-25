@@ -175,3 +175,16 @@ test('automatic wording preparation cannot use missing, failed or broken baselin
  assert.equal(requireAutomaticCopyBaseline(baseline),baseline);
  for(const invalid of [undefined,{...baseline,state:{errors:['Startup failed']}},{...baseline,state:{journey:{passed:false,requestedStepCount:1,steps:[{step:1,passed:false}]}}},{...baseline,state:{}}])assert.throws(()=>requireAutomaticCopyBaseline(invalid),/No edit was committed/);
 });
+
+
+test('author instructions and both screen tools agree on automatic copy preparation without waiving quality checks',async()=>{
+ const {NORTHSTAR_AGENT_INSTRUCTIONS,NORTHSTAR_AGENT_TOOLS}=await import('../lib/canvas-v2/managed-agent/config');
+ const tool=(name:string)=>NORTHSTAR_AGENT_TOOLS.filter(tool=>'name' in tool).find(tool=>tool.name===name)!.description;
+ assert.match(NORTHSTAR_AGENT_INSTRUCTIONS,/bounded literal wording correction may follow the direct canvas_screen exception/);
+ assert.match(NORTHSTAR_AGENT_INSTRUCTIONS,/healthy pre-edit baseline automatically/);
+ assert.match(NORTHSTAR_AGENT_INSTRUCTIONS,/final independent review remain required/);
+ assert.doesNotMatch(NORTHSTAR_AGENT_INSTRUCTIONS,/Before canvas_screen, use canvas_plan_screen/);
+ assert.match(tool('canvas_plan_screen'),/except the bounded literal wording correction/);
+ assert.match(tool('canvas_screen'),/at most eight changed text nodes/);
+ assert.match(tool('canvas_screen'),/current-source\/selection\/lock guards/);
+});
