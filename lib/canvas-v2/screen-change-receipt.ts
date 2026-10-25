@@ -38,14 +38,27 @@ export function screenChangeReceipts(before: DocumentSource, after: DocumentSour
   const targets = new Set(nodeIds);
   const surroundingSource = (html: string) => html.replace(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi, tag => {
     const id = /\bdata-canvas-v2-node-id\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
-    return id && targets.has(id) ? tag.replace(/(\bdata-canvas-v2-screen\s*=\s*)(["'])([^"']*)\2/i, (_attribute, prefix, quote) => `${prefix}${quote}[target-screen-payload]${quote}`) : tag;
+    if (!id || !targets.has(id) || !/^<div\b/i.test(tag)) return tag;
+    const attributes = new Map<string,string>(), source = tag.slice(4,-1); let cursor = 0;
+    for (const match of source.matchAll(/\s+([^\s=<>/]+)\s*=\s*(["'])([\s\S]*?)\2/g)) {
+      const name = match[1].toLowerCase();
+      // Unknown syntax/duplicate attributes must never manufacture equality.
+      if (source.slice(cursor,match.index).trim() || attributes.has(name)) return tag;
+      attributes.set(name,match[3]); cursor = match.index! + match[0].length;
+    }
+    if (source.slice(cursor).trim()) return tag;
+    attributes.set('data-canvas-v2-screen','[target-screen-payload]');
+    // Native commits advance attribution and reorder attributes on this edited
+    // wrapper. Preserve all geometry, visibility, locks and other attributes.
+    attributes.delete('data-canvas-v2-edit-version'); attributes.delete('data-canvas-v2-last-author');
+    return '<target-screen-wrapper '+JSON.stringify([...attributes].sort(([a],[b])=>a.localeCompare(b)))+'>';
   });
   const canvasPreservation = {
     basis: 'exact-saved-canvas-comparison' as const,
     targetScreenNodeIds: [...targets],
     htmlOutsideTargetScreenPayloads: surroundingSource(before.html) === surroundingSource(after.html),
     canvasStylesheet: before.css === after.css,
-    note: 'Compares all saved canvas HTML except the named screens’ encoded payloads, including their wrapper attributes, geometry and surrounding objects. Together with unchanged canvasStylesheet this establishes saved surrounding source preservation at this commit. It does not prove private runtime state, appearance or later teammate changes. Reuse this measured proof; do not export or repeatedly reread unchanged objects to restate it.',
+    note: 'Compares all surrounding saved canvas HTML byte-for-byte. On the named screen wrappers only, compares every attribute value including geometry, visibility and locks, excluding encoded payloads, edit-version/last-author counters and attribute ordering. Together with unchanged canvasStylesheet this establishes surrounding saved source and wrapper geometry preservation at this commit. It does not prove private runtime state, appearance or later teammate changes. Reuse this measured proof; do not export or repeatedly reread unchanged objects to restate it.',
   };
   return [...new Set(nodeIds)].flatMap(nodeId => {
     const previous = originals.find(item => item.nodeId === nodeId), current = saved.find(item => item.nodeId === nodeId);

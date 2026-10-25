@@ -62,3 +62,12 @@ test('canvas preservation compares wrapper geometry and every surrounding source
  for(const html of [after.html.replace('Human work','New human work'),after.html.replace('node-id="workshop"','node-id="workshop" style="left:10px"'),after.html.replace(sibling,updated.html.replace('node-id="workshop"','node-id="sibling"')),after.html.replace(sibling,'')])assert.equal(screenChangeReceipts(baseline,{...after,html},['workshop'])[0].canvasPreservation.htmlOutsideTargetScreenPayloads,false);
  assert.equal(screenChangeReceipts(baseline,{...after,css:'changed'},['workshop'])[0].canvasPreservation.canvasStylesheet,false);
 });
+
+
+test('native attribution counters and attribute ordering do not hide real wrapper or sibling changes',()=>{
+ const encoded=encodeCanvasV2Screen(screen),updated=encodeCanvasV2Screen({...screen,html:screen.html.replace('12','13')});
+ const before={html:`<div data-canvas-v2-node-id="workshop" data-canvas-v2-screen="${encoded}" data-canvas-v2-last-author="human" data-canvas-v2-edit-version="7" data-canvas-v2-origin="northstar" style="left:100px"></div><p data-canvas-v2-edit-version="1">Human</p>`,css:''};
+ const after={html:`<div style="left:100px" data-canvas-v2-screen="${updated}" data-canvas-v2-node-id="workshop" data-canvas-v2-origin="northstar" data-canvas-v2-last-author="northstar" data-canvas-v2-edit-version="8"></div><p data-canvas-v2-edit-version="1">Human</p>`,css:''};
+ assert.equal(screenChangeReceipts(before,after,['workshop'])[0].canvasPreservation.htmlOutsideTargetScreenPayloads,true);
+ for(const html of [after.html.replace('left:100px','left:110px'),after.html.replace('style="left:100px"','hidden="true" style="left:100px"'),after.html.replace('origin="northstar"','origin="human"'),after.html.replace('<p data-canvas-v2-edit-version="1">','<p data-canvas-v2-edit-version="2">'),after.html.replace('style="left:100px"','style="left:100px" style="left:110px"')])assert.equal(screenChangeReceipts(before,{...after,html},['workshop'])[0].canvasPreservation.htmlOutsideTargetScreenPayloads,false);
+});
