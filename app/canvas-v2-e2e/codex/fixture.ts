@@ -49,6 +49,10 @@ export class FixtureCodex implements CodexTransport {
       const current=this.screenDirectory.get(string(value.nodeId));
       this.tool('canvas_plan_screen',{intent:value.nodeId?'refine':'create',...(value.nodeId?{nodeId:value.nodeId}:{}),summary:value.summary??'Plan the deterministic fixture screen',viewport:{width:current?.width??value.width??390,height:current?.height??value.height??844},preserve:['Retain unrelated fixture controls and local state.'],components:[{id:'fixture-root',name:'Fixture screen owner',kind:'container',basis:'inferred',shape:'native layout',style:'The scenario supplies deterministic native styles.',content:'The scenario supplies deterministic controls and content.',behavior:'Exercise the scenario local interactions.',assetPolicy:'none'}]});return;
     }
+    this.emitToolCall(name,args);
+  }
+  /** Scenarios explicitly exercise an unplanned request through the real host. */
+  emitToolCall(name:string,args:unknown){
     this.receive({ id: `${this.turn}:${++this.toolSequence}:${name}`, method: 'item/tool/call', params: { threadId: 'thread-fixture', turnId: this.turn, callId: `${this.turn}:${this.toolSequence}:${name}`, tool: name, arguments: args } });
   }
   async request(method: string, raw: unknown): Promise<JsonObject> {

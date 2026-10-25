@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { screenConstructionPlan, requireScreenConstructionPlan } from '../lib/canvas-v2/screen-construction-plan';
+import { automaticScreenCopyPlan, requireAutomaticCopyBaseline, screenConstructionPlan, requireScreenConstructionPlan } from '../lib/canvas-v2/screen-construction-plan';
 import { authorizePlannedScreenEdit, continueAuthorizedPlannedScreenEdit } from '../lib/canvas-v2/screen-edit-authorization';
 import type { CanvasV2WorkingContext } from '../lib/canvas-v2/working-context';
 import { applyCanvasV2SourcePatch } from '../lib/canvas-v2/source-patch';
@@ -147,4 +147,31 @@ test('published design-direction tool bounds match the plan parser before submis
  for(const key of Object.keys(direction)){
   assert.equal(validate({...direction,[key]:'x'.repeat(501)}),false,key+' must advertise the actual 500-character bound');
  }
+});
+
+
+test('a small literal copy refinement prepares measured scope while every non-copy source override still requires the full plan',()=>{
+ const screen={version:1 as const,title:'Workshop',width:640,height:560,html:'<main><p id="date">November 18</p><section id="confirmation" hidden><p>November 18</p></section><input id="name"></main>',css:'p{color:purple}',javascript:'name.value=""',referenceAssetIds:[]};
+ const current={nodeId:'workshop',sourceVersion:'v1',screen},html=screen.html.replaceAll('November 18','November 19');
+ const request={nodeId:'workshop',html,summary:'Correct date',selectionPolicy:'modify'};
+ const plan=automaticScreenCopyPlan(request,'measured',current)!;
+ assert.equal(plan.preparation,'measured-copy-refinement');assert.equal(plan.nodeId,'workshop');assert.equal(plan.sourceVersion,'v1');assert.equal(plan.intent,'refine');assert.deepEqual(plan.viewport,{width:640,height:560});assert.equal(plan.components.length,2);
+ for(const component of plan.components){assert.equal(component.kind,'text');assert.deepEqual(JSON.parse(component.content),{before:'November 18',after:'November 19'});}
+ for(const override of [{css:''},{javascript:screen.javascript},{mockData:{}},{width:640},{referenceAssetIds:[]},{planId:'stale'},{baseNodeId:'workshop'},{title:'New'}])assert.equal(automaticScreenCopyPlan({...request,...override},'bad',current),undefined);
+ for(const invalid of [{...request,nodeId:'other'},{...request,html:screen.html},{...request,html:html.replace('id="date"','id="date" style="color:red"')},{...request,html:html+'<p>New layout</p>'}])assert.equal(automaticScreenCopyPlan(invalid,'bad',current),undefined);
+ assert.equal(automaticScreenCopyPlan(request,'bad',undefined),undefined);
+ assert.equal(automaticScreenCopyPlan(request,'bad',{...current,screen:{...screen,simulation:{appName:'GRAET',section:'home'}}}),undefined);
+ const many={...screen,html:Array.from({length:9},(_,i)=>'<p>Before '+i+'</p>').join('')};
+ assert.equal(automaticScreenCopyPlan({nodeId:'workshop',html:many.html.replaceAll('Before','After')},'bad',{...current,screen:many}),undefined);
+ const large={...screen,html:'<p>'+'Before'.repeat(150)+'</p>'};
+ assert.equal(automaticScreenCopyPlan({nodeId:'workshop',html:large.html.replaceAll('Before','After')},'bad',{...current,screen:large}),undefined);
+ const raw={...screen,html:'<script>Before</script><p>Before</p>'};
+ assert.equal(automaticScreenCopyPlan({nodeId:'workshop',html:raw.html.replaceAll('Before','After')},'bad',{...current,screen:raw}),undefined);
+ assert.throws(()=>requireScreenConstructionPlan([],undefined,{nodeId:'workshop',sourceVersion:'v1'}),/Plan the actual/,'full planning remains required outside the measured exception');
+});
+
+test('automatic wording preparation cannot use missing, failed or broken baseline pixels to bypass quality checks',()=>{
+ const baseline={image:'actual fixture pixels',state:{errors:[],journey:{passed:true,requestedStepCount:1,steps:[{step:1,passed:true}]}}};
+ assert.equal(requireAutomaticCopyBaseline(baseline),baseline);
+ for(const invalid of [undefined,{...baseline,state:{errors:['Startup failed']}},{...baseline,state:{journey:{passed:false,requestedStepCount:1,steps:[{step:1,passed:false}]}}},{...baseline,state:{}}])assert.throws(()=>requireAutomaticCopyBaseline(invalid),/No edit was committed/);
 });

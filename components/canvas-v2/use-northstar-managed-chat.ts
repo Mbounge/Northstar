@@ -12,7 +12,7 @@ import { parseRasterAdjustment } from '@/lib/canvas-v2/creative/raster-adjustmen
 import { adjustRetainedImage } from '@/lib/canvas-v2/creative/raster-adjustment.browser';
 import { verifyAssetCropSelection, type AssetPixelRect, type AssetSourceSize } from '@/lib/canvas-v2/asset-crop';
 import { inspectAssetCropPixels, readAssetCropSource } from '@/lib/canvas-v2/asset-crop-inspection';
-import { screenConstructionPlan, requireScreenConstructionPlan, type ScreenConstructionPlan } from '@/lib/canvas-v2/screen-construction-plan';
+import { automaticScreenCopyPlan, requireAutomaticCopyBaseline, screenConstructionPlan, requireScreenConstructionPlan, type ScreenConstructionPlan } from '@/lib/canvas-v2/screen-construction-plan';
 import { budgetScreenReviewResponse } from '@/lib/canvas-v2/screen-review-response-budget';
 import { screenChangeReceipts } from '@/lib/canvas-v2/screen-change-receipt';
 import { requireScreenJourneySourceCurrent } from '@/lib/canvas-v2/screen-journey-source';
@@ -770,7 +770,22 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         let workingContext = current.current.getWorkingContext?.(args.selectionPolicy === 'modify' ? 'modify' : 'none');
         conversationEditTargets.current = currentConversationEditTargets(revision.document, workingContext, conversationEditTargets.current);
         if (args.selectionPolicy === 'modify') workingContext = authorizeConversationEdit(workingContext, conversationEditTargets.current);
-        const plannedScreen = ['canvas_screen','canvas_screen_component'].includes(action.name) && !args.baseNodeId ? requireScreenConstructionPlan(screenPlans.current.values(), args.planId, args.nodeId ? (() => { const target=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);if(!target)throw new Error('Read the current screen before refining it.');return {nodeId:target.nodeId,sourceVersion:canvasV2FeedbackFingerprint(target.encoded)}; })() : undefined) : undefined;
+        let plannedScreen: ScreenConstructionPlan | undefined;
+        if(['canvas_screen','canvas_screen_component'].includes(action.name)&&!args.baseNodeId){
+          const target=args.nodeId?readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId):undefined;
+          if(args.nodeId&&!target)throw new Error('Read the current screen before refining it.');
+          const automatic=action.name==='canvas_screen'?automaticScreenCopyPlan(args,crypto.randomUUID(),target?{nodeId:target.nodeId,sourceVersion:canvasV2FeedbackFingerprint(target.encoded),screen:target.screen}:undefined):undefined;
+          if(automatic&&target){
+            const prepared=await captureCanvasV2ScreenPlanBaseline(()=>testCanvasV2ScreenJourney(target.nodeId,target.encoded,evidence,[{action:'wait',delayMs:100}],'no-preference',signal),signal);
+            const baseline=requireAutomaticCopyBaseline(prepared.baseline);
+            if(engine.readCommittedRevision().id!==revision.id)throw new Error('The canvas changed during wording preparation. Read its current source before trying again.');
+            for(const [id,prior] of screenPlans.current)if(prior.nodeId===target.nodeId){screenPlans.current.delete(id);refinementBaselines.current.delete(id);}
+            screenPlans.current.set(automatic.id,automatic);
+            refinementBaselines.current.set(automatic.id,{image:baseline.image,state:baseline.state,sourceVersion:automatic.sourceVersion,viewport:automatic.viewport});
+            if(screenPlans.current.size>24){const oldest=screenPlans.current.keys().next().value!;screenPlans.current.delete(oldest);refinementBaselines.current.delete(oldest);}
+            plannedScreen=automatic;
+          } else plannedScreen=requireScreenConstructionPlan(screenPlans.current.values(),args.planId,target?{nodeId:target.nodeId,sourceVersion:canvasV2FeedbackFingerprint(target.encoded)}:undefined);
+        }
         if (plannedScreen && !args.nodeId && (Number(args.width ?? 390) !== plannedScreen.viewport.width || Number(args.height ?? 844) !== plannedScreen.viewport.height)) throw new Error('Use the viewport dimensions saved in the component plan.');
         if (args.selectionPolicy === 'modify' && typeof args.nodeId === 'string') {
           const target = readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);
@@ -948,7 +963,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
               activeObjectFeedback.current = activeObjectFeedback.current.flatMap(target => { const range = findCanvasV2SourceNodeRange(latest.document.html, target.nodeId); return range ? [{ ...target, fingerprint: canvasV2FeedbackFingerprint(latest.document.html.slice(range.start, range.end)) }] : []; });
               readRevision.current = latest.id;
               compositionPlan.current = undefined;
-              const commit = { committed: true, ...(screenPatch ? { nodeId: screenPatch.nodeId, nodeIds:screenPatches.map(patch=>patch.nodeId), sourceChangeReceipts:screenChangeReceipts(revision.document,latest.document,screenPatches.map(patch=>patch.nodeId)) } : {}), revisionId: latest.id, summary: string(args.summary), layoutFeedback: current.current.engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, next: screenPatch ? 'Current rendered pixels follow automatically when available; inspect them before testing requested interactions. Reuse those current captures rather than requesting the same unchanged view again. sourceChangeReceipts measure exact saved field preservation, not appearance or behaviour. If canvasPreservation.htmlOutsideTargetScreenPayloads and canvasPreservation.canvasStylesheet are true, the commit preserved all saved surrounding objects and wrapper geometry; reuse that proof without workspace exports or repeated before/after reconstructions. Repair actual defects and review meaningful changed states; preserve unrelated human work.' : 'Inspect the rendered result with canvas_review. Plan the next island or a repair only if needed.' };
+              const commit = { committed: true, ...(plannedScreen?.preparation?{preparation:plannedScreen.preparation}:{}), ...(screenPatch ? { nodeId: screenPatch.nodeId, nodeIds:screenPatches.map(patch=>patch.nodeId), sourceChangeReceipts:screenChangeReceipts(revision.document,latest.document,screenPatches.map(patch=>patch.nodeId)) } : {}), revisionId: latest.id, summary: string(args.summary), layoutFeedback: current.current.engine.readCompositionFeedback(), feedbackPolicy: CODEX_COMPOSITION_FEEDBACK_POLICY, next: screenPatch ? 'Current rendered pixels follow automatically when available; inspect them before testing requested interactions. Reuse those current captures rather than requesting the same unchanged view again. sourceChangeReceipts measure exact saved field preservation, not appearance or behaviour. If canvasPreservation.htmlOutsideTargetScreenPayloads and canvasPreservation.canvasStylesheet are true, the commit preserved all saved surrounding objects and wrapper geometry; reuse that proof without workspace exports or repeated before/after reconstructions. Repair actual defects and review meaningful changed states; preserve unrelated human work.' : 'Inspect the rendered result with canvas_review. Plan the next island or a repair only if needed.' };
               if(screenPatch&&!isSimulation){
                 const parts:Array<{type:string;text?:string;image_url?:string}>=[{type:'input_text',text:JSON.stringify(commit)}];
                 for(const patch of screenPatches){

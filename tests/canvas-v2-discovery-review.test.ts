@@ -1806,7 +1806,7 @@ test('copy refinements use one final independent review and cannot silently appr
  assert.deepEqual(initialAppearanceReviewTargets(packet(receipt),['edited']),[]);
  for(const invalid of [{...receipt,sourceVersion:'stale'},{...receipt,operation:'create'},{...receipt,changedFields:['html','css']},{...receipt,unchanged:{...receipt.unchanged,javascript:false}},{...receipt,reviewScheduling:undefined},{...receipt,beforeSourceVersion:null}])assert.deepEqual(initialAppearanceReviewTargets(packet(invalid),['edited']),['edited']);
  assert.deepEqual(initialAppearanceReviewTargets(packet(receipt),['edited','new']),['new']);
- const output=[text({committed:true,nodeId:'edited',sourceChangeReceipts:[receipt]}),text({nodeId:'edited',sourceVersion:'current',postCommitReview:true,captureRole:'render',viewport:{width:640,height:560},state:{fonts:[],errors:[]}}),{type:'input_image',image_url:'data:image/png;base64,current'}];
+ const output=[text({committed:true,nodeId:'edited',preparation:'measured-copy-refinement',sourceChangeReceipts:[receipt]}),text({nodeId:'edited',sourceVersion:'current',postCommitReview:true,captureRole:'render',viewport:{width:640,height:560},state:{fonts:[],errors:[]}}),{type:'input_image',image_url:'data:image/png;base64,current'}];
  const verdict=deferred<string>();let reviews=0,finalPacket='';
  const t=await setup(async packet=>{reviews++;finalPacket=packet.text;return verdict.promise;},6,output);
  try{

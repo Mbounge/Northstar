@@ -48,14 +48,17 @@ test('the agent creates, tests, captures and revises one native screen without s
 });
 
 test('private product journeys exercise rapid actions, saved values and both motion preferences without resetting live user state',async({page})=>{
+ const automaticPreparations: Array<{preparation:string}> = [];
+ let explicitPlanResults=0;
  const preservation: Array<{operation?:string;canvasPreservation?:{basis?:string;htmlOutsideTargetScreenPayloads?:boolean;canvasStylesheet?:boolean}}> = [];
  page.on('request',request=>{
   if(!request.url().includes('/canvas-v2-e2e/codex/agent')||request.method()!=='POST')return;
   try{
    const body=request.postDataJSON();if(body.op!=='result')return;
+   if(String(body.callId).endsWith(':canvas_plan_screen'))explicitPlanResults++;
    for(const part of Array.isArray(body.output)?body.output:[]){
     if(part.type!=='input_text')continue;
-    try{const value=JSON.parse(part.text);if(Array.isArray(value.sourceChangeReceipts))preservation.push(...value.sourceChangeReceipts);}catch{/* Other tool text is not receipt metadata. */}
+    try{const value=JSON.parse(part.text);if(Array.isArray(value.sourceChangeReceipts))preservation.push(...value.sourceChangeReceipts);if(value.preparation==='measured-copy-refinement')automaticPreparations.push(value);}catch{/* Other tool text is not receipt metadata. */}
    }
   }catch{/* Non-JSON requests do not carry edit receipts. */}
  });
@@ -67,6 +70,9 @@ test('private product journeys exercise rapid actions, saved values and both mot
  await expect(frame.getByText('User live goal',{exact:true})).toBeVisible();
  await expect(frame.getByText('Twelve goals',{exact:true})).toHaveCount(0);
  await expect(page.locator('iframe[title="Private product journey check"]')).toHaveCount(0);
+ await expect(frame.getByRole('heading',{name:'Your next season',exact:true})).toBeVisible();
+ expect(automaticPreparations).toHaveLength(1);
+ expect(explicitPlanResults).toBe(2); // Creation and CSS refinement; copy preparation is inside the editor.
  const refinements=preservation.filter(receipt=>receipt.operation==='refine');
  expect(refinements.length).toBeGreaterThan(0);
  for(const receipt of refinements){

@@ -2,6 +2,9 @@ import { assetPixelRect, assetSourceSize, type AssetSourceSize } from './asset-c
 import { object, string, type JsonObject } from './managed-agent/protocol';
 import { screenNavigationPlan, type ScreenNavigationPlan } from './screen-navigation-plan';
 import { screenExperiencePlan, type ScreenExperiencePlan } from './experience-plan';
+import { screenHTMLCopyChanges } from './screen-change-receipt';
+import type { CanvasV2InteractiveScreen } from './interactive-screen';
+import { screenInitialRenderFailure } from './screen-probe-outcome';
 
 export interface ScreenDesignDirection {
   rationale: string;
@@ -35,6 +38,8 @@ export interface ScreenConstructionPlan {
   viewport: { width: number; height: number };
   summary: string;
   preserve: string[];
+  /** Editor-measured scope; baseline pixels and all normal edit guards remain. */
+  preparation?: 'measured-copy-refinement';
   /** Brief-derived direction; faithful refinements may omit it. */
   designDirection?: ScreenDesignDirection;
   /** Core journey and applicable craft/reference decisions for original work. */
@@ -54,6 +59,29 @@ export interface ScreenConstructionPlan {
     localBounds?: { x: number; y: number; width: number; height: number };
     navigation?: ScreenNavigationPlan;
   }>;
+}
+
+/** Only a small literal text-node correction may prepare its own exact plan.
+ * No style, behaviour, identity, asset or geometry override is accepted here. */
+export function automaticScreenCopyPlan(args: JsonObject, id: string, current?: { nodeId: string; sourceVersion: string; screen: CanvasV2InteractiveScreen }): ScreenConstructionPlan | undefined {
+  if (!current || current.screen.simulation || args.nodeId !== current.nodeId || typeof args.html !== 'string'
+    || Object.keys(args).some(key => args[key] !== undefined && !['nodeId','html','summary','selectionPolicy'].includes(key))) return undefined;
+  const changes = screenHTMLCopyChanges(current.screen.html,args.html);
+  if (!changes?.length || changes.length > 8 || changes.some(change => !change.before.trim() || !change.after.trim())
+    || changes.reduce((length,change) => length + change.before.length + change.after.length,0) > 1600) return undefined;
+  return { id, intent:'refine', preparation:'measured-copy-refinement', nodeId:current.nodeId, sourceVersion:current.sourceVersion,
+    viewport:{width:current.screen.width,height:current.screen.height}, summary:`Correct ${changes.length} existing text node${changes.length===1?'':'s'} in place.`,
+    preserve:['All tag names and attributes, including IDs, locks and event bindings.','Existing stylesheet, script, dataset, resources and screen identity.','Existing canvas objects and geometry; each person’s live prototype state.'],
+    components:changes.map((change,index)=>({id:`copy-${index+1}`,name:`Measured wording change ${index+1}`,kind:'text',basis:'inferred',shape:'Existing text node; no structural changes.',style:'Keep the existing typography and layout; inspect actual wrapping after the change.',content:JSON.stringify(change),behavior:'Keep existing behaviour; verify affected views and interactions.',assetPolicy:'none'})),
+  };
+}
+
+/** The automatic route cannot use missing/broken pixels as a preservation
+ * baseline. Rendering repairs must take the explicit planning route. */
+export function requireAutomaticCopyBaseline<T extends { state: unknown }>(baseline: T | undefined): T {
+  const failure = baseline ? screenInitialRenderFailure(baseline.state) : 'The pre-edit baseline could not be captured.';
+  if (failure) throw new Error(`Automatic wording preparation stopped: ${failure} Inspect the screen or use an explicit refinement plan to repair its rendering. No edit was committed.`);
+  return baseline!;
 }
 
 const boundedText = (value: unknown, name: string, limit = 800) => {

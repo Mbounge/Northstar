@@ -7,13 +7,19 @@ type DocumentSource = { html: string; css: string };
  * boundaries. Raw-text elements and declarations always take the full path.
  * This schedules review; it does not establish unchanged layout or behaviour. */
 export function screenHTMLCopyOnly(before: string, after: string): boolean {
+  return screenHTMLCopyChanges(before, after) !== undefined;
+}
+
+/** Exact text-node differences; tags and attribute values must be identical. */
+export function screenHTMLCopyChanges(before: string, after: string): Array<{ before: string; after: string }> | undefined {
   const structure = (html: string) => {
     if (/<\s*[!?]|<\s*\/?\s*(?:script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)\b/i.test(html)) return undefined;
-    const tags: string[] = []; let cursor = 0;
+    const tags: string[] = [], texts: string[] = []; let cursor = 0;
     while (cursor < html.length) {
       const start = html.indexOf('<', cursor);
-      if (start < 0) { tags.push(html.slice(cursor).length ? '#text' : ''); break; }
+      if (start < 0) { tags.push(html.slice(cursor).length ? '#text' : ''); texts.push(html.slice(cursor)); break; }
       tags.push(start > cursor ? '#text' : '');
+      texts.push(html.slice(cursor,start));
       let quote = '', end = start + 1;
       for (; end < html.length; end++) {
         const char = html[end];
@@ -25,10 +31,11 @@ export function screenHTMLCopyOnly(before: string, after: string): boolean {
       if (end >= html.length || (!/^<\/?[A-Za-z][\s\S]*>$/.test(tag) || tag.slice(1).includes('<'))) return undefined;
       tags.push(tag); cursor = end + 1;
     }
-    return JSON.stringify(tags);
+    return { shape: JSON.stringify(tags), texts };
   };
-  const shape = structure(before);
-  return before !== after && shape !== undefined && shape === structure(after);
+  const original = structure(before), next = structure(after);
+  if (before === after || !original || !next || original.shape !== next.shape) return undefined;
+  return original.texts.flatMap((text,index) => text === next.texts[index] ? [] : [{ before: text, after: next.texts[index] }]);
 }
 
 /** Editor-measured comparisons of the exact saved sources, never model claims.
