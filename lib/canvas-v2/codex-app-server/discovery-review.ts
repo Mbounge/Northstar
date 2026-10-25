@@ -833,6 +833,24 @@ export class DiscoveryReviewContext {
 
 export type DiscoveryReviewer = (packet: ReturnType<DiscoveryReviewContext['packet']>, options: { key: string; model: string; effort?: import('../model-catalog').NorthstarEffort; signal: AbortSignal }) => Promise<string>;
 
+/** A measured copy-only refinement still needs current pixels, behaviour and
+ * the full final assessment. It need not block the author on a second visual
+ * model call before those checks. New structure/style/code keeps early review. */
+export function initialAppearanceReviewTargets(packet: ReturnType<DiscoveryReviewContext['packet']>, nodeIds: readonly string[]) {
+  const value = object(JSON.parse(packet.text));
+  const screens = (Array.isArray(value.productWork) ? value.productWork : []).map(object);
+  return nodeIds.filter(id => {
+    const screen = screens.find(screen => screen.nodeId === id), receipt = object(screen?.sourceChangeReceipt);
+    const unchanged = object(receipt.unchanged);
+    const copyOnly = receipt.basis === 'exact-saved-source-comparison' && receipt.operation === 'refine'
+      && receipt.reviewScheduling === 'final-only-copy-refinement' && typeof receipt.beforeSourceVersion === 'string' && !!receipt.beforeSourceVersion
+      && !!screen?.sourceVersion && receipt.sourceVersion === screen.sourceVersion && receipt.beforeSourceVersion !== receipt.sourceVersion
+      && JSON.stringify(receipt.changedFields) === '["html"]' && unchanged.html === false
+      && ['css','javascript','mockData','viewport','boundAssetIds','runtimeLibraries','wasmModules','design'].every(key => unchanged[key] === true);
+    return !copyOnly;
+  });
+}
+
 /** Cross-product comparison is requested by a particular brief, never inferred
  * from palette or imposed on a faithful family of screens. */
 function comparisonNodeIds(screens: JsonObject[], focus: ReadonlySet<string>): Set<string> {

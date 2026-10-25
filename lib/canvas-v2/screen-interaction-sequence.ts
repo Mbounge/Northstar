@@ -9,6 +9,8 @@ export type ScreenInteractionStep = {
   x?: number;
   y?: number;
   delayMs?: number;
+  /** Wait only while an action/expectation is not ready. Zero observes immediately. */
+  timeoutMs?: number;
   expectedText?: string;
   absentText?: string;
   expectedValue?: string;
@@ -20,6 +22,19 @@ export type ScreenInteractionStep = {
   /** Assert the finite numeric delta across this step (after - before). */
   expectedNumericChange?: ScreenNumericChangeExpectation;
 };
+
+/** Poll observations, never replay an action. Injectable time makes the bounds
+ * testable; the runtime advances its private animation clock by actual waiting. */
+export async function waitForScreenJourneyCondition<T>(observe: () => T, accepts: (value: T) => boolean, timeoutMs: number,
+  advance: (elapsedMs: number) => void = () => {}, clock: () => number = () => performance.now(),
+  sleep: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  const started = clock(); let observation = observe(), attempts = 1;
+  while (!accepts(observation) && clock() - started < timeoutMs) {
+    await sleep(Math.min(40, Math.max(0, timeoutMs - (clock() - started))));
+    advance(clock() - started); observation = observe(); attempts++;
+  }
+  return { observation, waitedMs: Math.max(0, clock() - started), attempts };
+}
 
 export type ScreenPointerDrag = {
   /** Fractions of the target's initial bounding rectangle. */
@@ -99,6 +114,7 @@ export function validateScreenInteractionSequence(input: unknown): ScreenInterac
     } else if (step.drag !== undefined) throw new Error('Drag parameters require a drag step.');
     const delayMs = step.delayMs ?? 0;
     if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 2500 || (duration += delayMs) > 6000) throw new Error('Keep journey drag durations and waits within six seconds in total.');
+    if (step.timeoutMs !== undefined && (!Number.isInteger(step.timeoutMs) || step.timeoutMs < 0 || step.timeoutMs > 2500)) throw new Error('Use a condition timeout from 0 to 2500 ms.');
     for (const key of ['selector', 'value', 'expectedText', 'absentText', 'expectedValue', 'expectedVisibleSelector', 'expectedHiddenSelector'] as const) {
       if (step[key] !== undefined && (typeof step[key] !== 'string' || step[key]!.length > 1000)) throw new Error('Keep journey targets and expectations concise.');
     }
@@ -120,7 +136,7 @@ export function validateScreenInteractionSequence(input: unknown): ScreenInterac
       }
     }
     for (const key of ['x', 'y'] as const) if (step[key] !== undefined && (!Number.isFinite(step[key]) || Math.abs(step[key]!) > 100000)) throw new Error('Use finite scroll positions.');
-    return { action: step.action, delayMs, ...(drag ? { drag } : {}), ...Object.fromEntries(['selector', 'value', 'x', 'y', 'expectedText', 'absentText', 'expectedValue', 'expectedVisibleSelector', 'expectedHiddenSelector', 'expectedNumericChange', 'expectedDisabled', 'capture'].filter(key => step[key as keyof ScreenInteractionStep] !== undefined).map(key => [key, step[key as keyof ScreenInteractionStep]])) };
+    return { action: step.action, delayMs, ...(drag ? { drag } : {}), ...Object.fromEntries(['selector', 'value', 'x', 'y', 'timeoutMs', 'expectedText', 'absentText', 'expectedValue', 'expectedVisibleSelector', 'expectedHiddenSelector', 'expectedNumericChange', 'expectedDisabled', 'capture'].filter(key => step[key as keyof ScreenInteractionStep] !== undefined).map(key => [key, step[key as keyof ScreenInteractionStep]])) };
   });
 }
 
@@ -129,5 +145,8 @@ export function validateScreenInteractionSequence(input: unknown): ScreenInterac
 export function screenJourneyTimeoutMs(input: unknown): number {
   const sequence = validateScreenInteractionSequence(input);
   const requestedMs = sequence.reduce((total, step) => total + (step.delayMs ?? 0) + (step.drag?.durationMs ?? 0), 0);
-  return 12_000 + requestedMs + sequence.length * 1000;
+  const conditionMs = Math.min(6000, sequence.reduce((total, step) => total + (
+    ['click','fill','drag'].includes(step.action) || !step.expectedNumericChange && ['expectedText','absentText','expectedValue','expectedVisibleSelector','expectedHiddenSelector','expectedDisabled'].some(key => step[key as keyof ScreenInteractionStep] !== undefined)
+      ? step.timeoutMs ?? 1000 : 0), 0));
+  return 12_000 + requestedMs + conditionMs + sequence.length * 1000;
 }

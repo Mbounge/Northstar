@@ -11,7 +11,7 @@ import { codexDisplayEvents } from './events';
 import { spawnCodex, type CodexTransport } from './rpc.server';
 import type { DynamicToolSpec } from './generated/v2/DynamicToolSpec';
 import type { DynamicToolCallResponse } from './generated/v2/DynamicToolCallResponse';
-import { codexDiscoveryReviewer, DiscoveryReviewContext, DiscoveryReviewRun, DiscoveryReviewFormatError, parseDiscoveryFeedback, initialAppearanceReviewPacket, reviewContinuation, type DiscoveryReviewer } from './discovery-review';
+import { codexDiscoveryReviewer, DiscoveryReviewContext, DiscoveryReviewRun, DiscoveryReviewFormatError, parseDiscoveryFeedback, initialAppearanceReviewPacket, initialAppearanceReviewTargets, reviewContinuation, type DiscoveryReviewer } from './discovery-review';
 import type { TurnSteerParams } from './generated/v2/TurnSteerParams';
 
 type PendingTool = { rpcId: string | number; action: JsonObject };
@@ -387,10 +387,12 @@ export class CodexSessionHost {
       const contentItems: DynamicToolCallResponse['contentItems'] = raw.map(v => { const part = object(v); return part.type === 'input_image' ? { type: 'inputImage', imageUrl: string(part.image_url) } : { type: 'inputText', text: string(part.text) }; });
       if (this.reviewer) s.reviewContext.tool(string(pending.action.name), pending.action.arguments, contentItems, body.success !== false);
       const changed=contentItems.flatMap(part=>{if(part.type!=='inputText')return [];try{const value=object(JSON.parse(part.text));return value.postCommitReview===true?[string(value.nodeId)]:[];}catch{return [];}});
-      if(this.reviewer&&body.success!==false&&changed.length){
+      const earlyTargets=this.reviewer&&changed.length?initialAppearanceReviewTargets(s.reviewContext.packet(''),changed):changed;
+      if(changed.length>earlyTargets.length)contentItems.push({type:'inputText',text:JSON.stringify({visualReviewScheduling:'final-only-copy-refinement',note:'The editor measured a text-only HTML refinement with other screen fields and canvas stylesheet unchanged. Current pixels are attached. Inspect them, check the requested behaviour in private, and finish; the independent final visual and interaction review remains required. Do not repeat an unchanged capture or rebuild unrelated features.'})});
+      if(this.reviewer&&body.success!==false&&earlyTargets.length){
         const controller=new AbortController();s.appearanceReviews.add(controller);
         const appearanceSignal=AbortSignal.any([controller.signal,options.signal,AbortSignal.timeout(this.initialAppearanceTimeoutMs)]);
-        const packet=initialAppearanceReviewPacket(s.reviewContext.packet(''),changed);
+        const packet=initialAppearanceReviewPacket(s.reviewContext.packet(''),earlyTargets);
         const question=string(object(JSON.parse(packet.text)).latestUserRequest);
         this.progress(s,'I’m checking the edited screen’s visual details before continuing.');
         try{

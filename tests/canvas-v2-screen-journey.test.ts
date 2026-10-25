@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readScreenNumericValue, requireLiveScreenInteraction, screenMotionTargetCropRect, screenNumericChangeResult, validateScreenInteractionSequence } from '../lib/canvas-v2/screen-interaction-sequence';
+import { readScreenNumericValue, requireLiveScreenInteraction, waitForScreenJourneyCondition, screenMotionTargetCropRect, screenNumericChangeResult, validateScreenInteractionSequence } from '../lib/canvas-v2/screen-interaction-sequence';
 import { advanceScreenJourneyMotion } from '../lib/canvas-v2/screen-motion-timeline';
 import { signalCanvasV2ScreenRuntimeReady } from '../lib/canvas-v2/interactive-screen-runtime';
 
@@ -92,4 +92,21 @@ test('both private motion preferences produce syntactically valid isolated runti
   const scripts=[...runtime.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
   assert.equal(scripts.length,3);for(const script of scripts)assert.doesNotThrow(()=>new Function(script[1]));
  }
+});
+
+
+test('condition waiting returns immediately when ready and polls without replaying an action',async()=>{
+ let now=0,reads=0;const advances:number[]=[];
+ const clock=()=>now,sleep=async(ms:number)=>{now+=ms;};
+ const ready=await waitForScreenJourneyCondition(()=>++reads,()=>true,1000,elapsed=>advances.push(elapsed),clock,sleep);
+ assert.equal(ready.waitedMs,0);assert.equal(ready.attempts,1);assert.equal(now,0);
+ const waiting=await waitForScreenJourneyCondition(()=>now,value=>value>=180,1000,elapsed=>advances.push(elapsed),clock,sleep);
+ assert.equal(waiting.observation,200);assert.equal(waiting.waitedMs,200);assert.equal(waiting.attempts,6);
+ assert.deepEqual(advances,[40,80,120,160,200]);
+ const timeout=await waitForScreenJourneyCondition(()=>false,Boolean,95,()=>{},clock,sleep);
+ assert.equal(timeout.observation,false);assert.equal(timeout.waitedMs,95);assert.equal(timeout.attempts,4);
+ const immediate=await waitForScreenJourneyCondition(()=>false,Boolean,0,()=>{},clock,sleep);
+ assert.equal(immediate.waitedMs,0);assert.equal(immediate.attempts,1);
+ for(const timeoutMs of [-1,2501,0.5,NaN,'100'])assert.throws(()=>validateScreenInteractionSequence([{action:'wait',timeoutMs}]),/condition timeout/);
+ assert.equal(validateScreenInteractionSequence([{action:'click',selector:'#close',timeoutMs:0}])[0].timeoutMs,0);
 });

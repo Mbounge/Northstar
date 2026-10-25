@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexSessionHost } from '../lib/canvas-v2/codex-app-server/server';
-import { codexDiscoveryReviewer, initialAppearanceReviewPacket, DiscoveryReviewContext, DISCOVERY_REVIEW_SCHEMA, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from '../lib/canvas-v2/codex-app-server/discovery-review';
+import { codexDiscoveryReviewer, initialAppearanceReviewPacket, initialAppearanceReviewTargets, DiscoveryReviewContext, DISCOVERY_REVIEW_SCHEMA, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from '../lib/canvas-v2/codex-app-server/discovery-review';
 import { fixtureCodex } from '../app/canvas-v2-e2e/codex/fixture';
 import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
 import { object, string, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
@@ -1796,4 +1796,29 @@ test('the real reviewer output schema lists every object property as required fo
   if(schema.type==='array')visit(schema.items,path+'[]');
  };
  visit(DISCOVERY_REVIEW_SCHEMA,'review');
+});
+
+
+test('copy refinements use one final independent review and cannot silently approve missing visual or interaction evidence',async()=>{
+ const text=(value:unknown)=>({type:'input_text',text:JSON.stringify(value)});
+ const receipt={nodeId:'edited',basis:'exact-saved-source-comparison',operation:'refine',beforeSourceVersion:'before',sourceVersion:'current',reviewScheduling:'final-only-copy-refinement',changedFields:['html'],unchanged:{html:false,css:true,javascript:true,mockData:true,viewport:true,boundAssetIds:true,runtimeLibraries:true,wasmModules:true,design:true}};
+ const packet=(value:unknown)=>({text:JSON.stringify({productWork:[{nodeId:'edited',sourceVersion:'current',sourceChangeReceipt:value}]}),images:[]});
+ assert.deepEqual(initialAppearanceReviewTargets(packet(receipt),['edited']),[]);
+ for(const invalid of [{...receipt,sourceVersion:'stale'},{...receipt,operation:'create'},{...receipt,changedFields:['html','css']},{...receipt,unchanged:{...receipt.unchanged,javascript:false}},{...receipt,reviewScheduling:undefined},{...receipt,beforeSourceVersion:null}])assert.deepEqual(initialAppearanceReviewTargets(packet(invalid),['edited']),['edited']);
+ assert.deepEqual(initialAppearanceReviewTargets(packet(receipt),['edited','new']),['new']);
+ const output=[text({committed:true,nodeId:'edited',sourceChangeReceipts:[receipt]}),text({nodeId:'edited',sourceVersion:'current',postCommitReview:true,captureRole:'render',viewport:{width:640,height:560},state:{fonts:[],errors:[]}}),{type:'input_image',image_url:'data:image/png;base64,current'}];
+ const verdict=deferred<string>();let reviews=0,finalPacket='';
+ const t=await setup(async packet=>{reviews++;finalPacket=packet.text;return verdict.promise;},6,output);
+ try{
+  await t.client.send('Change only the date to November 16',[],'gpt-5.6-luna','r1');
+  t.peer.tool('canvas_screen',{planId:'transport-fixture-plan',nodeId:'edited',html:'<p>November 16</p>'});await tick();
+  assert.equal(reviews,0,'a measured copy refinement must not block on an initial visual model call');
+  assert.equal(t.client.view.status,'running');
+  t.peer.finish('The date now reads November 16.');await tick();
+  assert.equal(reviews,1);assert.notEqual(JSON.parse(finalPacket).reviewStage,'initial_appearance');
+  assert.equal(JSON.parse(finalPacket).productWork[0].qualityReviewRequired,true);
+  assert.equal(t.client.view.status,'running','the final assessment still holds completion');
+  verdict.resolve(feedbackFor());await tick();
+  assert.equal((await t.snapshot()).review.status,'continuing','missing current visual assessment remains real work');
+ }finally{t.close();}
 });

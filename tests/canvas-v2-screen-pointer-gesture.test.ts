@@ -176,9 +176,11 @@ test('longer clamped gestures remain proportional to elapsed duration rather tha
 
 test('bridge deadlines include requested delay, step scheduling allowance and finite startup/capture allowance', () => {
   const fixture = surface();
-  assert.equal(screenJourneyTimeoutMs([fixture.step({durationMs:480,moves:14})]),13480);
-  assert.equal(screenJourneyTimeoutMs([fixture.step({durationMs:480}),{action:'wait',delayMs:100}]),14580);
+  assert.equal(screenJourneyTimeoutMs([fixture.step({durationMs:480,moves:14})]),14480);
+  assert.equal(screenJourneyTimeoutMs([fixture.step({durationMs:480}),{action:'wait',delayMs:100}]),15580);
   assert.equal(screenJourneyTimeoutMs(Array.from({length:20},()=>({action:'wait',delayMs:300}))),38000);
+  assert.equal(screenJourneyTimeoutMs([{...fixture.step({durationMs:480}),timeoutMs:0}]),13480);
+  assert.equal(screenJourneyTimeoutMs(Array.from({length:20},()=>({action:'wait',expectedText:'Ready'}))),38000);
   assert.throws(()=>screenJourneyTimeoutMs(Array.from({length:21},()=>({action:'wait'}))));
   assert.throws(()=>screenJourneyTimeoutMs([{action:'wait',delayMs:2500},{action:'wait',delayMs:2500},{action:'wait',delayMs:2500}]));
 });

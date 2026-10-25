@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { screenChangeReceipts } from '../lib/canvas-v2/screen-change-receipt';
+import { screenChangeReceipts, screenHTMLCopyOnly } from '../lib/canvas-v2/screen-change-receipt';
 import { encodeCanvasV2Screen, type CanvasV2InteractiveScreen } from '../lib/canvas-v2/interactive-screen';
 
 const screen: CanvasV2InteractiveScreen = {version:1,title:'Workshop',width:640,height:560,html:'<p id="date">November 12</p><input id="name"><button id="reserve">Reserve</button>',css:'p{color:purple}',javascript:'document.querySelector("#reserve").onclick=()=>name.value;',mockData:{seats:1},referenceAssetIds:[]};
@@ -31,4 +31,22 @@ test('receipt source identity follows the actual saved human source rather than 
   assert.deepEqual(receipt.changedFields,['html']);assert.equal(receipt.unchanged?.mockData,true);assert.equal(receipt.unchanged?.css,true);
   const [old]=screenChangeReceipts(doc(screen),doc({...human,html:human.html.replace('November 12','November 13')}),['workshop']);
   assert.notEqual(receipt.beforeSourceVersion,old.beforeSourceVersion);assert.equal(old.unchanged?.css,false);
+});
+
+
+test('only exact text-node refinements defer the duplicate visual call; structure, styling, data and raw source never do',()=>{
+ const [copy]=screenChangeReceipts(doc(screen),doc({...screen,html:screen.html.replace('November 12','November 13')}),['workshop']);
+ assert.equal(copy.reviewScheduling,'final-only-copy-refinement');
+ for(const variant of [
+  {...screen,html:screen.html.replace('id="date"','id="date" style="width:2px"')},
+  {...screen,html:screen.html+'<p>New layout</p>'},
+  {...screen,html:screen.html.replace('November 12','November 13'),css:'p{color:red}'},
+  {...screen,html:screen.html.replace('November 12','November 13'),javascript:screen.javascript+';'},
+  {...screen,html:screen.html.replace('November 12','November 13'),mockData:{seats:4}},
+  {...screen,html:screen.html.replace('November 12','November 13'),title:'Different identity'},
+ ])assert.equal(screenChangeReceipts(doc(screen),doc(variant),['workshop'])[0].reviewScheduling,undefined);
+ assert.equal(screenChangeReceipts(doc(screen),{...doc({...screen,html:screen.html.replace('12','13')}),css:'body{color:red}'},['workshop'])[0].reviewScheduling,undefined);
+ assert.equal(screenChangeReceipts({html:'',css:''},doc(screen),['workshop'])[0].reviewScheduling,undefined);
+ assert.equal(screenHTMLCopyOnly('<p data-label="a>b">A</p>','<p data-label="a>b">B</p>'),true);
+ for(const [a,b] of [['<script>A</script>','<script>B</script>'],['<style>A</style>','<style>B</style>'],['<textarea>A</textarea>','<textarea>B</textarea>'],['<!-- A --><p>A</p>','<!-- A --><p>B</p>'],['<p>A</p>','<p></p>'],['<p>A</p>','<p>A</p>'],['<p>A','<p>B<']])assert.equal(screenHTMLCopyOnly(a,b),false);
 });

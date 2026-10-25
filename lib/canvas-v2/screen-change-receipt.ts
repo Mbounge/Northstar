@@ -3,6 +3,34 @@ import { canvasV2FeedbackFingerprint } from './screen-feedback';
 
 type DocumentSource = { html: string; css: string };
 
+/** Conservative lexical check: identical tags/attributes and unchanged text
+ * boundaries. Raw-text elements and declarations always take the full path.
+ * This schedules review; it does not establish unchanged layout or behaviour. */
+export function screenHTMLCopyOnly(before: string, after: string): boolean {
+  const structure = (html: string) => {
+    if (/<\s*[!?]|<\s*\/?\s*(?:script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)\b/i.test(html)) return undefined;
+    const tags: string[] = []; let cursor = 0;
+    while (cursor < html.length) {
+      const start = html.indexOf('<', cursor);
+      if (start < 0) { tags.push(html.slice(cursor).length ? '#text' : ''); break; }
+      tags.push(start > cursor ? '#text' : '');
+      let quote = '', end = start + 1;
+      for (; end < html.length; end++) {
+        const char = html[end];
+        if (quote) { if (char === quote) quote = ''; }
+        else if (char === '"' || char === "'") quote = char;
+        else if (char === '>') break;
+      }
+      const tag = html.slice(start, end + 1);
+      if (end >= html.length || (!/^<\/?[A-Za-z][\s\S]*>$/.test(tag) || tag.slice(1).includes('<'))) return undefined;
+      tags.push(tag); cursor = end + 1;
+    }
+    return JSON.stringify(tags);
+  };
+  const shape = structure(before);
+  return before !== after && shape !== undefined && shape === structure(after);
+}
+
 /** Editor-measured comparisons of the exact saved sources, never model claims.
  * These prove only the named fields, not visual fidelity or runtime behaviour. */
 export function screenChangeReceipts(before: DocumentSource, after: DocumentSource, nodeIds: readonly string[]) {
@@ -23,9 +51,13 @@ export function screenChangeReceipts(before: DocumentSource, after: DocumentSour
       wasmModules: equal(original.wasmModules, screen.wasmModules),
       design: equal(original.design, screen.design),
     } : undefined;
+    const copyOnly = !!original && before.css === after.css
+      && equal({...original, html: ''}, {...screen, html: ''})
+      && screenHTMLCopyOnly(original.html, screen.html);
     return [{ nodeId, basis: 'exact-saved-source-comparison' as const, operation: previous ? 'refine' as const : 'create' as const,
       beforeSourceVersion: previous ? canvasV2FeedbackFingerprint(previous.encoded) : null,
       sourceVersion: canvasV2FeedbackFingerprint(current.encoded),
+      ...(copyOnly ? { reviewScheduling: 'final-only-copy-refinement' as const } : {}),
       ...(unchanged ? { unchanged, changedFields: Object.entries(unchanged).filter(([, same]) => !same).map(([field]) => field) } : {}),
       note: 'Measured against the saved screen read for this guarded commit. javascript compares that saved field only; changed HTML may affect behaviour. This is not proof of visual quality, keyboard support or arbitrary private runtime state preservation. Review actual changed pixels and requested interactions. Unrelated concurrent teammate edits must not be reverted to a historical baseline.' }];
   });

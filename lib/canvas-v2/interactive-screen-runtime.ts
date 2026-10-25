@@ -9,7 +9,7 @@ import { validateCanvasV2Screen, canvasV2ScreenAssetToken, SCREEN_ASSET_PATTERN,
 import { advanceScreenJourneyMotion, screenMotionTimeline } from './screen-motion-timeline';
 import { isCanvasV2ScreenVideoBytes, isCanvasV2FontBytes, isCanvasV2ScreenModelBytes } from './screen-asset-pixels';
 import { screenCanvasContributesPaint, trustedRuntimeHelperSource, trustedRuntimeSource } from './screen-trusted-runtime';
-import { readScreenNumericValue, screenNumericChangeResult, validateScreenInteractionSequence, type ScreenInteractionStep, type ScreenPointerDrag } from './screen-interaction-sequence';
+import { readScreenNumericValue, screenNumericChangeResult, waitForScreenJourneyCondition, validateScreenInteractionSequence, type ScreenInteractionStep, type ScreenPointerDrag } from './screen-interaction-sequence';
 import { runScreenPointerDrag } from './screen-pointer-gesture';
 import { screenAssetTargetAtPoint } from './screen-asset-edit';
 import { screenDirectOptionsAtPoint } from './screen-direct-edit';
@@ -612,12 +612,16 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         if(command.action==='test-sequence'){
           if(!testMotionPreference)throw Error('Journey checks need a private test copy.');
           await waitTrustedRuntime();
-          const steps=(${validateScreenInteractionSequence.toString()})(command.steps),readNumericJourneyValue=(${readScreenNumericValue.toString()}),numericJourneyResult=(${screenNumericChangeResult.toString()}),trace=[],captures=[],started=performance.now(),journeyAnimations=new Map();let journeyTime=0;
+          const waitCondition=(${waitForScreenJourneyCondition.toString()}),steps=(${validateScreenInteractionSequence.toString()})(command.steps),readNumericJourneyValue=(${readScreenNumericValue.toString()}),numericJourneyResult=(${screenNumericChangeResult.toString()}),trace=[],captures=[],started=performance.now(),journeyAnimations=new Map();let journeyTime=0,conditionWaitRemaining=6000;
           const tickJourney=()=>{void document.body.offsetHeight;advanceJourneyMotion(document.getAnimations().filter(a=>a.effect instanceof KeyframeEffect&&(a.currentTime===null||typeof a.currentTime==='number')),journeyTime,journeyAnimations)};
           for(const [index,step] of steps.entries()){
             try {
-            const el=step.selector?document.querySelector(step.selector):undefined;
-            if(step.selector&&!el)throw Error('Journey target is unavailable at step '+(index+1));
+            let el=step.selector?document.querySelector(step.selector):undefined,conditionAllowance=Math.min(step.timeoutMs??1000,conditionWaitRemaining),conditionWaitMs=0,conditionAttempts=0;
+            const waitUntil=async(observe,accepts)=>{const before=journeyTime,result=await waitCondition(observe,accepts,conditionAllowance,elapsed=>{journeyTime=before+elapsed;tickJourney()});conditionWaitMs+=result.waitedMs;conditionAttempts+=result.attempts;conditionAllowance=Math.max(0,conditionAllowance-result.waitedMs);conditionWaitRemaining=Math.max(0,conditionWaitRemaining-result.waitedMs);return result.observation;};
+            if(['click','fill','drag'].includes(step.action)){
+              el=await waitUntil(()=>step.selector?document.querySelector(step.selector):undefined,target=>!!target&&reachableControl(target)&&!target.disabled&&(step.action!=='fill'||!target.readOnly&&(target instanceof HTMLInputElement||target instanceof HTMLTextAreaElement||target instanceof HTMLSelectElement)));
+              if(!el)throw Error('Journey target is unavailable at step '+(index+1));
+            }
             const numericExpectation=step.expectedNumericChange, numericBefore=numericExpectation?readNumericJourneyValue(document.querySelector(numericExpectation.selector),numericExpectation.attribute):undefined;
             const beforeTarget=step.expectedVisibleSelector?document.querySelector(step.expectedVisibleSelector):undefined,visibleTargetBefore=step.expectedVisibleSelector?{selector:step.expectedVisibleSelector,visible:Boolean(beforeTarget&&visible(beforeTarget)),text:beforeTarget?.innerText||beforeTarget?.textContent||''}:undefined;
             if(numericExpectation&&numericBefore===undefined)throw Error('Journey numeric expectation needs a finite value before step '+(index+1));
@@ -630,23 +634,34 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
             if(step.delayMs){await new Promise(resolve=>setTimeout(resolve,step.delayMs));journeyTime+=step.delayMs;tickJourney();}
             void document.body.offsetHeight;
             if(step.capture)await settle();
-            const state=inspect(),text=state.text;
-            const target=step.expectedVisibleSelector?document.querySelector(step.expectedVisibleSelector):undefined, hidden=step.expectedHiddenSelector?document.querySelector(step.expectedHiddenSelector):undefined;
-            const visibleTarget=step.expectedVisibleSelector?{selector:step.expectedVisibleSelector,visible:Boolean(target&&visible(target)),text:target?.innerText||target?.textContent||'',insideNavigation:Boolean(target?.closest('nav,[role="navigation"],[role="tablist"]')),containsTrigger:Boolean(target&&step.selector&&target.contains(document.querySelector(step.selector)))}:undefined;
-            const numericAfter=numericExpectation?readNumericJourneyValue(document.querySelector(numericExpectation.selector),numericExpectation.attribute):undefined;
-            if(numericExpectation&&numericAfter===undefined)throw Error('Journey numeric expectation needs a finite value after step '+(index+1));
-            const numericResult=numericExpectation?numericJourneyResult(numericBefore,numericAfter,numericExpectation.min,numericExpectation.max):undefined;
-            const numericDelta=numericResult?.delta;
-            const numericChangePassed=!numericExpectation||numericResult?.passed===true;
-            const observedText=visibleTarget?visibleTarget.text:text;
-            const passed=(!visibleTarget||visibleTarget.visible)&&(!step.expectedHiddenSelector||!hidden||!visible(hidden))&&(step.expectedText===undefined||observedText.includes(step.expectedText))&&(step.absentText===undefined||!text.includes(step.absentText))&&(step.expectedValue===undefined||(el&&visible(el)&&el.value===step.expectedValue))&&(step.expectedDisabled===undefined||el&&visible(el)&&typeof el.disabled==='boolean'&&el.disabled===step.expectedDisabled)&&numericChangePassed&&!state.errors.length&&!state.overflow.horizontal&&!state.hiddenPainted.length;
-            trace.push({step:index+1,action:step.action,selector:step.selector,gesture,expectedText:step.expectedText,absentText:step.absentText,expectedValue:step.expectedValue,actualValue:el?.value,expectedDisabled:step.expectedDisabled,actualDisabled:el?.disabled,capture:step.capture,expectedNumericChange:numericExpectation,numericBefore,numericAfter,numericDelta,numericChangePassed,visibleTargetBefore,visibleTarget,expectedHiddenSelector:step.expectedHiddenSelector,passed,actualElapsedMs:performance.now()-started,text:text.slice(0,4000),scroll:state.scroll,scrollRegions:state.scrollRegions,components:state.components,navigationClearance:state.navigationClearance,controls:state.controls.slice(0,30),errors:state.errors});
+            const observe=()=>{
+              const state=inspect(),text=state.text,field=step.selector?document.querySelector(step.selector):undefined;
+              const target=step.expectedVisibleSelector?document.querySelector(step.expectedVisibleSelector):undefined,hidden=step.expectedHiddenSelector?document.querySelector(step.expectedHiddenSelector):undefined;
+              const visibleTarget=step.expectedVisibleSelector?{selector:step.expectedVisibleSelector,visible:Boolean(target&&visible(target)),text:target?.innerText||target?.textContent||'',insideNavigation:Boolean(target?.closest('nav,[role="navigation"],[role="tablist"]')),containsTrigger:Boolean(target&&step.selector&&target.contains(document.querySelector(step.selector)))}:undefined;
+              const numericAfter=numericExpectation?readNumericJourneyValue(document.querySelector(numericExpectation.selector),numericExpectation.attribute):undefined,numericResult=numericExpectation?numericJourneyResult(numericBefore,numericAfter,numericExpectation.min,numericExpectation.max):undefined;
+              const observedText=visibleTarget?visibleTarget.text:text,failures=[];
+              if(visibleTarget&&!visibleTarget.visible)failures.push('Expected destination is not visible: '+step.expectedVisibleSelector);
+              if(step.expectedHiddenSelector&&hidden&&visible(hidden))failures.push('Expected prior view to be hidden: '+step.expectedHiddenSelector);
+              if(step.expectedText!==undefined&&!observedText.includes(step.expectedText))failures.push(visibleTarget&&text.includes(step.expectedText)?'Expected text exists elsewhere, outside expectedVisibleSelector '+step.expectedVisibleSelector:'Expected text is missing from the asserted scope: '+step.expectedText);
+              if(step.absentText!==undefined&&text.includes(step.absentText))failures.push('Unexpected text remains visible: '+step.absentText);
+              if(step.expectedValue!==undefined&&(!field||!visible(field)||field.value!==step.expectedValue))failures.push('Field value does not match: '+step.selector);
+              if(step.expectedDisabled!==undefined&&(!field||!visible(field)||typeof field.disabled!=='boolean'||field.disabled!==step.expectedDisabled))failures.push('Disabled state does not match: '+step.selector);
+              if(numericExpectation&&numericResult?.passed!==true)failures.push('Numeric delta is outside the requested range');
+              const passed=!failures.length&&!state.errors.length&&!state.overflow.horizontal&&!state.hiddenPainted.length;
+              return {state,text,visibleTarget,numericAfter,numericDelta:numericResult?.delta,numericChangePassed:!numericExpectation||numericResult?.passed===true,actualValue:field?.value,actualDisabled:field?.disabled,failures,passed};
+            };
+            const hasExpectations=['expectedText','absentText','expectedValue','expectedVisibleSelector','expectedHiddenSelector','expectedDisabled'].some(key=>step[key]!==undefined);
+            // Temporal deltas remain one observation at the requested instant:
+            // polling could conceal drift or an incorrect animation speed.
+            const observed=hasExpectations&&!numericExpectation?await waitUntil(observe,value=>value.passed||value.state.errors.length>0):observe();
+            const {state,text,visibleTarget,numericAfter,numericDelta,numericChangePassed,actualValue,actualDisabled,failures,passed}=observed;
+            trace.push({step:index+1,action:step.action,selector:step.selector,gesture,expectedText:step.expectedText,absentText:step.absentText,expectedValue:step.expectedValue,actualValue,expectedDisabled:step.expectedDisabled,actualDisabled,capture:step.capture,expectedNumericChange:numericExpectation,numericBefore,numericAfter,numericDelta,numericChangePassed,visibleTargetBefore,visibleTarget,expectedHiddenSelector:step.expectedHiddenSelector,passed,failures,conditionWaitMs,conditionAttempts,conditionTimeoutMs:step.timeoutMs??1000,actualElapsedMs:performance.now()-started,text:text.slice(0,4000),scroll:state.scroll,scrollRegions:state.scrollRegions,components:state.components,navigationClearance:state.navigationClearance,controls:state.controls.slice(0,30),errors:state.errors});
             if(step.capture)captures.push({label:step.capture,step:index+1,passed,state:snapshot()});
             if(!passed)break;
-            }catch(error){const state=inspect();trace.push({step:index+1,action:step.action,selector:step.selector,gesture:error?.gesture,passed:false,failure:String(error),actualElapsedMs:performance.now()-started,text:state.text.slice(0,4000),controls:state.controls.slice(0,30),errors:state.errors,note:'This copy starts from the initial saved screen. Open the relevant view before filling; allow its transition to make fields reachable with delayMs when needed. An unreachable field is not an unsupported field type.'});break;}
+            }catch(error){const state=inspect();trace.push({step:index+1,action:step.action,selector:step.selector,gesture:error?.gesture,passed:false,failure:String(error),actualElapsedMs:performance.now()-started,text:state.text.slice(0,4000),controls:state.controls.slice(0,30),errors:state.errors,note:'This copy starts from the initial saved screen. Open the relevant view before filling; controls and explicit expectations wait for readiness within timeoutMs (default 1000ms, six seconds total). A failed scoped text assertion must target the actual destination, not unrelated content. An unreachable field is not an unsupported field type.'});break;}
           }
           await settle();
-          parent.postMessage({protocol,token,requestId,result:{...snapshot(),journeyCaptures:captures,journey:{mode:'isolated-copy',motionClock:'CSS/Web Animation timelines advance by requested step delays when offscreen playback is throttled. JavaScript timers use actual elapsed time; this is not live playback or frame-rate evidence.',motionPreference:testMotionPreference,focusSuppressed:true,audioMuted:audioIsolation?.audioMuted??false,audioIsolation:audioIsolation?{...audioIsolation}:null,passed:trace.length===steps.length&&trace.every(step=>step.passed)&&!errors.length,steps:trace,requestedStepCount:steps.length}}},'*');return;
+          parent.postMessage({protocol,token,requestId,result:{...snapshot(),journeyCaptures:captures,journey:{mode:'isolated-copy',motionClock:'CSS/Web Animation timelines advance by requested step delays and actual bounded condition waiting when offscreen playback is throttled. JavaScript timers use actual elapsed time; this is not live playback or frame-rate evidence.',motionPreference:testMotionPreference,focusSuppressed:true,audioMuted:audioIsolation?.audioMuted??false,audioIsolation:audioIsolation?{...audioIsolation}:null,passed:trace.length===steps.length&&trace.every(step=>step.passed)&&!errors.length,steps:trace,requestedStepCount:steps.length}}},'*');return;
         }
         if(command.action==='live-motion'){
           await waitTrustedRuntime();
