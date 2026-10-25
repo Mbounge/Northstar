@@ -518,3 +518,60 @@ test('feedback cards can be dragged and nudged independently while their origina
  await page.screenshot({path:testInfo.outputPath('moved-feedback-card.png')});
  await page.getByRole('button',{name:'Done',exact:true}).click();await expect(page.getByRole('button',{name:/^Review 1 comments?$/})).toBeVisible();
 });
+
+test('selection actions remain reachable in Preview and inside Design; Delete removes feedback without deleting artwork',async({page},info)=>{
+ test.setTimeout(120000);await page.setViewportSize({width:1512,height:1000});
+ await createScreen(page);await preview(page);
+ const collapse=page.getByRole('button',{name:'Collapse North Star panel',exact:true});if(await collapse.isVisible())await collapse.click();
+ const object=page.locator('[data-canvas-v2-screen]'),source=await object.getAttribute('data-canvas-v2-screen');
+ await page.getByTestId('canvas-v2-native-scene').getByText('Fieldnotes · studio editing',{exact:true}).click();
+ const toolbar=page.getByTestId('canvas-v2-context-toolbar');await expect(toolbar).toBeVisible();
+ await expect(toolbar.getByRole('button',{name:'Edit selected design',exact:true})).toBeVisible();
+ await expect(toolbar.getByRole('button',{name:'Change fill',exact:true})).toHaveCount(0);
+ await toolbar.getByRole('button',{name:'Give feedback on selection',exact:true}).click();
+ const input=page.getByRole('textbox',{name:'Comment for marked area',exact:true});await expect(input).toBeVisible();
+ await input.press('Delete');await expect(input).toHaveCount(0);
+ await expect(page.locator('[data-visual-feedback-overlay] svg g rect')).toHaveCount(0);
+ expect(await object.getAttribute('data-canvas-v2-screen')).toBe(source);
+ await page.getByRole('button',{name:'Cancel canvas feedback',exact:true}).click();
+ await toolbar.getByRole('button',{name:'Edit selected design',exact:true}).click();
+ await expect(page.getByRole('toolbar',{name:'Selected element tools',exact:true})).toBeVisible();
+ await clickScreen(page,'h1');
+ const actions=page.getByRole('toolbar',{name:'Selected element tools',exact:true});await expect(actions).toBeVisible();
+ await expect(actions.getByRole('button',{name:'Edit selected text on canvas',exact:true})).toBeVisible();
+ await actions.getByRole('button',{name:'Draw feedback on selected element',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Draw a mark',exact:true})).toHaveAttribute('aria-pressed','true');
+ const box=await screenPoint(page,'h1');await page.mouse.move(box.x-25,box.y-12);await page.mouse.down();await page.mouse.move(box.x+30,box.y+15,{steps:8});await page.mouse.up();
+ await expect(input).toBeVisible();await input.fill('Keep the type, adjust the spacing.');await input.press('Backspace');await expect(input).toHaveValue('Keep the type, adjust the spacing');
+ await input.press('Enter');await expect(page.getByRole('article',{name:'Comment 1',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Move comment 1',exact:true}).press('Delete');
+ await expect(page.getByRole('article',{name:'Comment 1',exact:true})).toHaveCount(0);
+ await expect(page.locator('[data-visual-feedback-overlay] svg g path')).toHaveCount(0);
+ expect(await object.getAttribute('data-canvas-v2-screen')).toBe(source);
+ await page.getByRole('button',{name:'Cancel canvas feedback',exact:true}).click();
+ await expect(actions).toBeVisible();
+ await page.screenshot({path:info.outputPath('selection-actions-design.png')});
+});
+
+test('human inspector typing previews immediately while persistence is held and preserves the running app',async({page},info)=>{
+ test.setTimeout(120000);await page.setViewportSize({width:1512,height:1000});
+ const frame=await createScreen(page);await preview(page);await frame.locator('#name').fill('Human private state');await clickScreen(page,'#save');
+ const boot=await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot);
+ await enterEdit(page);await clickScreen(page,'h1');
+ const object=page.locator('[data-canvas-v2-screen]'),before=await object.getAttribute('data-canvas-v2-screen');
+ // Hold the production source-save boundary, not the runtime preview path.
+ await page.evaluate(()=>{const fixture=window as typeof window&{__heldHumanEdits?:unknown[];__releaseHumanEdits?:()=>void};const held:unknown[]=[],dispatch=window.dispatchEvent.bind(window);fixture.__heldHumanEdits=held;window.dispatchEvent=(event:Event)=>{if(event.type==='northstar-screen-direct-edit'){held.push((event as CustomEvent).detail);return true;}return dispatch(event);};fixture.__releaseHumanEdits=()=>{window.dispatchEvent=dispatch;for(const detail of held)dispatch(new CustomEvent('northstar-screen-direct-edit',{detail}));};});
+ const input=page.getByRole('textbox',{name:'Element text',exact:true});await input.fill('A responsive human edit.');
+ await expect(frame.locator('h1')).toHaveText('A responsive human edit.');
+ await expect.poll(()=>page.evaluate(()=>!!(window as typeof window&{__heldHumanEdits?:unknown[]}).__heldHumanEdits?.length)).toBe(true);
+ expect(await object.getAttribute('data-canvas-v2-screen')).toBe(before);
+ await expect(input).toHaveValue('A responsive human edit.');
+ await page.evaluate(()=>(window as typeof window&{__releaseHumanEdits?:()=>void}).__releaseHumanEdits?.());
+ await expect.poll(()=>object.getAttribute('data-canvas-v2-screen')).not.toBe(before);
+ await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();
+ await expect(frame.locator('#name')).toHaveValue('Human private state');
+ expect(await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot)).toBe(boot);
+ await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+ await expect(frame.locator('h1')).not.toHaveText('A responsive human edit.');
+ await page.screenshot({path:info.outputPath('responsive-text-history.png')});
+});

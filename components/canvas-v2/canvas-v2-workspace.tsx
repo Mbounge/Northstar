@@ -889,10 +889,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [canvasView,updateCanvasView]=useState<'design'|'preview'>('preview');
   const setCanvasView=useCallback<typeof updateCanvasView>(next=>{viewIntentRef.current++;stopFollowingRef.current();updateCanvasView(next)},[]);
   const previewSelection=useRef<{ids:string[];screenId?:string}>({ids:[]});
-  const [screenElementNodeId,setScreenElementNodeId]=useState<string>();
   const [editChatOpen,setEditChatOpen]=useState(false),editModeNodeRef=useRef(screenEditNodeId);editModeNodeRef.current=screenEditNodeId;
   const [screenElementTargets,setScreenElementTargets]=useState<import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]>([]);
-  const selectScreenParts=useCallback((nodeId?:string,targets:import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]=[])=>{setScreenElementNodeId(nodeId);setScreenElementTargets(targets)},[]);
+  const selectScreenParts=useCallback((nodeId?:string,targets:import('@/lib/canvas-v2/screen-feedback').CanvasV2ScreenFeedbackTarget[]=[])=>{setScreenElementTargets(targets)},[]);
   const screenEditing=useMemo(()=>({mode:canvasView,readOnly:collaborationReadOnly,previewFocus:(nodeId:string)=>{previewSelection.current={ids:[nodeId],screenId:nodeId};const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(element){setSelectedElements([element]);setSelectionTarget(nodeId)}},nodeId:screenEditNodeId,exit:()=>{setScreenEditNodeId(undefined);setSelectedElements([]);setSelectionTarget(undefined)},enter:(nodeId:string)=>{const element=sceneElementsRef.current.find(item=>item.nodeId===nodeId);if(!element||element.locked||collaborationReadOnly)return;setCanvasView('design');setSelectedElements([element]);setSelectionTarget(nodeId);setScreenEditNodeId(nodeId)},select:selectScreenParts,chatOpen:editChatOpen,openChat:()=>{setPanel('chat');setEditChatOpen(true)}}),[canvasView,screenEditNodeId,editChatOpen,selectScreenParts,collaborationReadOnly,setCanvasView]);
   // Conversation and run lifecycle belong to the workspace, not to the
   // collapsible presentation panel. Closing the panel or visiting Apps must
@@ -3477,10 +3476,13 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const request=(event as CustomEvent<ScreenDirectRequest>).detail;
       if(!request||typeof request.resolve!=='function')return;
       try{
-        const revision=engine.readCommittedRevision(),scene=engine.readNativeScene(),current=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===request.nodeId);
+        const revision=engine.readCommittedRevision(),scene=engine.readNativeScene();
+        // Editing one poster must not decode every app on a populated board.
+        const owned=scene?.nodes.find(node=>(node.sourceNodeId??node.id)===request.nodeId);
+        const retained=owned?.attributes[SCREEN_ATTRIBUTE];
+        const current=retained?{encoded:retained,screen:parseCanvasV2Screen(retained)}:undefined;
         if(!scene||scene.revisionId!==revision.id)throw new Error('The canvas is still preparing this edit. Try again in a moment.');
         if(!current||current.encoded!==request.encoded||current.screen.simulation)throw new Error('This item changed. Select it again.');
-        const owned=scene.nodes.find(node=>(node.sourceNodeId??node.id)===request.nodeId);
         if(owned?.locked)throw new Error('Unlock this screen before editing it.');
         if(!owned||owned.hidden)throw new Error('This item changed. Select it again.');
         const parser=new DOMParser();
@@ -4323,7 +4325,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
     observer?.observe(toolbar);
     return () => observer?.disconnect();
-  }, [selectedElement, selectedElements.length, toolbarMenu]);
+  }, [selectedElement, selectedElements.length, toolbarMenu, canvasView, screenEditNodeId, editingNodeId, visualFeedbackActive]);
 
   if (renderBodyStarted !== undefined) emitCanvasV2RenderTiming('WorkspaceBody','render-body',performance.now()-renderBodyStarted,null);
   return (
@@ -4799,7 +4801,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         </div>
       )}
 
-      {canvasView === "design" && !screenEditNodeId && !editingNodeId && !(screenElementNodeId&&screenElementNodeId===screenEditNodeId) && selectedElement && contextualToolbarPosition && !layersOpen && <aside
+      {!visualFeedbackActive && !screenEditNodeId && !editingNodeId && selectedElement && contextualToolbarPosition && <aside
         ref={contextualToolbarRef}
         aria-label="Element inspector"
         data-testid="canvas-v2-context-toolbar"
@@ -4810,12 +4812,17 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
           event.stopPropagation();
           navigateWorkspaceWheel(event);
         }}
-        className="absolute z-50 flex min-h-10 flex-nowrap whitespace-nowrap [&>button]:shrink-0 [&>span]:shrink-0 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[12px] border border-[#ddd8e5] bg-white/[.98] px-1.5 text-[#514a60] dark:border-white/[.08] dark:bg-[#211d28]/[.98] dark:text-[#eee7f5] shadow-[0_6px_20px_rgba(0,0,0,.22)] backdrop-blur-xl"
+        className="absolute z-[1002] flex min-h-10 flex-nowrap whitespace-nowrap [&>button]:shrink-0 [&>span]:shrink-0 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-1 rounded-[12px] border border-[#ddd8e5] bg-white/[.98] px-1.5 text-[#514a60] dark:border-white/[.08] dark:bg-[#211d28]/[.98] dark:text-[#eee7f5] shadow-[0_6px_20px_rgba(0,0,0,.22)] backdrop-blur-xl"
         style={contextualToolbarPosition.style}
       >
+        {canvasView === 'preview' ? <>
+          <button aria-label="Edit selected design" onClick={()=>void editSelectedDesign()} disabled={collaborationReadOnly||selectedElements.every(item=>item.locked)} className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs hover:bg-black/5 dark:hover:bg-white/10"><PenTool size={13}/>Edit design</button>
+          <button aria-label="Give feedback on selection" onClick={()=>window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:selectedElements.map(item=>item.nodeId)}}))} className="h-7 rounded-lg px-2 text-xs hover:bg-black/5 dark:hover:bg-white/10">Feedback</button>
+          <button aria-label="Draw feedback on selection" onClick={()=>window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{tool:'draw'}}))} className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs hover:bg-black/5 dark:hover:bg-white/10"><Pencil size={13}/>Draw</button>
+          <button aria-label="Copy selection" onClick={copySelection} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Copy size={14}/></button>
+        </> : <>
+        <button aria-label="Draw feedback on selection" onClick={()=>window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{tool:'draw'}}))} className="flex h-7 items-center gap-1 rounded-lg px-2 text-xs hover:bg-black/5 dark:hover:bg-white/10"><Pencil size={13}/>Draw feedback</button>
         {selectedScreen && <>
-
-
           {!selectedScreenDescriptor?.simulation && <button aria-label="Give feedback on screen" onClick={() => window.dispatchEvent(new CustomEvent(VISUAL_FEEDBACK_START,{detail:{nodeIds:[selectedElement.nodeId]}}))} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">Feedback</button>}
           <button aria-label="Screen version history" onClick={() => { setCanvasV2FeedbackPicking(false); setVersionHistoryNode(selectedElement.nodeId); }} className="h-7 rounded-lg px-2 text-xs hover:bg-white/10">History</button>
           {!selectedScreenDescriptor?.simulation && <button aria-label="Reset screen to starting state" title="Reset app to its starting state" onClick={() => {
@@ -4915,7 +4922,8 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         {selectedPlayableMedia && <CanvasV2MediaPlaybackButton nodeId={selectedElement.nodeId} store={mediaPlaybackStore} onToggle={toggleSelectedMedia}/>}
         {selectedElements.length > 1 ? <button title="Group selection (⌘G)" aria-label="Group selected elements" onClick={groupSelection} disabled={selectionPermanent} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1] disabled:opacity-30"><Group className="h-4 w-4" /></button> : selectedElement.kind === "group" ? <button title="Ungroup (⇧⌘G)" aria-label="Ungroup selected elements" onClick={() => submitMutation({ kind: "ungroup", nodeId: selectedElement.nodeId })} className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/[.1]"><Ungroup className="h-4 w-4" /></button> : null}
 
-        {toolbarMenu === "shape" && <div data-canvas-v2-popover data-testid="canvas-v2-shape-palette" aria-label="Shape choices" className={`absolute left-1/2 grid w-[286px] max-w-[calc(100vw-20px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-[17px] border border-white/[.09] bg-[#1d1d1f] p-2 text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
+        </>}
+        {canvasView === 'design' && toolbarMenu === "shape" && <div data-canvas-v2-popover data-testid="canvas-v2-shape-palette" aria-label="Shape choices" className={`absolute left-1/2 grid w-[286px] max-w-[calc(100vw-20px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-[17px] border border-white/[.09] bg-[#1d1d1f] p-2 text-white shadow-[0_18px_52px_rgba(0,0,0,.44)] ${contextualToolbarPosition.placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"}`}>
           {CANVAS_V2_SHAPE_OPTIONS.map((option) => <button key={option.variant} title={option.label} aria-label={`Change shape to ${option.label}`} aria-pressed={selectedElement.shapeVariant === option.variant} onClick={() => { submitMutation({ kind: "shape-variant", nodeId: selectedElement.nodeId, variant: option.variant }); setToolbarMenu(undefined); }} className={`grid h-12 place-items-center rounded-[10px] p-2 transition ${selectedElement.shapeVariant === option.variant ? "bg-[#8b36f4]" : "hover:bg-white/[.08]"}`}><span className="block h-8 w-8"><CanvasV2PrimitiveThumbnail input={{ primitive: "shape", shapeVariant: option.variant }} /></span></button>)}
         </div>}
 

@@ -507,7 +507,9 @@ test('a pending same-field edit retains its draft and Undo returns to the delive
   const draft=bob.getByRole('textbox',{name:'Element text',exact:true});await draft.fill('Bob pending final headline');
   await alice.getByRole('textbox',{name:'Element text',exact:true}).fill('Alice delivered headline');
   await alice.getByRole('button',{name:'Close appearance editor',exact:true}).click();await waitSaved(alice);
-  await expect(bob.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Alice delivered headline');
+  // Bob previews the draft locally while the accepted shared baseline is Alice's.
+  await expect.poll(async()=>{const encoded=await object(bob,'journal-a').getAttribute('data-canvas-v2-screen');return JSON.parse(Buffer.from(encoded!,'base64').toString()).html;}).toContain('Alice delivered headline');
+  await expect(bob.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Bob pending final headline');
   await expect(draft).toHaveValue('Bob pending final headline');
   await bob.getByRole('button',{name:'Close appearance editor',exact:true}).click();await waitSaved(bob);
   for(const page of [alice,bob])await expect(page.frameLocator('iframe[title="Shared journal A"]').locator('#heading')).toHaveText('Bob pending final headline');

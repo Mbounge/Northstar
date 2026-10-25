@@ -44,7 +44,7 @@ test('direct-options ownership uses one exact current descriptor or one fresh fa
  assert.ok(start>=0);const code=statements.slice(start,start+4).map(node=>node.getText(tree)).join('\n');
  const cached={html:'current'},fresh={html:'newer'};let parses=0;const observations:Array<{screen:unknown;parser:unknown}>=[];
  const check=(screen:unknown,_target:unknown,parser:unknown)=>{observations.push({screen,parser});return true;};
- const invoke=(encoded:string)=>run(code,{options:{encoded,appearance:{},text:{},section:{}},parsedScreenRef:{current:{encoded:'exact',screen:cached}},parseCanvasV2Screen:()=>{parses++;return fresh;},DOMParser:class {},screenAppearanceCanEditDirectly:check,screenTextCanEditDirectly:check,screenSectionNeedsAgent:check,screenSectionMoves:()=>({up:false,down:false}),moveScreenSection:()=>{throw Error('No moves');},raw:{}});
+ const invoke=(encoded:string)=>run(code,{options:{encoded,appearance:{},text:{},section:{}},parsedScreenRef:{current:{encoded:'exact',screen:cached}},parseCanvasV2Screen:()=>{parses++;return fresh;},DOMParser:class {},screenAppearanceCanEditDirectly:check,screenTextCanEditDirectly:check,screenSectionNeedsAgent:check,screenSectionMoves:()=>({up:false,down:false}),moveScreenSection:()=>{throw Error('No moves');},raw:{},lastTextPreview:{current:undefined}});
  invoke('exact');assert.equal(parses,0);assert.equal(observations.length,3);assert.ok(observations.every(item=>item.screen===cached&&item.parser===observations[0].parser));
  const oldParser=observations[0].parser;observations.length=0;invoke('newer');assert.equal(parses,1);assert.ok(observations.every(item=>item.screen===fresh&&item.parser===observations[0].parser));assert.notEqual(observations[0].parser,oldParser);
 });

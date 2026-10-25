@@ -80,11 +80,11 @@ export function screenCaptureImageSourceIsSafe(source: string | null, retainedUr
   return typeof source === 'string' && (/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(source) || retainedUrls.includes(source));
 }
 
-export type ScreenAction = { action: 'presence-mode' | 'feedback-target' | 'edit-layers' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
+export type ScreenAction = { action: 'preview-text' | 'presence-mode' | 'feedback-target' | 'edit-layers' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
 
 /** Host selection and saved-source patches preserve the user's live app state. */
 export function screenCommandMayRunDuringHumanInput(action:ScreenAction['action']):boolean {
-  return ['edit-layers','presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
+  return ['preview-text','edit-layers','presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
 }
 
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
@@ -604,6 +604,14 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           (${reconcileScreenDesignSource.toString()})(document,command.designPatch.beforeHTML,command.designPatch.afterHTML);
           if(command.stylesheet!==undefined){const sheet=document.querySelector('style[data-northstar-screen-style]');if(sheet)sheet.textContent=command.stylesheet;}
           await settle();parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
+        }
+        // Inspector typing previews a static text leaf immediately. Persistence
+        // still goes through the host's source, ownership and history checks.
+        if(command.action==='preview-text'){
+          const el=document.querySelector(command.selector);
+          if(!editMode||!(el instanceof HTMLElement||el instanceof SVGElement)||el.children.length||typeof command.text!=='string'||command.text.length>3000)throw Error('Choose current editable text.');
+          el.textContent=command.text;
+          parent.postMessage({protocol,token,requestId,result:{previewed:true}},'*');return;
         }
         if(command.action==='patch-elements'){
           if(command.stylesheet!==undefined){if(typeof command.stylesheet!=='string'||command.stylesheet.length>8000000||command.stylesheet.toLowerCase().includes('</style')||/@import/i.test(command.stylesheet))throw Error('Use a retained product stylesheet.');}
