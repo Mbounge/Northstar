@@ -1,3 +1,4 @@
+import {screenRuntimeAppearanceCanEdit,retainScreenRuntimeLayers} from './screen-runtime-design';
 import type {ScreenDesignOperation} from './screen-design-edit';
 import { encodeCanvasV2Screen, type CanvasV2InteractiveScreen } from './interactive-screen';
 import { canvasV2FeedbackFingerprint, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from './screen-feedback';
@@ -81,12 +82,12 @@ function sourceSelector(element: Element, body: Element): string {
 
 /** Embedded in the isolated frame. It describes an existing target; it never
  * authorizes an edit or sends generated markup to the host. */
-export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, includeControls=false, selectedSelector?:string): ScreenDirectOptions | undefined {
+export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, includeControls=false, selectedSelector?:string, sourceHTML?:string): ScreenDirectOptions | undefined {
   let hit = selectedSelector?doc.querySelector(selectedSelector):doc.elementFromPoint(x, y);
   const vectorTags=new Set(['svg','g','path','rect','circle','ellipse','line','polyline','polygon','text','tspan','use','image']);
   const vector=(element:Element):element is SVGElement=>element.namespaceURI==='http://www.w3.org/2000/svg'&&vectorTags.has(element.localName)&&!element.closest('defs,clipPath,mask,pattern,marker,symbol,filter,linearGradient,radialGradient');
   if (!(hit instanceof HTMLElement)&&!(hit&&vector(hit)))return;
-  if (!(hit instanceof HTMLElement||vector(hit)) || hit.closest('[data-northstar-raster-interface],[data-northstar-feedback-overlay]')) return;
+  if (!(hit instanceof HTMLElement||vector(hit)) || hit.closest('[data-northstar-feedback-overlay]')) return;
   // Candidate discovery stays self-contained because this function is embedded
   // in the isolated runtime. The host still validates markup and code ownership.
   const inlineTags=new Set(['SPAN','B','STRONG','I','EM','U','S','STRIKE','BR','SMALL','SUB','SUP','CODE']);
@@ -103,6 +104,7 @@ export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, 
   if(!(hit instanceof HTMLElement||vector(hit)))return;
   const selector = (element: Element) => {
     if (element.id && /^[A-Za-z_][\w-]*$/.test(element.id) && doc.querySelectorAll('#' + element.id).length === 1) return '#' + element.id;
+    if(sourceHTML){const classes=[...element.classList].filter(name=>/^[A-Za-z_][\w-]*$/.test(name)).slice(0,4),candidate=element.localName+classes.map(name=>'.'+name).join('');if(classes.length&&doc.querySelectorAll(candidate).length===1&&!new DOMParser().parseFromString(sourceHTML,'text/html').body.querySelector(candidate))return candidate;}
     const path: string[] = [];
     for (let node: Element | null = element; node && node !== doc.body; node = node.parentElement) {
       if (!node.parentElement) return '';
@@ -115,7 +117,8 @@ export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, 
     let rect = element.getBoundingClientRect();if(!rect.width&&!rect.height&&element.getAttribute('data-northstar-group')==='true'){const boxes=[...element.children].map(c=>c.getBoundingClientRect()).filter(r=>r.width&&r.height);if(boxes.length){const x=Math.min(...boxes.map(r=>r.x)),y=Math.min(...boxes.map(r=>r.y));rect=new DOMRect(x,y,Math.max(...boxes.map(r=>r.right))-x,Math.max(...boxes.map(r=>r.bottom))-y);}}const style = doc.defaultView!.getComputedStyle(element);
     const styles: Record<string, string> = {};
     for (const key of ['color', 'background-color', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'font-feature-settings', 'font-kerning', 'text-decoration-line', 'text-transform', 'line-height', 'letter-spacing', 'text-align', 'object-fit', 'object-position', 'translate', 'position', 'border-radius','width','height','min-width','min-height','max-width','max-height','padding-top','padding-right','padding-bottom','padding-left','gap','row-gap','column-gap','display','flex-direction','flex-wrap','justify-content','align-items','align-self','grid-template-columns','grid-template-rows','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','opacity','rotate','scale','visibility','border-top-width','border-right-width','border-bottom-width','border-left-width','white-space','direction']) styles[key] = style.getPropertyValue(key);
-    for(const property of ['width','height','min-width','min-height','max-width','max-height','grid-template-columns','grid-template-rows'])if(element.style.getPropertyValue(property))styles[property]=element.style.getPropertyValue(property);
+    const sourceElement=sourceHTML?new DOMParser().parseFromString(sourceHTML,'text/html').body.querySelector(selector(element)):element;
+    for(const property of ['width','height','min-width','min-height','max-width','max-height','grid-template-columns','grid-template-rows'])if(sourceElement&&element.style.getPropertyValue(property))styles[property]=element.style.getPropertyValue(property);
     if(element.matches('[data-northstar-inline-text="true"]')){
       for(const property of ['color','font-family','font-size','font-weight']){const values=new Set<string>();const walker=doc.createTreeWalker(element,4);let node=walker.nextNode();while(node){if(node.textContent?.trim()&&node.parentElement)values.add(doc.defaultView!.getComputedStyle(node.parentElement).getPropertyValue(property));node=walker.nextNode()}styles[property+'-mixed']=values.size>1||values.size===1&&!values.has(styles[property])?'true':'false';}
     }
@@ -129,7 +132,7 @@ export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, 
     const range=doc.createRange();range.selectNodeContents(element);const glyph=range.getBoundingClientRect(),textRect=glyph.height>0?{x:glyph.x,y:glyph.y,width:glyph.width,height:glyph.height}:undefined;
     return {nodeId: '', title: '', selector: selector(element), tag: element.localName,...(textRect?{textRect}:{}),...(svg?{namespace:'svg' as const,attributes,...(matrix?{vectorMatrix:{a:matrix.a,b:matrix.b,c:matrix.c,d:matrix.d}}:{})}:{}), label: (element.getAttribute('data-northstar-layer') || element.getAttribute('aria-label') || element.getAttribute('alt') || element.querySelector(':scope > title')?.textContent || element.id || element.querySelector('h1,h2,h3,h4')?.textContent || element.textContent || element.localName).trim().slice(0,180), text: (element.textContent || '').slice(0,500), rect: {x:rect.x,y:rect.y,width:rect.width,height:rect.height}, styles};
   };
-  const text = (vector(hit)?['text','tspan'].includes(hit.localName)&&!hit.children.length:inlineContent(hit)) && Boolean(hit.textContent?.trim()) && !hit.closest(includeControls?'input,textarea,select,option':'button,a,input,textarea,select,option,[role="button"],[contenteditable]') && !['SCRIPT','STYLE'].includes(hit.tagName) ? describe(hit) : undefined;
+  const text = !hit.hasAttribute('data-northstar-raster-interface') && (vector(hit)?['text','tspan'].includes(hit.localName)&&!hit.children.length:inlineContent(hit)) && Boolean(hit.textContent?.trim()) && !hit.closest(includeControls?'input,textarea,select,option':'button,a,input,textarea,select,option,[role="button"],[contenteditable]') && !['SCRIPT','STYLE'].includes(hit.tagName) ? describe(hit) : undefined;
   const section = hit.closest<HTMLElement>('section,article,[data-northstar-component],[data-northstar-source-container]');
   const arranged = (element: Element) => {
     const style=doc.defaultView!.getComputedStyle(element), owner=element.parentElement&&doc.defaultView!.getComputedStyle(element.parentElement);
@@ -145,7 +148,7 @@ export function screenDirectOptionsAtPoint(doc: Document, x: number, y: number, 
 function currentElement(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser, inspectLocked = false) {
   if (screen.simulation) throw new Error('Create an editable version of this reference first.');
   const doc = parser.parseFromString(screen.html, 'text/html'), matches = doc.body.querySelectorAll(target.selector), element = matches[0];
-  if (matches.length !== 1 || !(element instanceof HTMLElement||element&&screenVectorElement(element)) || element === doc.body || element.localName !== target.tag || element.closest('[data-northstar-raster-interface]')) throw new Error('This item changed. Select it again.');
+  if (matches.length !== 1 || !(element instanceof HTMLElement||element&&screenVectorElement(element)) || element === doc.body || element.localName !== target.tag) throw new Error('This item changed. Select it again.');
   if(!inspectLocked&&(element.closest('[data-northstar-locked="true"]')||element.querySelector('[data-northstar-locked="true"]')))throw new Error('Unlock this layer before editing.');
   return {doc,element};
 }
@@ -154,7 +157,7 @@ function currentElement(screen: CanvasV2InteractiveScreen, target: CanvasV2Scree
  * as well. Keep it intact and prepare a targeted request for Northstar. */
 export function screenSectionNeedsAgent(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser): boolean {
   const {doc,element} = currentElement(screen,target,parser);
-  if (!element.matches('section,article,[data-northstar-component],[data-northstar-source-container]') || element.querySelector('[data-northstar-raster-interface]')) throw new Error('Choose a native section.');
+  if (!element.matches('section,article,[data-northstar-component],[data-northstar-source-container]') || element.hasAttribute('data-northstar-raster-interface') || element.querySelector('[data-northstar-raster-interface]')) throw new Error('Choose a native section.');
   if(screen.javascript.trim() && (element.matches('button,input,textarea,select,form,canvas,video,a,[role="button"]') || element.querySelector('button,input,textarea,select,form,canvas,video,a,[role="button"]') || /\.(?:children|childNodes|firstChild|firstElementChild|nextSibling|previousSibling)\b|document\.forms\b/.test(screen.javascript))) return true;
   if (/\.(?:append|prepend|appendChild|insertBefore|insertAdjacentHTML|replaceWith|replaceChildren|removeChild)\s*\(|\.(?:innerHTML|outerHTML)\s*=|:(?:nth|first|last|only)-(?:child|of-type)\b/.test(screen.javascript)) return true;
   const queries = [...screen.javascript.matchAll(/\b(querySelector(?:All)?|getElementById|getElementsByClassName|getElementsByTagName|getElementsByName)\s*\(/g)];
@@ -191,6 +194,7 @@ function screenTextMutationTarget(doc: Document, element: Element, target: Canva
 export function screenTextCanEditDirectly(screen:CanvasV2InteractiveScreen,target:CanvasV2ScreenFeedbackTarget,parser:DOMParser):boolean {
   try {
     const {doc,element}=currentElement(screen,target,parser);
+    if(element.hasAttribute('data-northstar-raster-interface'))return false;
     if(!(screenVectorElement(element)?['text','tspan'].includes(element.localName)&&!element.children.length:screenInlineTextContentsEditable(element,parser))||['INPUT','TEXTAREA','SELECT','OPTION','SCRIPT','STYLE'].includes(element.tagName)||(element.textContent||'').length>3000||(element.textContent||'').slice(0,500)!==target.text)return false;
     if(/\b(?:textContent|innerText|innerHTML|replaceChildren)\b/.test(screen.javascript)) {
       // A code-rendered label would revert on the next app update. Update its
@@ -221,6 +225,7 @@ export function editScreenRichText(screen:CanvasV2InteractiveScreen,target:Canva
 /** Style changes share the real screen source and history. Code-controlled
  * appearance must be changed in its owning code rather than patched temporarily. */
 export function screenAppearanceCanEditDirectly(screen: CanvasV2InteractiveScreen, target: CanvasV2ScreenFeedbackTarget, parser: DOMParser): boolean {
+  if(screenRuntimeAppearanceCanEdit(screen,target,parser))return true;
   try {
     // A lock changes edit permission, not the kind of appearance this layer
     // supports. Keep its inspector stable; actual mutations still enforce it.
@@ -300,6 +305,17 @@ export function editScreenAppearance(screen: CanvasV2InteractiveScreen, target: 
     const validation=parser.parseFromString('<span></span>','text/html').body.firstElementChild as HTMLElement;
     validation.style.setProperty(property,value);
     if(!value || !validation.style.getPropertyValue(property))throw new Error(`Choose a valid ${property.replaceAll('-',' ')}.`);
+  }
+  if(screenRuntimeAppearanceCanEdit(screen,target,parser)){
+    // A CSS rule follows the stable native component when its app rerenders.
+    // Keep its event handlers, state, HTML and JavaScript entirely intact.
+    const marker='/* ns-runtime-layer:'+target.selector+' */',end='/* /ns-runtime-layer */',start=screen.css.indexOf(marker),stop=start<0?-1:screen.css.indexOf(end,start);
+    const old=start>=0&&stop>=0?screen.css.slice(start+marker.length,stop):'',declarations:Record<string,string>={};
+    for(const match of old.matchAll(/([a-z-]+)\s*:\s*([^;{}]+?)\s*!important\s*;/g))declarations[match[1]]=match[2].trim();
+    Object.assign(declarations,styles);
+    const rule=marker+'\n'+target.selector+'{'+Object.entries(declarations).map(([name,value])=>name+':'+value+' !important;').join('')+'}\n'+end;
+    const css=start>=0&&stop>=0?screen.css.slice(0,start)+rule+screen.css.slice(stop+end.length):screen.css+'\n'+rule;
+    const after={...screen,css},encoded=encodeCanvasV2Screen(after);retainScreenRuntimeLayers(target.nodeId,screen,after);return encoded;
   }
   const html=patchCanvasV2ScreenElement(screen.html,target.selector,{styles},parser);
   return encodeCanvasV2Screen({...screen,html});

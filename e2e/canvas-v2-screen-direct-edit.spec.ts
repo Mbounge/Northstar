@@ -18,7 +18,7 @@ async function clickScreen(page: Page, selector: string, options?: {button?:'lef
   return pointerScreen(page,selector,options);
 }
 
-async function createScreen(page: Page, dependent=false, gradient=false, ordered=false, styled=false) {
+async function createScreen(page: Page, dependent=false, gradient=false, ordered=false, styled=false, runtime=false) {
   await page.goto('/canvas-v2-e2e/codex');
 
   await page.getByRole('button',{name:'assets',exact:true}).click();
@@ -26,7 +26,7 @@ async function createScreen(page: Page, dependent=false, gradient=false, ordered
   await page.getByLabel('Choose images for the canvas',{exact:true}).setInputFiles(path.resolve('public/northstar/design-references/evidence-canvas.png'));
   await expect(page.getByRole('button',{name:'Preview evidence canvas',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'chat',exact:true}).click();
-  await page.getByRole('textbox',{name:'Message North Star'}).fill('screen direct asset'+(dependent?' dependent':'')+(gradient?' gradient':'')+(ordered?' ordered':'')+(styled?' styled':''));
+  await page.getByRole('textbox',{name:'Message North Star'}).fill('screen direct asset'+(dependent?' dependent':'')+(gradient?' gradient':'')+(ordered?' ordered':'')+(styled?' styled':'')+(runtime?' runtime':''));
   await page.getByRole('button',{name:'Send message',exact:true}).click();
   await expect(page.getByText('The studio screen is ready for direct editing.',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Show latest work on canvas',exact:true}).click();
@@ -451,4 +451,70 @@ test('scrolling an app keeps element selection, inspector and canvas camera stab
   const selected=await page.getByRole('button',{name:'Move selected element',exact:true}).boundingBox();
   const heading=await frame.locator('h1').evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y}}),scale=before!.width/390;
   expect(selected!.x).toBeCloseTo(before!.x+heading.x*scale,0);expect(selected!.y).toBeCloseTo(before!.y+heading.y*scale,0);
+});
+
+test('runtime-created controls and native overlays in captured regions support layout edits without restarting their app',async({page},testInfo)=>{
+ test.setTimeout(120000);await page.setViewportSize({width:1512,height:1000});
+ const frame=await createScreen(page,false,false,false,false,true);
+ await frame.locator('#name').fill('Keep this private draft');await clickScreen(page,'#save');
+ const boot=await frame.locator('body').evaluate(()=> (window as typeof window&{studioBoot:number}).studioBoot);
+ const object=page.locator('[data-canvas-v2-screen]');
+ const before=JSON.parse(Buffer.from((await object.getAttribute('data-canvas-v2-screen'))!,'base64').toString());
+ await enterEdit(page);
+ const rail=page.getByRole('tree',{name:'Editable layers'});
+ await expect(rail.locator('[data-layer-selector="button.runtime-goal"]')).toBeVisible();
+ await rail.locator('[data-layer-selector="button.runtime-goal"]').click();
+ await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Move selected element',exact:true})).toBeVisible();
+ await page.getByRole('textbox',{name:'Background colour',exact:true}).fill('#3149aa');
+ await expect(frame.locator('.runtime-goal')).toHaveCSS('background-color','rgb(49, 73, 170)');
+ await page.getByRole('button',{name:'Move selected element',exact:true}).press('Shift+ArrowRight');
+ await expect(frame.locator('.runtime-goal')).toHaveCSS('translate','10px');
+ await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+ await expect(frame.locator('.runtime-goal')).toHaveCSS('translate','none');
+ await page.getByRole('button',{name:'Redo canvas action',exact:true}).click();
+ await expect(frame.locator('.runtime-goal')).toHaveCSS('translate','10px');
+ const after=JSON.parse(Buffer.from((await object.getAttribute('data-canvas-v2-screen'))!,'base64').toString());
+ expect(after.html).toBe(before.html);expect(after.javascript).toBe(before.javascript);
+ await rail.locator('[data-layer-selector="#native-caption"]').click();
+ await expect(page.getByRole('button',{name:'Ask Northstar about selection',exact:true})).toBeVisible();
+ // App-owned copy remains a source-aware edit rather than overwriting its state.
+ await expect(frame.locator('#native-caption')).toHaveText('Native overlay');
+ await preview(page);await clickScreen(page,'.runtime-goal');
+ await expect(frame.locator('.runtime-goal-value')).toHaveText('Reach 21 points');
+ await expect(frame.locator('.runtime-goal')).toHaveCSS('background-color','rgb(49, 73, 170)');
+ await clickScreen(page,'#save');await expect(frame.locator('#status')).toHaveText('Saved 2 · Keep this private draft');
+ expect(await frame.locator('body').evaluate(()=> (window as typeof window&{studioBoot:number}).studioBoot)).toBe(boot);
+ await enterEdit(page);await rail.locator('[data-layer-selector="button.runtime-goal"]').click();await page.screenshot({path:testInfo.outputPath('runtime-control-design.png')});
+});
+
+test('feedback cards can be dragged and nudged independently while their original marked area and source remain intact',async({page},testInfo)=>{
+ test.setTimeout(120000);await page.setViewportSize({width:1512,height:1000});
+ await createScreen(page);await enterEdit(page);await clickScreen(page,'h1');
+ const object=page.locator('[data-canvas-v2-screen]'),source=await object.getAttribute('data-canvas-v2-screen');
+ await page.getByRole('button',{name:'Ask Northstar about selection',exact:true}).click();
+ const editor=page.getByRole('dialog',{name:'Comment on this area',exact:true}),input=page.getByRole('textbox',{name:'Comment for marked area',exact:true});
+ await input.fill('Give this headline more breathing room.');
+ const mark=page.locator('[data-visual-feedback-overlay] svg g rect').first(),region=await mark.evaluate(el=>el.outerHTML);
+ const drag=async(label:string,dx:number,dy:number)=>{const handle=page.getByRole('button',{name:label,exact:true}),box=await handle.boundingBox();expect(box).toBeTruthy();await page.mouse.move(box!.x+box!.width/2,box!.y+box!.height/2);await page.mouse.down();await page.mouse.move(box!.x+box!.width/2+dx,box!.y+box!.height/2+dy,{steps:12});await page.mouse.up();};
+ const initial=await editor.boundingBox();await drag('Move comment',-100,130);
+ await expect.poll(async()=>Math.abs((await editor.boundingBox())!.y-initial!.y)).toBeGreaterThan(50);
+ const moved=await editor.boundingBox();await page.getByRole('button',{name:'Add comment',exact:true}).click();
+ const saved=page.getByRole('article',{name:'Comment 1',exact:true});await expect(saved).toBeVisible();
+ expect(Math.abs((await saved.boundingBox())!.y-moved!.y)).toBeLessThan(2);
+ await drag('Move comment 1',80,60);const beforeNudge=await saved.boundingBox();
+ await page.getByRole('button',{name:'Move comment 1',exact:true}).press('Shift+ArrowUp');
+ await expect.poll(async()=>Math.round((await saved.boundingBox())!.y-beforeNudge!.y)).toBe(-10);
+ await page.getByRole('button',{name:'Edit comment 1',exact:true}).click();await expect(input).toHaveValue('Give this headline more breathing room.');await expect(editor).toBeVisible();
+ await page.getByRole('button',{name:'Pan canvas',exact:true}).click();
+ const relativePosition=()=>page.evaluate(()=>{const card=document.querySelector('[data-visual-feedback-editor]')!.getBoundingClientRect(),mark=document.querySelector('[data-visual-feedback-overlay] svg g rect')!.getBoundingClientRect();return {x:card.x,offset:card.x-mark.x};});
+ const beforePan=await relativePosition();
+ const overlay=page.locator('[data-visual-feedback-overlay]');const area=await overlay.boundingBox();
+ await page.mouse.move(area!.x+70,area!.y+40);await page.mouse.down();await page.mouse.move(area!.x+40,area!.y+65,{steps:10});await page.mouse.up();
+ await expect.poll(async()=>Math.round((await relativePosition()).x-beforePan.x)).toBeLessThan(-20);
+ await expect.poll(async()=>Math.abs((await relativePosition()).offset-beforePan.offset)).toBeLessThan(2);
+ expect(await mark.evaluate(el=>el.outerHTML)).toBe(region);
+ expect(await object.getAttribute('data-canvas-v2-screen')).toBe(source);
+ await page.screenshot({path:testInfo.outputPath('moved-feedback-card.png')});
+ await page.getByRole('button',{name:'Done',exact:true}).click();await expect(page.getByRole('button',{name:/^Review 1 comments?$/})).toBeVisible();
 });

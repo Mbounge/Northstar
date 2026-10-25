@@ -103,6 +103,9 @@ export function screenFeedbackSelectionCanRefresh(previous:import('./interactive
   const matches=parser.parseFromString(next.html,'text/html').body.querySelectorAll(target.selector);
   if(matches.length>1)return false;
   if(previous===next||JSON.stringify(previous)===JSON.stringify(next))return true;
+  // A CSS-only change retains runtime-generated components; the host queries
+  // that exact current frame again before showing or committing a selection.
+  if(JSON.stringify({...previous,css:''})===JSON.stringify({...next,css:''})&&matches.length===0)return true;
   return screenFeedbackSelectionSurvives(previous.html,next.html,target,parser);
  }catch{return false;}
 }

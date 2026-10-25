@@ -45,7 +45,7 @@ export function visualFeedbackCovers(attachments:readonly CanvasV2ChatAttachment
  return attachments.some(attachment=>attachment.kind==='text'&&attachment.visualFeedback?.items.some(note=>note.anchors.some(anchor=>anchor.nodeId===nodeId&&anchor.selector===selector)));
 }
 
-export type VisualFeedbackBubbleInput={id:string;region:FeedbackRect;owner:FeedbackRect;width:number;height:number};
+export type VisualFeedbackBubbleInput={id:string;region:FeedbackRect;owner:FeedbackRect;width:number;height:number;position?:FeedbackPoint};
 /** A crowded view needs a scrollable column rather than buried comment text. */
 export function visualFeedbackBubblesOverlap(items:readonly(FeedbackRect&{visible:boolean})[]):boolean {
  return items.some((a,index)=>a.visible&&items.slice(index+1).some(b=>b.visible&&Math.min(a.x+a.width,b.x+b.width)>Math.max(a.x,b.x)&&Math.min(a.y+a.height,b.y+b.height)>Math.max(a.y,b.y)));
@@ -53,6 +53,9 @@ export function visualFeedbackBubblesOverlap(items:readonly(FeedbackRect&{visibl
 /** Place readable comments beside their owner; keep separate comments apart. */
 export function layoutVisualFeedbackBubbles(items:readonly VisualFeedbackBubbleInput[],bounds:FeedbackRect){
  const placed:FeedbackRect[]=[];
+ // Reserve manual placements before arranging automatic cards around them.
+ const pinned=new Map(items.filter(item=>item.position).map(item=>[item.id,{x:Math.max(bounds.x,Math.min(bounds.x+Math.max(0,bounds.width-item.width),item.position!.x)),y:Math.max(bounds.y,Math.min(bounds.y+Math.max(0,bounds.height-item.height),item.position!.y)),width:Math.min(item.width,bounds.width),height:Math.min(item.height,bounds.height)}]));
+ placed.push(...pinned.values());
  const clamp=(value:number,min:number,max:number)=>Math.max(min,Math.min(Math.max(min,max),value));
  const overlap=(a:FeedbackRect,b:FeedbackRect)=>Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))*Math.max(0,Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y));
  return items.map(item=>{
@@ -63,7 +66,8 @@ export function layoutVisualFeedbackBubbles(items:readonly VisualFeedbackBubbleI
   const ys=[item.region.y,...placed.flatMap(rect=>[rect.y+rect.height+10,rect.y-height-10]),bounds.y,bounds.y+bounds.height-height].map(y=>clamp(y,bounds.y,bounds.y+bounds.height-height));
   let best={x:xs[0],y:ys[0],width,height},score=Infinity;
   for(const x of xs)for(const y of ys){const rect={x,y,width,height},next=placed.reduce((sum,other)=>sum+overlap(rect,{x:other.x-5,y:other.y-5,width:other.width+10,height:other.height+10}),0)*100000+Math.abs(y-item.region.y)*2+Math.abs(x-preferred);if(next<score){score=next;best=rect}}
-  if(visible)placed.push(best);
+  best=pinned.get(item.id)??best;
+  if(visible&&!pinned.has(item.id))placed.push(best);
   const onRight=best.x+width/2>=item.region.x+item.region.width/2;
   return{id:item.id,...best,visible,anchor:{x:onRight?item.region.x+item.region.width:item.region.x,y:item.region.y+Math.min(item.region.height/2,18)},entry:{x:onRight?best.x:best.x+width,y:best.y+Math.min(height/2,24)}};
  });

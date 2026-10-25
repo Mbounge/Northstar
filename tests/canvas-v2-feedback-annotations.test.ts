@@ -186,3 +186,12 @@ test('five comments in a narrow real aperture request a column while the same no
   assert.deepEqual(layoutVisualFeedbackBubbles(input,{x:208,y:104,width:280,height:404}),narrow,'Unchanged inputs must not toggle crowded mode.');
   assert.deepEqual(input,before);
 });
+
+test('manual card positions remain fixed while automatic cards avoid them and leaders follow the original region',()=>{
+ const bounds={x:16,y:104,width:1200,height:700},pinned={...bubble('manual'),position:{x:720,y:330}},input=[bubble('auto'),pinned],before=structuredClone(input);
+ const result=layoutVisualFeedbackBubbles(input,bounds),manual=result[1];
+ assert.equal(manual.x,720);assert.equal(manual.y,330);assert.equal(areaOverlap(result[0],manual),false);
+ assert.deepEqual(input,before);assert.ok(manual.anchor.x>=pinned.region.x&&manual.anchor.x<=pinned.region.x+pinned.region.width);
+ const clamped=layoutVisualFeedbackBubbles([{...pinned,position:{x:-100,y:5000}}],bounds)[0];
+ assert.equal(clamped.x,bounds.x);assert.equal(clamped.y,bounds.y+bounds.height-pinned.height);
+});

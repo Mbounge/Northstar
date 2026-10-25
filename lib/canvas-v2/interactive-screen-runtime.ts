@@ -1,3 +1,4 @@
+import {readScreenRuntimeLayers} from './screen-runtime-design';
 import {reconcileScreenDesignSource} from './screen-design-live';
 import { screenInlineTextMarkup } from './screen-inline-text';
 import { canvasV2WasmRuntimeSource } from './screen-wasm';
@@ -79,11 +80,11 @@ export function screenCaptureImageSourceIsSafe(source: string | null, retainedUr
   return typeof source === 'string' && (/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(source) || retainedUrls.includes(source));
 }
 
-export type ScreenAction = { action: 'presence-mode' | 'feedback-target' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
+export type ScreenAction = { action: 'presence-mode' | 'feedback-target' | 'edit-layers' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
 
 /** Host selection and saved-source patches preserve the user's live app state. */
 export function screenCommandMayRunDuringHumanInput(action:ScreenAction['action']):boolean {
-  return ['presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
+  return ['edit-layers','presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
 }
 
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
@@ -143,6 +144,10 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
   const screenSemanticsStyle = '<style data-northstar-screen-semantics>html body [hidden]:not([hidden="until-found"]){display:none!important}</style>';
   const boot = `(() => {
     const token=${JSON.stringify(token)}, protocol=${JSON.stringify(SCREEN_PROTOCOL)};
+    const designSourceHTML=${JSON.stringify(screen.html)},designOptions=(x,y,controls=false,selector)=>(${screenDirectOptionsAtPoint.toString()})(document,x,y,controls,selector,designSourceHTML);
+    let designInventoryFrame,lastDesignInventory='';
+    const publishDesignLayers=()=>{designInventoryFrame=undefined;if(!editMode)return;const layers=(${readScreenRuntimeLayers.toString()})(document,designSourceHTML),signature=JSON.stringify(layers);if(signature!==lastDesignInventory){lastDesignInventory=signature;parent.postMessage({protocol,token,designLayers:layers},'*');}};
+    new MutationObserver(()=>{if(editMode&&!designInventoryFrame)designInventoryFrame=requestAnimationFrame(publishDesignLayers);}).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','hidden','data-northstar-locked']});
     const readCanvasContext=(${installScreenCanvasContextObservation.toString()})();
     const errors=[];
     const presentationSelector=(${screenPresentationSelector.toString()});
@@ -300,7 +305,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       if(type==='keydown'&&['Tab','Shift','Control','Meta','Alt'].includes(e.key))return;
       e.preventDefault();e.stopImmediatePropagation();
       if(type==='click'){
-        const options=(${screenDirectOptionsAtPoint.toString()})(document,e.clientX,e.clientY,true);
+        const options=designOptions(e.clientX,e.clientY,true);
         editSelectionSelector=options?.appearance?.selector;
         parent.postMessage({protocol,token,directOptions:options||{x:e.clientX,y:e.clientY},inputSequence:humanInputSequence,directGesture:'select',selectionMode:e.shiftKey||e.metaKey||e.ctrlKey?'toggle':'replace'},'*');
       }
@@ -310,14 +315,14 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       editSelectionFrame=requestAnimationFrame(()=>{
         editSelectionFrame=undefined;
         if(!editMode||!editSelectionSelector)return;
-        const options=(${screenDirectOptionsAtPoint.toString()})(document,0,0,true,editSelectionSelector);
+        const options=designOptions(0,0,true,editSelectionSelector);
         if(options?.appearance){options.x=Math.max(0,Math.min(innerWidth,options.appearance.rect.x));options.y=Math.max(0,Math.min(innerHeight,options.appearance.rect.y));}
-        parent.postMessage({protocol,token,directOptions:options||{x:0,y:0},inputSequence:humanInputSequence,directGesture:'select',directRefresh:true,selectionTargets:editSelectionSelectors.flatMap(selector=>{const target=(${screenDirectOptionsAtPoint.toString()})(document,0,0,true,selector)?.appearance;return target?[target]:[]})},'*');
+        parent.postMessage({protocol,token,directOptions:options||{x:0,y:0},inputSequence:humanInputSequence,directGesture:'select',directRefresh:true,selectionTargets:editSelectionSelectors.flatMap(selector=>{const target=designOptions(0,0,true,selector)?.appearance;return target?[target]:[]})},'*');
       });
     },true);
     for(const type of ['dblclick','contextmenu'])document.addEventListener(type,e=>{
       if(!e.isTrusted||feedbackMode||type==='dblclick'&&!editMode)return;
-      const options=(${screenDirectOptionsAtPoint.toString()})(document,e.clientX,e.clientY,editMode);
+      const options=designOptions(e.clientX,e.clientY,editMode);
       if(!options||type==='dblclick'&&!options.text||type==='contextmenu'&&!options.text&&!options.section&&!options.appearance)return;
       e.preventDefault();e.stopImmediatePropagation();
       parent.postMessage({protocol,token,directOptions:options,inputSequence:humanInputSequence,directGesture:type==='dblclick'?'text':'menu'},'*');
@@ -686,14 +691,15 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           }
           parent.postMessage({protocol,token,requestId,result:{samples}},'*');return;
         }
-        if(command.action==='feedback-target'){if(!Number.isFinite(command.x)||!Number.isFinite(command.y)||command.x<0||command.y<0||command.x>innerWidth||command.y>innerHeight)throw Error('Choose an area inside this app.');const target=(${screenDirectOptionsAtPoint.toString()})(document,command.x,command.y,true)?.appearance;parent.postMessage({protocol,token,requestId,result:{target}},'*');return;}
+        if(command.action==='feedback-target'){if(!Number.isFinite(command.x)||!Number.isFinite(command.y)||command.x<0||command.y<0||command.x>innerWidth||command.y>innerHeight)throw Error('Choose an area inside this app.');const target=designOptions(command.x,command.y,true)?.appearance;parent.postMessage({protocol,token,requestId,result:{target}},'*');return;}
+        if(command.action==='edit-layers'){parent.postMessage({protocol,token,requestId,result:{layers:(${readScreenRuntimeLayers.toString()})(document,designSourceHTML)}},'*');return;}
         if(command.action==='edit-hover'){clearLayerHover();if(command.selector){if(!editMode||typeof command.selector!=='string'||command.selector.length>1600||document.querySelectorAll(command.selector).length!==1)throw Error('Hover a current layer.');layerHoverSelector=command.selector;drawLayerHover();}parent.postMessage({protocol,token,requestId,result:{hovered:!!layerHoverSelector}},'*');return;}
         if(command.action==='edit-selection'){if(!Array.isArray(command.selectors)||command.selectors.length>24||command.selectors.some(selector=>typeof selector!=='string'||!selector||selector.length>1600))throw Error('Choose up to 24 layers.');editSelectionSelectors=[...command.selectors];parent.postMessage({protocol,token,requestId,result:{selected:editSelectionSelectors.length}},'*');return;}
         if(command.action==='edit-targets'){
           if(!Array.isArray(command.selectors)||command.selectors.length>24||command.selectors.some(selector=>typeof selector!=='string'||!selector||selector.length>1600))throw Error('Choose up to 24 current layers.');
           const targets=command.selectors.map(selector=>{
             const element=document.querySelector(selector),r=element?.getBoundingClientRect();
-            const target=element?(${screenDirectOptionsAtPoint.toString()})(document,(r?.x??0)+(r?.width??0)/2,(r?.y??0)+(r?.height??0)/2,true,selector)?.appearance:undefined;
+            const target=element?designOptions((r?.x??0)+(r?.width??0)/2,(r?.y??0)+(r?.height??0)/2,true,selector)?.appearance:undefined;
             if(!target)throw Error('A selected layer is not visible in the current state. Select it again.');return target;
           });
           parent.postMessage({protocol,token,requestId,result:{targets}},'*');return;
@@ -702,14 +708,14 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           const element=command.selector&&document.querySelector(command.selector);
           if(['reveal','reveal-only'].includes(command.value)&&element)element.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
           const r=element?.getBoundingClientRect();
-          const options=element?(${screenDirectOptionsAtPoint.toString()})(document,(r?.x??0)+(r?.width??0)/2,(r?.y??0)+(r?.height??0)/2,true,command.selector):undefined;
+          const options=element?designOptions((r?.x??0)+(r?.width??0)/2,(r?.y??0)+(r?.height??0)/2,true,command.selector):undefined;
           editSelectionSelector=options?.appearance?.selector;
           if(options){options.x=Math.max(0,Math.min(innerWidth,options.x));options.y=Math.max(0,Math.min(innerHeight,options.y));}
           parent.postMessage({protocol,token,directOptions:options||{x:0,y:0},inputSequence:humanInputSequence,directGesture:'select',directRefresh:true,...(command.selectionRequestId!==undefined?{selectionRequestId:command.selectionRequestId,selectionSelectors:command.selectionSelectors}:{}),...(['reveal','select'].includes(command.value)?{directSelection:true,selectionMode:command.selectionMode??'replace'}:{})},'*');
           parent.postMessage({protocol,token,requestId,result:{selected:!!options,directOptions:options}},'*');return;
         }
         if(command.action==='presence-mode'){presenceMode=command.value==='on';if(!presenceMode){clearTimeout(presenceTimer);presenceTimer=undefined;presencePoint=null;}parent.postMessage({protocol,token,requestId,result:{presenceMode}},'*');return;}
-        if(command.action==='edit-mode'){editMode=command.value==='on';if(!editMode){editSelectionSelector=undefined;clearLayerHover();}parent.postMessage({protocol,token,requestId,result:{editMode}},'*');return}
+        if(command.action==='edit-mode'){editMode=command.value==='on';if(editMode)publishDesignLayers();if(!editMode){editSelectionSelector=undefined;clearLayerHover();}parent.postMessage({protocol,token,requestId,result:{editMode}},'*');return}
         if(command.action==='feedback-mode'){feedbackMode=command.value==='on';if(!feedbackMode)clearFeedback();parent.postMessage({protocol,token,requestId,result:{feedbackMode}},'*');return}
         if(command.action==='motion-end'){if(motionSession?.id===command.motionSessionId)releaseMotion();parent.postMessage({protocol,token,requestId,result:{restored:true}},'*');return}
         if(command.action==='motion-begin'){

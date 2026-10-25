@@ -37,13 +37,13 @@ export function screenEditableLayers(html:string,selector:string,parser:DOMParse
   if(!doc.querySelector(selector))return [];
   const result:ScreenEditableLayer[]=[],represented=new Map<Element,ScreenEditableLayer>();
   for(const element of doc.body.querySelectorAll('*')){
-    if(element.closest('defs,clipPath,mask,pattern,marker,symbol,filter,linearGradient,radialGradient,script,style,[data-northstar-raster-interface]'))continue;
+    if(element.closest('defs,clipPath,mask,pattern,marker,symbol,filter,linearGradient,radialGradient,script,style'))continue;
     if(!(element instanceof HTMLElement)&&!screenVectorElement(element))continue;
     if(element instanceof HTMLElement&&!element.matches('main,header,footer,section,article,div,nav,form,ul,ol,li,figure,img,picture,h1,h2,h3,h4,h5,h6,p,blockquote,button,a,label,input,textarea,select,[data-northstar-component],[data-northstar-layer]'))continue;
     const path:string[]=[];let current:Element|null=element;
     while(current&&current!==doc.body){const siblings=[...current.parentElement!.children].filter(sibling=>sibling.tagName===current!.tagName);path.unshift(current.localName+':nth-of-type('+(siblings.indexOf(current)+1)+')');current=current.parentElement}
     const id=element.id,stable=id&&/^[A-Za-z_][\w-]*$/.test(id)&&doc.body.querySelectorAll('#'+id).length===1;
-    const label=(element.getAttribute('data-northstar-layer')||element.getAttribute('aria-label')||element.getAttribute('alt')||element.querySelector(':scope > title')?.textContent||id||(['text','tspan','h1','h2','h3','p','button','a','label'].includes(element.localName)?element.textContent:'')||element.localName).trim().slice(0,80);
+    const label=element.hasAttribute('data-northstar-raster-interface')?'Captured interface · image':(element.getAttribute('data-northstar-layer')||element.getAttribute('aria-label')||element.getAttribute('alt')||element.querySelector(':scope > title')?.textContent||id||(['text','tspan','h1','h2','h3','p','button','a','label'].includes(element.localName)?element.textContent:'')||element.localName).trim().slice(0,80);
     let ancestor=element.parentElement,parent:ScreenEditableLayer|undefined;
     while(ancestor&&!parent){parent=represented.get(ancestor);ancestor=ancestor.parentElement}
     const layer:ScreenEditableLayer={selector:stable?'#'+id:'body > '+path.join(' > '),label,tag:element.localName,depth:parent?parent.depth+1:0,locked:!!element.closest('[data-northstar-locked="true"]'),hidden:(element as HTMLElement|SVGElement).style.visibility==='hidden'||(element as HTMLElement|SVGElement).style.display==='none',...(parent?{parentSelector:parent.selector}:{})};

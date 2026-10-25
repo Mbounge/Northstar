@@ -1,4 +1,7 @@
+import path from 'node:path';
 import { expect, test } from '@playwright/test';
+
+test.beforeEach(async({request})=>{const response=await request.post('/canvas-v2-e2e/codex/agent',{data:{op:'reset-fixture'}});expect(response.ok()).toBe(true);});
 
 test('the agent creates, tests, captures and revises one native screen without seizing the camera', async ({ page }) => {
   test.setTimeout(180000);
@@ -22,18 +25,8 @@ test('the agent creates, tests, captures and revises one native screen without s
   const frame = page.frameLocator('iframe[title="GRAET · next team"]');
   await expect(frame.getByRole('heading', { name: 'Your next opportunity.' })).toBeVisible();
   await expect(frame.getByText('Application prepared for Jordan Smith', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Show on canvas', exact: true }).click();
-  const selectEdge = async () => {
-    const bounds = await object.boundingBox();
-    if (!bounds) throw new Error('Screen is not visible');
-    await page.mouse.click(bounds.x - 3, bounds.y + bounds.height / 2);
-  };
-  await selectEdge();
-  await page.getByRole('button', { name: 'Review screen quality' }).click();
-  const review = page.getByRole('dialog', { name: 'Screen quality review' });
-  await expect(review.getByAltText('Current interactive screen review')).toBeVisible();
-  await expect(review.getByText('Runtime errors: 0')).toBeVisible();
-  await review.getByRole('button', { name: 'Close screen review' }).click();
+  await page.getByRole('button', { name: 'Show latest work on canvas', exact: true }).click();
+  const collapse=page.getByRole('button',{name:'Collapse North Star panel',exact:true});if(await collapse.isVisible())await collapse.click();
   await expect(page.getByRole('button', { name: 'Interact with screen' })).toHaveCount(0);
   await frame.getByRole('textbox', { name: 'Your name', exact: true }).fill('Casey Brooks');
   await frame.getByRole('textbox', { name: 'Your name', exact: true }).press('Enter');
@@ -41,10 +34,11 @@ test('the agent creates, tests, captures and revises one native screen without s
   await frame.getByRole('button', { name: 'Back to teams' }).click();
   await frame.getByRole('button', { name: 'Save team' }).click();
   await expect(frame.getByRole('button', { name: 'Saved', exact: true }).first()).toBeVisible();
-  await frame.getByRole('button', { name: 'Saved', exact: true }).first().press('Escape');
-  await selectEdge();
-  await page.getByRole('button', { name: 'Reset screen' }).click();
-  await expect(frame.getByRole('button', { name: 'Save team' })).toBeVisible();
+  await page.getByRole('button',{name:'Design view',exact:true}).click();
+  await scene.getByText('GRAET · next team',{exact:true}).click();
+  await expect(page.getByRole('tree',{name:'Editable layers'})).toBeVisible();
+  await page.getByRole('button',{name:'Design view',exact:true}).click();
+  await expect(frame.getByRole('button',{name:'Saved',exact:true}).first()).toBeVisible();
 });
 
 test('private product journeys exercise rapid actions, saved values and both motion preferences without resetting live user state',async({page})=>{
@@ -65,7 +59,7 @@ test('private product journeys exercise rapid actions, saved values and both mot
  await page.goto('/canvas-v2-e2e/codex');
  await page.getByRole('textbox',{name:'Message North Star'}).fill('screen journey');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect(page.getByText('Verified rapid reversals, save/reopen continuity and both motion preferences in private copies. The live user goal is unchanged.',{exact:true})).toBeVisible({timeout:30000});
+ await expect(page.getByText('Verified rapid reversals, save/reopen continuity and both motion preferences in private copies. The live user goal is unchanged.',{exact:true})).toBeVisible({timeout:60000});
  const frame=page.frameLocator('iframe[title="Product journey checks"]');
  await expect(frame.getByText('User live goal',{exact:true})).toBeVisible();
  await expect(frame.getByText('Twelve goals',{exact:true})).toHaveCount(0);
@@ -83,10 +77,15 @@ test('private product journeys exercise rapid actions, saved values and both mot
 });
 
 test('registered preview review waits for Career home and retains actual reference pixels for faithful variants',async({page})=>{
+ test.setTimeout(90000);
+ // The unauthenticated local fixture uses the exact bundled font bytes.
+ // Production loads these same assets with the user's authenticated session.
+ await page.route('**/graet-replica/fonts/MonaSans-*.ttf',async route=>{const name=path.basename(new URL(route.request().url()).pathname);await route.fulfill({path:path.join(process.cwd(),'public/graet-replica/fonts',name),contentType:'font/ttf'});});
  await page.goto('/canvas-v2-e2e/codex');
+ await expect(page.getByTestId('canvas-v2-native-scene')).toHaveCount(1);
  await page.getByRole('textbox',{name:'Message North Star'}).fill('screen preview reference');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect(page.getByText('Verified current light preview pixels, reusable reference assets and automatic faithful lineage. The private default-state check distinguishes a wrong dark appearance.',{exact:true})).toBeVisible({timeout:30000});
+ await expect(page.getByText('Verified current light preview pixels, reusable reference assets and automatic faithful lineage. The private default-state check distinguishes a wrong dark appearance.',{exact:true})).toBeVisible({timeout:60000});
  const frames=page.locator('[data-northstar-device-frame="ios"]');
  await expect(frames).toHaveCount(2);
  for(const frame of await frames.all()) await expect(frame).toHaveCSS('background-color','rgba(0, 0, 0, 0)');

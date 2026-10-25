@@ -1,5 +1,6 @@
 import { CreativeAssetScenario } from './creative-asset-scenario';
 import { CreativeScreenScenario } from './creative-screen-scenario';
+import { ConcurrentScreenScenario } from './concurrent-screen-scenario';
 import { ScreenScenario } from './screen-scenario';
 import { DirectAssetScenario } from './direct-asset-scenario';
 import { ThreeFamilyScenario } from './three-family-scenario';
@@ -20,6 +21,7 @@ export class FixtureCodex implements CodexTransport {
   private creativeAssetScenario?: CreativeAssetScenario;
   private appsScenario?: AppsScenario;
   private creativeScreenScenario?: CreativeScreenScenario;
+  private concurrentScreenScenario?: ConcurrentScreenScenario;
   private screenScenario?: ScreenScenario;
   private directAssetScenario?: DirectAssetScenario;
   private threeFamilyScenario?: ThreeFamilyScenario;
@@ -71,9 +73,10 @@ export class FixtureCodex implements CodexTransport {
       this.followupRepair = /repair parity/i.test(message); this.sourcePhoto = /research photo parity/i.test(message); this.mediaParity = /media parity/i.test(message) || this.sourcePhoto; this.mediaStep = 0; this.selectionEdit = /selection parity/i.test(message); this.oversized = /oversize parity/i.test(message); this.overlapParity = /overlap parity/i.test(message); this.parity = /composition parity|oversize parity|overlap parity/i.test(message); this.chapter = 0; this.repair = false; this.rejected = false;
       this.creativeAssetScenario = /screen canvas asset|screen gif asset|screen video asset|screen video comparison/i.test(message) ? new CreativeAssetScenario(this, /screen gif asset/i.test(message), /screen video asset|screen video comparison/i.test(message), /screen video comparison/i.test(message)) : undefined;
       this.creativeScreenScenario = /screen creative|precise feedback|creative flow preserve|screen reachability|feedback collection|screen temporal|screen procedural|screen journey|screen preview reference|screen structural continuity|screen component replacement/i.test(message) ? new CreativeScreenScenario(this, /precise feedback/i.test(message), /creative flow preserve/i.test(message), /screen reachability/i.test(message), /feedback collection/i.test(message), /screen temporal/i.test(message), /screen procedural/i.test(message), /screen procedural interrupt/i.test(message), /screen procedural auto/i.test(message), /screen journey/i.test(message), /screen preview reference/i.test(message), /screen structural continuity/i.test(message), /screen component replacement/i.test(message)) : undefined;
+      this.concurrentScreenScenario = message === 'screen concurrent action' ? new ConcurrentScreenScenario(this) : undefined;
       this.screenScenario = /screen parity|screen revision/i.test(message) ? new ScreenScenario(this, /screen revision/i.test(message)) : undefined;
       const adding=message.match(/Add a new section (above|below) the tagged section/)?.[1] as 'above'|'below'|undefined;
-      this.directAssetScenario = /screen direct asset/i.test(message)||adding ? new DirectAssetScenario(this, /background/i.test(message), /followup/i.test(message), /dependent/i.test(message), /gradient/i.test(message),adding,/ordered/i.test(message),/styled/i.test(message)) : undefined;
+      this.directAssetScenario = /screen direct asset/i.test(message)||adding ? new DirectAssetScenario(this, /background/i.test(message), /followup/i.test(message), /dependent/i.test(message), /gradient/i.test(message),adding,/ordered/i.test(message),/styled/i.test(message),/runtime/i.test(message)) : undefined;
       const editingFamily=message.match(/editing workspace (app|poster|svg)/i)?.[1]?.toLowerCase() as 'app'|'poster'|'svg'|undefined;
       this.threeFamilyScenario=editingFamily?new ThreeFamilyScenario(this,editingFamily):undefined;
       this.selectedLayerFeedbackScenario=/editing workspace feedback/i.test(message)?new SelectedLayerFeedbackScenario(this):undefined;
@@ -97,6 +100,7 @@ export class FixtureCodex implements CodexTransport {
       if (/three-step plan/i.test(message)) { this.finish('1. Map the journeys.\n\n2. Compare the experience.\n\n3. Recommend changes.'); return { turn: { id: this.turn } }; }
       if (this.creativeAssetScenario) { this.creativeAssetScenario.start(); return { turn: { id: this.turn } }; }
       if (this.creativeScreenScenario) { this.creativeScreenScenario.start(); return { turn: { id: this.turn } }; }
+      if (this.concurrentScreenScenario) { this.concurrentScreenScenario.start(); return { turn: { id: this.turn } }; }
       if (this.screenScenario) { this.screenScenario.start(); return { turn: { id: this.turn } }; }
       if (this.directAssetScenario) { this.directAssetScenario.start(); return { turn: { id: this.turn } }; }
       if (this.threeFamilyScenario) { this.threeFamilyScenario.start(); return { turn: { id: this.turn } }; }
@@ -124,6 +128,7 @@ export class FixtureCodex implements CodexTransport {
     }
     if (this.readableChat) { this.finish('The comparison is ready. Your approved visual direction stays intact. [Reference](https://example.com/evidence).'); return; }
     if (this.creativeScreenScenario) { this.creativeScreenScenario.reply(r); return; }
+    if (this.concurrentScreenScenario) { this.concurrentScreenScenario.reply(r); return; }
     if (this.directAssetScenario) { this.directAssetScenario.reply(r); return; }
     if (this.threeFamilyScenario) { this.threeFamilyScenario.reply(r); return; }
     if (this.selectedLayerFeedbackScenario) { this.selectedLayerFeedbackScenario.reply(r); return; }

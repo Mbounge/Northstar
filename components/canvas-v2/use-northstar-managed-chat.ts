@@ -523,12 +523,15 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const existing = args.nodeId ? readCanvasV2Screens(revision.document.html).find(item => item.nodeId === args.nodeId) : undefined;
         if (existing?.screen.simulation) throw new Error('Preserve the registered simulation; plan a new authored copy.');
         const plan = screenConstructionPlan(args, crypto.randomUUID(), inspectedSourceSizes.current, existing ? { nodeId: existing.nodeId, sourceVersion: canvasV2FeedbackFingerprint(existing.encoded), width: existing.screen.width, height: existing.screen.height } : undefined, new Set([...revision.evidence, ...assets.current.values()].map(asset=>asset.id)));
+        const baselineAssets = structuredClone([...revision.evidence, ...assets.current.values()]);
         const baselineCapture = existing ? await captureCanvasV2ScreenPlanBaseline(
-          () => testCanvasV2ScreenJourney(existing.nodeId, existing.encoded, [...revision.evidence, ...assets.current.values()], [{action:'wait',delayMs:100}], 'no-preference', signal),
+          () => testCanvasV2ScreenJourney(existing.nodeId, existing.encoded, baselineAssets, [{action:'wait',delayMs:100}], 'no-preference', signal),
           signal,
         ) : undefined;
         const baseline = baselineCapture?.baseline;
-        if (engine.readCommittedRevision().id !== revision.id) throw new Error('The screen changed during planning. Read and plan its current source.');
+        const afterPlanning = engine.readCommittedRevision();
+        if (existing) requireScreenJourneySourceCurrent(existing.nodeId, existing.encoded, baselineAssets, afterPlanning.document.html, [...afterPlanning.evidence, ...assets.current.values()], 'refinement planning');
+        else if (afterPlanning.id !== revision.id) throw new Error('The canvas changed during planning. Read its current source.');
         for (const [id, prior] of screenPlans.current) if (plan.nodeId && prior.nodeId === plan.nodeId) { screenPlans.current.delete(id); refinementBaselines.current.delete(id); }
         screenPlans.current.set(plan.id, plan);
         if (baseline) refinementBaselines.current.set(plan.id, { image: baseline.image, state: baseline.state, sourceVersion: canvasV2FeedbackFingerprint(existing!.encoded), viewport: { width: existing!.screen.width, height: existing!.screen.height } });
@@ -593,8 +596,10 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const motionTargetSelector=typeof args.motionTargetSelector==='string'?args.motionTargetSelector:undefined;
         if(motionExpectation==='held'&&(motionMode!=='live'||!motionTargetSelector?.trim()))throw new Error('Held-subject review needs mode=live and an exact visible motionTargetSelector.');
         if(motionTargetSelector&&motionMode!=='live')throw new Error('Subject-specific motion crops need mode=live and elapsed-time samples.');
-        const frames = await captureCanvasV2ScreenMotion(item.nodeId, item.encoded, signal, typeof args.triggerSelector === 'string' ? args.triggerSelector : undefined, motionMode==='live'?(Array.isArray(args.sampleTimesMs)?args.sampleTimesMs as number[]:[]):undefined,motionTargetSelector,privatePreference?{motionPreference:privatePreference,evidence:[...revision.evidence,...assets.current.values()]}:undefined);
-        if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during motion review. Read it again.');
+        const motionAssets = structuredClone([...revision.evidence, ...assets.current.values()]);
+        const frames = await captureCanvasV2ScreenMotion(item.nodeId, item.encoded, signal, typeof args.triggerSelector === 'string' ? args.triggerSelector : undefined, motionMode==='live'?(Array.isArray(args.sampleTimesMs)?args.sampleTimesMs as number[]:[]):undefined,motionTargetSelector,privatePreference?{motionPreference:privatePreference,evidence:motionAssets}:undefined);
+        const afterMotion = engine.readCommittedRevision();
+        requireScreenJourneySourceCurrent(item.nodeId, item.encoded, motionAssets, afterMotion.document.html, [...afterMotion.evidence, ...assets.current.values()], 'motion review');
         if (frames.reduce((size, frame) => size + frame.image.length + (frame.targetImage?.length??0), 0) > 8_000_000) throw new Error('Motion captures exceed the transport budget. Review a smaller viewport or fewer samples.');
         return frames.flatMap(frame => {
           const target=object(object(frame.state).motionTarget),targeted=Boolean(motionTargetSelector),base={nodeId:item.nodeId,revisionId:revision.id,viewport:{width:item.screen.width,height:item.screen.height},sourceVersion:canvasV2FeedbackFingerprint(item.encoded),motionFrame:frame.progress,motionFrameCount:frames.length,captureMode:motionMode,motionExpectation,motionTargetSelector:targeted?motionTargetSelector:undefined,motionTarget:targeted?target:undefined,targetCropRect:targeted?frame.targetCropRect:undefined,state:frame.state,referenceAssetIds:item.screen.referenceAssetIds};
@@ -614,8 +619,10 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           requireScreenJourneySourceCurrent(item.nodeId, item.encoded, journeyAssets, currentRevision.document.html, [...currentRevision.evidence, ...assets.current.values()]);
           return [{ type: 'input_text', text: JSON.stringify({ verification: screenJourneyOutcome(result.state), nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), journeyLabel:string(args.label).slice(0,80),journeyCaptures:result.captures.map(({label,step,passed,state})=>({label,step,passed,state})),state: result.state, note: 'Observed journey in a fresh isolated copy of the current authored source. Motion preference is simulated for CSS media queries and matchMedia. No live user state or canvas geometry was changed. Focus is suppressed and audio is muted in the private copy. Requested step delays can advance CSS/Web Animation timelines to compensate offscreen throttling; JavaScript timers use actual elapsed time. This checks the supplied journey only, not keyboard/focus behavior, every path or frame rate.' }) }, { type: 'input_image', image_url: result.image }, ...result.captures.flatMap(capture=>[{type:'input_text',text:JSON.stringify({nodeId:item.nodeId,sourceVersion:canvasV2FeedbackFingerprint(item.encoded),journeyLabel:string(args.label).slice(0,80),journeyCheckpoint:{label:capture.label,step:capture.step,passed:capture.passed},state:capture.state,note:'Actual settled pixels captured at this named step of the same private journey, before subsequent actions. Review this state without replaying an already-proven path.'})},{type:'input_image',image_url:capture.image}])];
         }
+        const interactionAssets = structuredClone([...revision.evidence, ...assets.current.values()]);
         const result = await inspectCanvasV2Screen(item.nodeId, item.encoded, { action: string(args.action) as ScreenAction['action'], selector: typeof args.selector === 'string' ? args.selector : undefined, value: typeof args.value === 'string' ? args.value : undefined, x: typeof args.x === 'number' ? args.x : undefined, y: typeof args.y === 'number' ? args.y : undefined, drag: args.action === 'drag' ? args.drag as ScreenAction['drag'] : undefined }, signal);
-        if (engine.readCommittedRevision().id !== revision.id) throw new Error('The canvas changed during this screen action. Read it again.');
+        const afterInteraction = engine.readCommittedRevision();
+        requireScreenJourneySourceCurrent(item.nodeId, item.encoded, interactionAssets, afterInteraction.document.html, [...afterInteraction.evidence, ...assets.current.values()], 'live action');
         return { nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), ...result };
       }
       if (action.name === 'canvas_review') {
