@@ -7,7 +7,9 @@ import { canvasV2LocalEvaluationEnabled } from '@/lib/canvas-v2/local-evaluation
 
 export async function proxy(request: NextRequest) {
   // The waitlist is public; it never creates an account or grants canvas access.
-  if (["/waitlist", "/waitlist/privacy", "/waitlist/opengraph-image", "/api/waitlist"].includes(request.nextUrl.pathname)) {
+  if (["/waitlist", "/waitlist/privacy", "/waitlist/opengraph-image", "/api/waitlist",
+    "/northstar/demo/northstar-demo-20261026.mp4", "/northstar/demo/northstar-demo-20261026-720p.mp4",
+  ].includes(request.nextUrl.pathname)) {
     return NextResponse.next({ request })
   }
   // The optimized-build performance harness has no account data. It is

@@ -24,8 +24,8 @@ test('CSV neutralizes spreadsheet formulas and quotes fields', () => {
 test('only exact waitlist routes bypass auth; adjacent private APIs stay protected', async () => {
   const original = process.env.NEXT_PUBLIC_SUPABASE_URL; delete process.env.NEXT_PUBLIC_SUPABASE_URL;
   try {
-    for(const path of ['/waitlist','/waitlist/privacy','/waitlist/opengraph-image','/api/waitlist']) assert.equal((await proxy(new NextRequest('https://example.test'+path))).headers.get('x-middleware-next'),'1');
-    for(const path of ['/api/waitlist/leak','/api/admin/waitlist','/canvas']) assert.notEqual((await proxy(new NextRequest('https://example.test'+path))).headers.get('x-middleware-next'),'1');
+    for(const path of ['/waitlist','/waitlist/privacy','/waitlist/opengraph-image','/api/waitlist','/northstar/demo/northstar-demo-20261026.mp4','/northstar/demo/northstar-demo-20261026-720p.mp4']) assert.equal((await proxy(new NextRequest('https://example.test'+path))).headers.get('x-middleware-next'),'1');
+    for(const path of ['/api/waitlist/leak','/api/admin/waitlist','/canvas','/northstar/demo/private.mp4','/northstar/demo/northstar-demo-20261026.mp4/private']) assert.notEqual((await proxy(new NextRequest('https://example.test'+path))).headers.get('x-middleware-next'),'1');
   } finally { if(original)process.env.NEXT_PUBLIC_SUPABASE_URL=original; }
 });
 
