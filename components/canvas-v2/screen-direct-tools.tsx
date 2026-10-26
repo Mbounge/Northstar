@@ -187,7 +187,7 @@ export function ScreenLayerActions({frame,screenWidth,selectionRect,target,onEdi
   </div>,document.body);
 }
 
-export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],docked=false,frame,screenWidth=1,canMove=false,canStyle=true,textValue,onSave,onMove,onAsk,onPreview,onReplace,onEditText,onToggle,screenTitle,sourceVersion,ready=true,selectionRect,onPreviewText,onDrawFeedback,onCancel,children}:{onPreviewText?:(text:string,signal:AbortSignal)=>Promise<void>;onDrawFeedback?:()=>void;children?:ReactNode;target:CanvasV2ScreenFeedbackTarget;position:{x:number;y:number};fontFamilies?:string[];docked?:boolean;frame?:RefObject<HTMLIFrameElement|null>;screenWidth?:number;canMove?:boolean;canStyle?:boolean;textValue?:string;onSave:(styles:Record<string,string>,text?:string,version?:string,attributes?:Record<string,string>)=>Promise<ScreenDirectResult>;onMove?:(x:number,y:number)=>Promise<ScreenDirectResult>;onAsk?:()=>void;onPreview?:()=>void;onReplace?:(file:File)=>void;onEditText?:()=>void;onToggle?:()=>void;screenTitle?:string;sourceVersion?:string;ready?:boolean;selectionRect?:RefObject<CanvasV2ScreenFeedbackTarget['rect']|undefined>;layers?:ScreenEditableLayer[];onSelectLayer?:(selector:string)=>void;onCancel:()=>void}) {
+export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],docked=false,frame,screenWidth=1,canMove=false,canStyle=true,textValue,onSave,onMove,onAsk,onPreview,onReplace,onEditText,onToggle,screenTitle,sourceVersion,ready=true,selectionRect,onPreviewDraft,onDrawFeedback,onCancel,children}:{onPreviewDraft?:(draft:{text?:string;styles:Record<string,string>;attributes:Record<string,string>},signal:AbortSignal)=>Promise<void>;onDrawFeedback?:()=>void;children?:ReactNode;target:CanvasV2ScreenFeedbackTarget;position:{x:number;y:number};fontFamilies?:string[];docked?:boolean;frame?:RefObject<HTMLIFrameElement|null>;screenWidth?:number;canMove?:boolean;canStyle?:boolean;textValue?:string;onSave:(styles:Record<string,string>,text?:string,version?:string,attributes?:Record<string,string>)=>Promise<ScreenDirectResult>;onMove?:(x:number,y:number)=>Promise<ScreenDirectResult>;onAsk?:()=>void;onPreview?:()=>void;onReplace?:(file:File)=>void;onEditText?:()=>void;onToggle?:()=>void;screenTitle?:string;sourceVersion?:string;ready?:boolean;selectionRect?:RefObject<CanvasV2ScreenFeedbackTarget['rect']|undefined>;layers?:ScreenEditableLayer[];onSelectLayer?:(selector:string)=>void;onCancel:()=>void}) {
   const [changes,setChanges]=useState<Record<string,string>>({}),[error,setError]=useState(''),[saving,setSaving]=useState(false);
   const [draftText,setDraftText]=useState(textValue);
   const replacementFile=useRef<HTMLInputElement>(null);
@@ -205,13 +205,16 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
   const kind=layoutGroup?'Group':vector?(target.tag==='g'?'Group':'Vector part'):target.tag==='img'?'Image':target.tag==='button'?'Button':textValue!==undefined?'Text':'Element';
   const KindIcon=target.tag==='img'?ImagePlus:textValue!==undefined?Type:Palette;
   const busy=useRef(false);
-  const previewText=useRef(onPreviewText);previewText.current=onPreviewText;
+  const previewDraft=useRef(onPreviewDraft);previewDraft.current=onPreviewDraft;
   useLayoutEffect(()=>{
-    if(!ready||draftText===undefined||draftText===savedText.current||!previewText.current)return;
+    if(!ready||!previewDraft.current)return;
     const aborter=new AbortController();
-    const frame=requestAnimationFrame(()=>{void previewText.current?.(draftText,aborter.signal).catch(()=>{});});
-    return()=>{cancelAnimationFrame(frame);aborter.abort();};
-  },[draftText,sourceVersion,ready]);
+    const styles=Object.fromEntries(Object.entries(changes).filter(([key])=>!key.startsWith('attr:')));
+    const attributes=Object.fromEntries(Object.entries(changes).filter(([key])=>key.startsWith('attr:')).map(([key,value])=>[key.slice(5),value]));
+    const text=draftText===savedText.current?undefined:draftText;
+    const animation=requestAnimationFrame(()=>{void previewDraft.current?.({text,styles,attributes},aborter.signal).catch(()=>{});});
+    return()=>{cancelAnimationFrame(animation);aborter.abort();};
+  },[changes,draftText,sourceVersion,ready]);
   const set=(property:string,value:string)=>{setError('');setChanges(previous=>{const next={...previous};if(value===target.styles[property]&&target.styles[property+'-mixed']!=='true'&&!busy.current)delete next[property];else next[property]=value;return next})};
   const value=(property:string)=>changes[property]??(property.startsWith('attr:')?target.attributes?.[property.slice(5)]:target.styles[property])??'';
   const save=async()=>{
@@ -226,7 +229,7 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
       const styles=Object.fromEntries(Object.entries(changes).filter(([key])=>!key.startsWith('attr:'))),attributes=Object.fromEntries(Object.entries(changes).filter(([key])=>key.startsWith('attr:')).map(([key,value])=>[key.slice(5),value]));
       pendingSave.current=onSave(styles,text,version.current,Object.keys(attributes).length?attributes:undefined);
       const result=await pendingSave.current;
-      if(!result.ok){ownCommit.current=false;saveFailure.current=result.error||'This item changed. Select it again.';setError(saveFailure.current);}
+      if(!result.ok){void previewDraft.current?.({styles:{},attributes:{}},new AbortController().signal).catch(()=>{});ownCommit.current=false;saveFailure.current=result.error||'This item changed. Select it again.';setError(saveFailure.current);}
       else{
         if(result.encoded)version.current=result.encoded;
         if(text!==undefined)savedText.current=text;
@@ -235,7 +238,7 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
         dirty.current=Object.keys(remaining).length>0||draft.current.text!==savedText.current;
         setChanges(current=>Object.fromEntries(Object.entries(current).filter(([property,value])=>changes[property]!==value)));
       }
-    }catch{ownCommit.current=false;saveFailure.current='This change could not be saved. Try again.';setError(saveFailure.current);}
+    }catch{void previewDraft.current?.({styles:{},attributes:{}},new AbortController().signal).catch(()=>{});ownCommit.current=false;saveFailure.current='This change could not be saved. Try again.';setError(saveFailure.current);}
     finally{pendingSave.current=undefined;busy.current=false;setSaving(false);}
   };
   saveRef.current=save;
@@ -285,6 +288,7 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
         {hasType&&target.tag!=='img'&&<details open className="space-y-3 border-b border-current/[.08] pb-5"><summary className="cursor-pointer text-[11px] font-medium">Typography</summary><div className="space-y-3 pt-2">
           {textValue!==undefined&&<label className="block text-xs">Text<textarea aria-label="Element text" value={draftText??''} onChange={e=>{const text=e.target.value;draft.current={...draft.current,text};dirty.current=true;setDraftText(text)}} maxLength={3000} rows={2} className={inputClass+' resize-y'}/>{onEditText&&<button type="button" onClick={onEditText} aria-label="Edit text on canvas" className="mt-2 flex items-center gap-1.5 text-[11px] text-[#968aa3] hover:text-[#b5a3e6]"><Pencil size={11}/>Highlight and edit on canvas</button>}</label>}
           <label className="block text-xs">Font family<StudioSelect label="Font family" display={target.styles['font-family-mixed']==='true'&&!changes['font-family']?'Mixed':undefined} value={value('font-family')} options={families.map(family=>({value:family,label:family.split(',')[0].replaceAll('"','')}))} previewFont disabled={!canStyle} onChange={family=>set('font-family',family)}/></label>
+          {textValue!==undefined&&<label className="block text-xs">Text flow<StudioSelect label="Text flow" value={value('white-space')==='nowrap'?'nowrap':'pre-wrap'} options={[{value:'pre-wrap',label:'Wrap · auto height'},{value:'nowrap',label:'Single line'}]} onChange={next=>{set('white-space',next);set('overflow-wrap',next==='nowrap'?'normal':'anywhere')}}/></label>}
           <div className="grid grid-cols-2 gap-3"><label className="text-xs">Size<input aria-label="Text size" type="number" min={1} max={200} step="any" disabled={!canStyle} className={inputClass} placeholder="Mixed" value={target.styles['font-size-mixed']==='true'&&!changes['font-size']?'':parseFloat(value('font-size'))||''} onChange={e=>set('font-size',e.target.value+'px')}/></label><label className="text-xs">Weight<StudioSelect label="Text weight" display={target.styles['font-weight-mixed']==='true'&&!changes['font-weight']?'Mixed':undefined} value={value('font-weight')} options={['100','200','300','400','500','600','700','800','900'].map(weight=>({value:weight,label:({'100':'Thin','200':'Extra light','300':'Light','400':'Regular','500':'Medium','600':'Semibold','700':'Bold','800':'Extra bold','900':'Black'} as Record<string,string>)[weight]}))} disabled={!canStyle} onChange={weight=>set('font-weight',weight)}/></label></div>
           <label className="block text-xs">Text colour<StudioColour label="Text colour" value={value(vector?'fill':'color')} display={changes[vector?'fill':'color']??(target.styles['color-mixed']==='true'?'Mixed':colourHex(value(vector?'fill':'color')).toUpperCase())} disabled={!canStyle} inputClass={inputClass} onChange={colour=>set(vector?'fill':'color',colour)}/></label>
           <div className="flex gap-1" role="group" aria-label="Text alignment">{['left','center','right'].map(align=><button key={align} type="button" aria-label={'Align text '+align} aria-pressed={value('text-align')===align} disabled={!canStyle} onClick={()=>set('text-align',align)} className="h-8 flex-1 rounded-lg border border-current/10 text-xs capitalize aria-pressed:bg-[#8b73f8]/15">{align==='left'?<AlignLeft size={14} className="mx-auto"/>:align==='center'?<AlignCenter size={14} className="mx-auto"/>:<AlignRight size={14} className="mx-auto"/>}</button>)}<button type="button" aria-label="Italic text" aria-pressed={value('font-style')==='italic'} disabled={!canStyle} onClick={()=>set('font-style',value('font-style')==='italic'?'normal':'italic')} className="h-8 w-9 rounded-lg border border-current/10 text-xs italic aria-pressed:bg-[#8b73f8]/15">I</button></div>

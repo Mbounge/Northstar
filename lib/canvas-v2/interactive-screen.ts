@@ -90,9 +90,26 @@ export function encodeCanvasV2Screen(screen: CanvasV2InteractiveScreen): string 
   const bytes = new TextEncoder().encode(JSON.stringify(validateCanvasV2Screen(screen)));
   return btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(''));
 }
+// Exact saved bytes can recur through safety, evidence, history and rendering
+// during one edit. Validate new bytes once; return caller-owned mutable data.
+const parsedScreenSources=new Map<string,CanvasV2InteractiveScreen>();
+let parsedScreenSourceBytes=0;
+function copyParsedScreen(screen:CanvasV2InteractiveScreen):CanvasV2InteractiveScreen {
+  return {...screen,referenceAssetIds:[...screen.referenceAssetIds],
+    ...(screen.design?{design:structuredClone(screen.design)}:{}),
+    ...(screen.mockData?{mockData:structuredClone(screen.mockData)}:{}),
+    ...(screen.simulation?{simulation:{...screen.simulation}}:{}),
+    ...(screen.trustedRuntimeLibraries?{trustedRuntimeLibraries:[...screen.trustedRuntimeLibraries]}:{}),
+    ...(screen.wasmModules?{wasmModules:screen.wasmModules.map(module=>({...module}))}:{})};
+}
 export function parseCanvasV2Screen(raw: string): CanvasV2InteractiveScreen {
+  const cached=parsedScreenSources.get(raw);
+  if(cached){parsedScreenSources.delete(raw);parsedScreenSources.set(raw,cached);return copyParsedScreen(cached);}
   if (raw.length > 1_000_000 || !/^[A-Za-z0-9+/=]+$/.test(raw)) throw new Error('Invalid interactive screen source.');
-  return validateCanvasV2Screen(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(raw), c => c.charCodeAt(0)))));
+  const screen=validateCanvasV2Screen(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(raw), c => c.charCodeAt(0)))));
+  parsedScreenSources.set(raw,screen);parsedScreenSourceBytes+=raw.length*4;
+  while(parsedScreenSources.size>128||parsedScreenSourceBytes>16_000_000){const oldest=parsedScreenSources.keys().next().value!;parsedScreenSources.delete(oldest);parsedScreenSourceBytes-=oldest.length*4;}
+  return copyParsedScreen(screen);
 }
 export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScreen {
   const screen = input as CanvasV2InteractiveScreen;

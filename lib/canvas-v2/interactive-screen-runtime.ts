@@ -13,7 +13,7 @@ import { screenCanvasContributesPaint, trustedRuntimeHelperSource, trustedRuntim
 import { readScreenNumericValue, screenNumericChangeResult, waitForScreenJourneyCondition, validateScreenInteractionSequence, type ScreenInteractionStep, type ScreenPointerDrag } from './screen-interaction-sequence';
 import { runScreenPointerDrag } from './screen-pointer-gesture';
 import { screenAssetTargetAtPoint } from './screen-asset-edit';
-import { screenDirectOptionsAtPoint } from './screen-direct-edit';
+import { screenDirectOptionsAtPoint, validateScreenAppearanceStyles } from './screen-direct-edit';
 import { SCREEN_STATE_CHECKPOINT_SOURCE } from './screen-state-checkpoint';
 import { installScreenLayoutReadiness } from './screen-layout-readiness';
 import { installScreenCanvasContextObservation } from './screen-canvas-context';
@@ -80,11 +80,11 @@ export function screenCaptureImageSourceIsSafe(source: string | null, retainedUr
   return typeof source === 'string' && (/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(source) || retainedUrls.includes(source));
 }
 
-export type ScreenAction = { action: 'preview-text' | 'presence-mode' | 'feedback-target' | 'edit-layers' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
+export type ScreenAction = { action: 'preview-element' | 'preview-text' | 'presence-mode' | 'feedback-target' | 'edit-layers' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; attributes?:Record<string,string>; runtimeStyle?:boolean; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
 
 /** Host selection and saved-source patches preserve the user's live app state. */
 export function screenCommandMayRunDuringHumanInput(action:ScreenAction['action']):boolean {
-  return ['preview-text','edit-layers','presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
+  return ['preview-element','preview-text','edit-layers','presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
 }
 
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
@@ -279,6 +279,18 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       const path=[];let node=el;
       while(node && node!==document.body){const tag=node.tagName.toLowerCase(),peers=[...node.parentElement.children].filter(s=>s.tagName===node.tagName);path.unshift(tag+':nth-of-type('+(peers.indexOf(node)+1)+')');node=node.parentElement}
       return path.length ? 'body > '+path.join(' > ') : 'body';
+    };
+    // Draft paint never owns source/history. Restore only the touched properties
+    // before each authoritative patch, preserving application fields and closures.
+    let inspectorPreview=[],inspectorPreviewSheet;
+    const restoreInspectorPreview=()=>{
+      for(const saved of inspectorPreview){
+        if(!saved.el.isConnected)continue;
+        if(saved.text!==undefined)saved.el.textContent=saved.text;
+        for(const [property,value,priority] of saved.styles){if(value)saved.el.style.setProperty(property,value,priority);else saved.el.style.removeProperty(property);}
+        for(const [name,value] of saved.attributes){if(value===null)saved.el.removeAttribute(name);else saved.el.setAttribute(name,value);}
+      }
+      inspectorPreview=[];inspectorPreviewSheet?.remove();inspectorPreviewSheet=undefined;
     };
     const selectorAliases = el => {
       const classes=[...el.classList].slice(0,8).map(c=>'.'+CSS.escape(c));
@@ -532,6 +544,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       try {
         if(command.action==='presentation-snapshot'&&[...document.querySelectorAll('canvas')].some(canvas=>(canvas.width===0||canvas.height===0)&&canvasContributesPaint(canvas)))throw Error('Presentation pixels are not ready.');
         finishReviewDraw=window.northstarThree?.beginReviewDraw();
+        if(['patch-design','patch-element','patch-elements','patch-stylesheet','patch-structure','patch-assets'].includes(command.action)||command.action==='edit-mode'&&command.value!=='on')restoreInspectorPreview();
         if(command.action==='presentation-snapshot'){
           await document.fonts.ready;await waitTrustedRuntime();
           parent.postMessage({protocol,token,requestId,result:presentationSnapshot()},'*');return;
@@ -604,6 +617,34 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           (${reconcileScreenDesignSource.toString()})(document,command.designPatch.beforeHTML,command.designPatch.afterHTML);
           if(command.stylesheet!==undefined){const sheet=document.querySelector('style[data-northstar-screen-style]');if(sheet)sheet.textContent=command.stylesheet;}
           await settle();parent.postMessage({protocol,token,requestId,result:inspect()},'*');return;
+        }
+        if(command.action==='preview-element'){
+          restoreInspectorPreview();
+          const matches=typeof command.selector==='string'?document.querySelectorAll(command.selector):[],el=matches[0];
+          if(!editMode||matches.length!==1||!(el instanceof HTMLElement||el instanceof SVGElement)||el===document.body||el.closest('[data-northstar-locked="true"]'))throw Error('Choose a current editable layer.');
+          const styles=command.styles||{},attributes=command.attributes||{};
+          if(Object.keys(styles).length)(${validateScreenAppearanceStyles.toString()})(styles);
+          if(el instanceof SVGElement&&('rotate' in styles||'scale' in styles))Object.assign(styles,{'transform-box':'fill-box','transform-origin':'center'});
+          if(command.text!==undefined&&(el.children.length||typeof command.text!=='string'||command.text.length>3000))throw Error('Choose a static text leaf.');
+          for(const [name,value] of Object.entries(attributes))if(!(el instanceof SVGElement)||!['x','y','width','height','rx','ry','cx','cy','r','x1','y1','x2','y2'].includes(name)||typeof value!=='string'||!/^[-+]?\\d*(?:\\.\\d+)?(?:px|%)?$/.test(value))throw Error('Choose bounded vector geometry.');
+          const targets=[el];
+          if(el.matches('[data-northstar-inline-text="true"]'))targets.push(...el.querySelectorAll('*'));
+          if(el instanceof SVGElement&&el.localName==='g')targets.push(...el.querySelectorAll('*'));
+          for(const node of targets){
+            const local=node===el?styles:Object.fromEntries(Object.entries(styles).filter(([property])=>el instanceof SVGElement?['fill','stroke','stroke-width'].includes(property):['color','font-family','font-size','font-weight','font-style','letter-spacing','line-height'].includes(property)).map(([property])=>[property,'inherit']));
+            const saved={el:node,styles:command.runtimeStyle&&node===el?[]:Object.keys(local).map(property=>[property,node.style.getPropertyValue(property),node.style.getPropertyPriority(property)]),attributes:node===el?Object.keys(attributes).map(name=>[name,node.getAttribute(name)]):[],...(node===el&&command.text!==undefined?{text:node.textContent}: {})};
+            inspectorPreview.push(saved);
+            if(node===el&&command.text!==undefined)node.textContent=command.text;
+            if(command.runtimeStyle&&node===el&&Object.keys(local).length){
+              // The preview must not turn a runtime layer into an inline
+              // !important lock in the live layer inventory.
+              inspectorPreviewSheet=document.createElement('style');inspectorPreviewSheet.dataset.northstarInspectorPreview='true';document.head.append(inspectorPreviewSheet);
+              inspectorPreviewSheet.sheet.insertRule(command.selector+'{'+Object.entries(local).map(([property,value])=>property+':'+value+' !important').join(';')+'}');
+            }else for(const [property,value] of Object.entries(local))node.style.setProperty(property,value);
+            if(node===el)for(const [name,value] of Object.entries(attributes))node.setAttribute(name,value);
+          }
+          const target=designOptions(0,0,true,command.selector)?.appearance;
+          parent.postMessage({protocol,token,requestId,result:{previewed:true,target}},'*');return;
         }
         // Inspector typing previews a static text leaf immediately. Persistence
         // still goes through the host's source, ownership and history checks.

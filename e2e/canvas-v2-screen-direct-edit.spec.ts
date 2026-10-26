@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {writeFile} from 'node:fs/promises';
 import { clickScreen as pointerScreen, screenPoint } from './canvas-v2-screen-input-helpers';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -468,6 +469,7 @@ test('runtime-created controls and native overlays in captured regions support l
  await expect(page.getByRole('button',{name:'Move selected element',exact:true})).toBeVisible();
  await page.getByRole('textbox',{name:'Background colour',exact:true}).fill('#3149aa');
  await expect(frame.locator('.runtime-goal')).toHaveCSS('background-color','rgb(49, 73, 170)');
+ await expect(page.getByRole('button',{name:'Move selected element',exact:true})).toHaveCSS('cursor','move');
  await page.getByRole('button',{name:'Move selected element',exact:true}).press('Shift+ArrowRight');
  await expect(frame.locator('.runtime-goal')).toHaveCSS('translate','10px');
  await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
@@ -594,4 +596,85 @@ test('classed campaign text runs remain selectable through their heading outline
   await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
   await expect(frame.locator('h1 .first')).toHaveText('A little space');
   await expect(frame.locator('h1 .second')).toHaveText('for your ideas.');
+});
+
+
+test('inspector colour, size and text reflow paint before held saves; bounds follow contents',async({page},info)=>{
+ test.setTimeout(120000);await page.setViewportSize({width:1512,height:1000});
+ const frame=await createScreen(page,false,false,false,false,false,true);
+ await frame.locator('#name').fill('Keep this notebook draft');
+ const boot=await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot);
+ await enterEdit(page);await clickScreen(page,'h1 .first');
+ const object=page.locator('[data-canvas-v2-screen]'),before=await object.getAttribute('data-canvas-v2-screen');
+ await page.evaluate(()=>{const state=window as typeof window&{held?:unknown[];release?:()=>void;colourInputAt?:number};const dispatch=window.dispatchEvent.bind(window);state.held=[];window.dispatchEvent=(event:Event)=>{if(event.type==='northstar-screen-direct-edit'){state.held!.push((event as CustomEvent).detail);return true;}return dispatch(event);};state.release=()=>{window.dispatchEvent=dispatch;for(const detail of state.held!)dispatch(new CustomEvent('northstar-screen-direct-edit',{detail}));};document.querySelector('[aria-label="Text colour"]')!.addEventListener('input',()=>{state.colourInputAt=performance.timeOrigin+performance.now();},{once:true});});
+ await frame.locator('h1 .first').evaluate(el=>{const state=window as typeof window&{colourPaintAt?:number};const observer=new MutationObserver(()=>{if(getComputedStyle(el).color==='rgb(255, 200, 75)')requestAnimationFrame(()=>{state.colourPaintAt=performance.timeOrigin+performance.now();observer.disconnect();});});observer.observe(el,{attributes:true,attributeFilter:['style']});});
+ await page.getByRole('textbox',{name:'Text colour',exact:true}).fill('#FFC84B');
+ await expect(frame.locator('h1 .first')).toHaveCSS('color','rgb(255, 200, 75)');
+ await expect.poll(()=>frame.locator('body').evaluate(()=>(window as typeof window&{colourPaintAt?:number}).colourPaintAt)).toBeTruthy();
+ const latency=(await frame.locator('body').evaluate(()=>(window as typeof window&{colourPaintAt:number}).colourPaintAt))-(await page.evaluate(()=>(window as typeof window&{colourInputAt:number}).colourInputAt));
+ expect(latency).toBeLessThan(150);
+ await page.getByRole('spinbutton',{name:'Text size',exact:true}).fill('48');
+ await expect(frame.locator('h1 .first')).toHaveCSS('font-size','48px');
+ const initialHeight=await frame.locator('h1 .first').evaluate(el=>el.getBoundingClientRect().height);
+ await page.getByRole('textbox',{name:'Element text',exact:true}).fill('Every bold idea deserves a little more room to grow');
+ await expect(frame.locator('h1 .first')).toHaveCSS('white-space','pre-wrap');
+ await expect.poll(()=>frame.locator('h1 .first').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThan(initialHeight*1.5);
+ const boxes=await frame.locator('h1 .first').evaluate(el=>{const range=document.createRange();range.selectNodeContents(el);const box=el.getBoundingClientRect(),glyph=range.getBoundingClientRect();return{height:box.height,width:box.width,glyphWidth:glyph.width}});
+ expect(boxes.glyphWidth).toBeLessThanOrEqual(boxes.width+1);
+ await expect.poll(async()=>{const outline=await page.getByRole('button',{name:'Move selected element',exact:true}).boundingBox(),iframe=await page.locator('iframe[title="Fieldnotes · studio editing"]').boundingBox();return Math.abs(outline!.height-boxes.height*iframe!.width/390);}).toBeLessThan(2);
+ await expect.poll(()=>page.evaluate(()=>(window as typeof window&{held?:unknown[]}).held?.length??0)).toBeGreaterThan(0);
+ expect(await object.getAttribute('data-canvas-v2-screen')).toBe(before);
+ await page.evaluate(()=>(window as typeof window&{release?:()=>void}).release?.());
+ await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();
+ await expect(frame.locator('h1 .first')).toHaveText('Every bold idea deserves a little more room to grow');
+ await expect(frame.locator('h1 .first')).toHaveCSS('color','rgb(255, 200, 75)');
+ await expect(frame.locator('h1 .second')).toHaveText('for your ideas.');
+ await expect(frame.locator('#name')).toHaveValue('Keep this notebook draft');
+ expect(await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot)).toBe(boot);
+ await info.attach('Input to visible colour latency',{body:JSON.stringify({milliseconds:latency,saveHeld:true}),contentType:'application/json'});
+ await page.screenshot({path:info.outputPath('responsive-properties-and-text-flow.png')});
+});
+
+test('rejected property saves restore the saved appearance instead of leaving a false preview',async({page})=>{
+ const frame=await createScreen(page);await enterEdit(page);await clickScreen(page,'h1');
+ const before=await page.locator('[data-canvas-v2-screen]').getAttribute('data-canvas-v2-screen');
+ const colour=await frame.locator('h1').evaluate(el=>getComputedStyle(el).color);
+ await page.evaluate(()=>{const dispatch=window.dispatchEvent.bind(window);window.dispatchEvent=(event:Event)=>{if(event.type==='northstar-screen-direct-edit'){(event as CustomEvent<{resolve:(result:unknown)=>void}>).detail.resolve({ok:false,error:'Save rejected for rollback coverage.'});return true;}return dispatch(event);};});
+ await page.getByRole('textbox',{name:'Text colour',exact:true}).fill('#FFC84B');
+ await expect(frame.locator('h1')).toHaveCSS('color','rgb(255, 200, 75)');
+ await expect(page.getByText('Save rejected for rollback coverage.',{exact:false}).first()).toBeVisible();
+ await expect(frame.locator('h1')).toHaveCSS('color',colour);
+ expect(await page.locator('[data-canvas-v2-screen]').getAttribute('data-canvas-v2-screen')).toBe(before);
+});
+
+test('property changes stay responsive across repeated saves on a populated 52-screen canvas',async({page},info)=>{
+ test.setTimeout(180000);await page.setViewportSize({width:1512,height:1000});
+ await page.goto('/canvas-v2-e2e/responsive-editing');
+ await expect(page.locator('iframe')).toHaveCount(52);
+ await page.getByRole('button',{name:'Collapse North Star panel',exact:true}).click();
+ await page.getByRole('button',{name:'Design view',exact:true}).click();
+ await page.getByTestId('canvas-v2-native-scene').getByText('Campaign · responsive headline',{exact:true}).click();
+ await page.getByRole('treeitem',{name:'Select layer YOUR BEST.',exact:true}).click();
+ await page.getByRole('textbox',{name:'Text colour',exact:true}).waitFor({state:'visible'});
+ const frame=page.frameLocator('iframe[title="Campaign · responsive headline"]');
+ await page.evaluate(()=>{const state=window as typeof window&{inputTimes:number[];longTasks:number[]};state.inputTimes=[];state.longTasks=[];document.querySelector('[aria-label="Text colour"]')!.addEventListener('input',()=>state.inputTimes.push(performance.timeOrigin+performance.now()));new PerformanceObserver(list=>{for(const item of list.getEntries())state.longTasks.push(item.duration);}).observe({type:'longtask',buffered:false});});
+ await frame.locator('.first').evaluate(el=>{const state=window as typeof window&{paintTimes:number[]};state.paintTimes=[];let last=getComputedStyle(el).color;new MutationObserver(()=>{const colour=getComputedStyle(el).color;if(colour!==last){last=colour;requestAnimationFrame(()=>state.paintTimes.push(performance.timeOrigin+performance.now()));}}).observe(el,{attributes:true,attributeFilter:['style']});});
+ const profiler=process.env.NS_PROFILE_EDITING==='1'?await page.context().newCDPSession(page):undefined;
+ if(profiler){await profiler.send('Profiler.enable');await profiler.send('Profiler.start');}
+ const samples:number[]=[];
+ for(const colour of ['#FFC84B','#AB98FF','#68CFE5','#F7A0AD','#FFFFFF']){
+   const before=await page.locator('[data-canvas-v2-node-id="studio-0"][data-canvas-v2-screen]').getAttribute('data-canvas-v2-screen');
+   await page.getByRole('textbox',{name:'Text colour',exact:true}).fill(colour);
+   await expect.poll(()=>frame.locator('body').evaluate(()=>(window as typeof window&{paintTimes:number[]}).paintTimes.length)).toBeGreaterThan(samples.length);
+   samples.push((await frame.locator('body').evaluate(()=>(window as typeof window&{paintTimes:number[]}).paintTimes.at(-1)!))-(await page.evaluate(()=>(window as typeof window&{inputTimes:number[]}).inputTimes.at(-1)!)));
+   await expect.poll(()=>page.locator('[data-canvas-v2-node-id="studio-0"][data-canvas-v2-screen]').getAttribute('data-canvas-v2-screen')).not.toBe(before);
+   await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();
+ }
+ if(profiler){const profile=await profiler.send('Profiler.stop');await writeFile(info.outputPath('editing-cpu-profile.json'),JSON.stringify(profile));await profiler.detach();}
+ const tasks=await page.evaluate(()=>(window as typeof window&{longTasks:number[]}).longTasks);
+ const timing={screens:52,inputToPaintMs:samples,maxInputToPaintMs:Math.max(...samples),longTaskMs:tasks};
+ await writeFile(info.outputPath('populated-editing-timing.json'),JSON.stringify(timing,null,2));
+ await info.attach('Populated canvas editing timing',{path:info.outputPath('populated-editing-timing.json'),contentType:'application/json'});
+ expect(Math.max(...samples)).toBeLessThan(150);
+ await page.screenshot({path:info.outputPath('populated-responsive-editing.png')});
 });

@@ -180,13 +180,18 @@ test('motion review samples staggered reveals on one shared timeline', async ({ 
 test('native image uploads become inspected retained material inside an authored screen', async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto('/canvas-v2-e2e/codex');
-  await page.getByLabel('Choose images for the canvas', { exact: true }).setInputFiles('app/canvas-v2-e2e/codex/media-assets/reference.png');
+  const chooser=page.waitForEvent('filechooser');
+  await page.getByRole('button',{name:'Upload image, GIF, or video',exact:true}).click();
+  await(await chooser).setFiles('app/canvas-v2-e2e/codex/media-assets/reference.png');
   await expect(page.locator('[data-canvas-v2-native-scene] img')).toHaveCount(1);
+  await page.getByRole('button',{name:'Open North Star panel',exact:true}).click();
   await page.getByLabel('Message North Star').fill('screen canvas asset');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.getByText('The native canvas image is retained, inspected and loaded inside the interactive screen.', { exact: true })).toBeVisible({ timeout: 90000 });
   const frame = page.frameLocator('iframe[title="Retained canvas image"]');
   await expect(frame.getByRole('img', { name: 'Chosen canvas material' })).toHaveAttribute('src', /^data:image\/png;base64,/);
+  const mode=page.getByRole('button',{name:'Design view',exact:true});
+  if(await mode.getAttribute('aria-pressed')==='true')await mode.click();
   await frame.getByRole('button', { name: 'Save direction', exact: true }).click();
   await expect(frame.getByRole('button', { name: 'Direction saved', exact: true })).toBeVisible();
   await expect(page.locator('[data-canvas-v2-native-scene] img')).toHaveCount(1);

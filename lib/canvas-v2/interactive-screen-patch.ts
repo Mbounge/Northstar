@@ -87,9 +87,10 @@ export function canvasV2ScreenPatch(document: CanvasV2ArtifactDocument, input: R
  * runtime during source edits: it cannot represent the user's live mock state. */
 export function reviseCanvasV2NativeScreen(scene: CanvasV2NativeSceneDocument, nodeId: string, encoded: string): CanvasV2NativeSceneDocument {
   parseCanvasV2Screen(encoded);
-  const next = structuredClone(scene);
-  const node = next.nodes.find(node => (node.sourceNodeId ?? node.id) === nodeId);
-  if (!node || !node.attributes[SCREEN_ATTRIBUTE] || node.hidden || node.locked) throw new Error('The screen was deleted, hidden or locked. Read the current canvas.');
+  const index=scene.nodes.findIndex(node=>(node.sourceNodeId??node.id)===nodeId),current=scene.nodes[index];
+  if (!current || !current.attributes[SCREEN_ATTRIBUTE] || current.hidden || current.locked) throw new Error('The screen was deleted, hidden or locked. Read the current canvas.');
+  // Internals change one object. Copy its mutable fields, not every app source.
+  const node=structuredClone(current),next={...scene,nodes:[...scene.nodes]};next.nodes[index]=node;
   node.attributes[SCREEN_ATTRIBUTE] = encoded;
   node.editVersion += 1;
   node.lastAuthor = 'northstar';

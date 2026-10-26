@@ -253,6 +253,9 @@ test('native screen source revision preserves geometry and every neighboring obj
   const next = reviseCanvasV2NativeScreen(scene, 'a', changed);
   assert.deepEqual(next.nodes[0].geometry, scene.nodes[0].geometry);
   assert.deepEqual(next.nodes[1], scene.nodes[1]);
+  assert.equal(next.nodes[1],scene.nodes[1],'Untouched screen source is shared rather than copied.');
+  assert.notEqual(next.nodes[0],scene.nodes[0]);
+  assert.notEqual(next.nodes[0].attributes,scene.nodes[0].attributes);
   assert.equal(scene.nodes[0].attributes[SCREEN_ATTRIBUTE], encodeCanvasV2Screen(screen));
   assert.equal(next.nodes[0].attributes[SCREEN_ATTRIBUTE], changed);
   assert.throws(() => reviseCanvasV2NativeScreen(scene, 'deleted', changed), /deleted/);
@@ -710,4 +713,15 @@ test('async GPU renderer reports actual fallback, enforces strict selection and 
   const strict=make();await assert.rejects(strict.createRendererAsync(new Canvas(),{backend:'webgpu'}),/WebGPU is unavailable/);
   assert.equal(strict.readiness().status,'error');assert.equal(disposed,1);
   await assert.rejects(make().createRendererAsync(new Canvas(),{backend:'invented'}),/Choose auto/);
+});
+
+
+test('repeated saved-source reads reuse validation without sharing mutable source data',()=>{
+ const original={version:1 as const,title:'Cache isolation',width:390,height:844,html:'<main>Original</main>',css:'',javascript:'',referenceAssetIds:[]};
+ const encoded=encodeCanvasV2Screen({...original,mockData:{nested:{value:1}},referenceAssetIds:['retained-asset'],trustedRuntimeLibraries:['three'],wasmModules:[{id:'empty',base64:'AGFzbQEAAAA='}]});
+ const first=parseCanvasV2Screen(encoded);first.html='<p>Changed by caller</p>';first.referenceAssetIds.push('another');first.mockData!.nested={value:2};first.trustedRuntimeLibraries!.length=0;first.wasmModules![0].id='changed';
+ const second=parseCanvasV2Screen(encoded);
+ assert.equal(second.html,original.html);assert.deepEqual(second.referenceAssetIds,['retained-asset']);assert.deepEqual(second.mockData,{nested:{value:1}});assert.deepEqual(second.trustedRuntimeLibraries,['three']);assert.equal(second.wasmModules![0].id,'empty');
+ const tampered=btoa(JSON.stringify({...second,css:'@import "https://invalid.example/style";'}));
+ assert.throws(()=>parseCanvasV2Screen(tampered),/external stylesheets/);
 });

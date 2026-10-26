@@ -450,6 +450,11 @@ test('real private sync and blob codec restore each account chat on cache-empty 
     // Reload restores that latest local camera, not the pre-edit camera.
     const personalCamera = await camera(alice);
     await expect.poll(async () => Number(await alice.getByTestId('multiplayer-camera-writes').innerText())).toBeGreaterThan(writesBeforeEditing);
+    // This fixture does not mount SessionWorkspace's production pagehide
+    // camera flush. Explicitly drain its equivalent before unloading.
+    const flushedWrites=Number(await alice.getByTestId('multiplayer-camera-writes').innerText());
+    await alice.getByRole('button',{name:'Flush private history',exact:true}).click();
+    await expect.poll(async()=>Number(await alice.getByTestId('multiplayer-camera-writes').innerText())).toBeGreaterThan(flushedWrites);
     await alice.reload(); await bob.reload();
     await ownChat(alice, 'Alice'); await ownChat(bob, 'Bob');
     await expect.poll(() => camera(alice)).toBe(personalCamera);

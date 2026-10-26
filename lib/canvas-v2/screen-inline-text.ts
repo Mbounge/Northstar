@@ -45,10 +45,19 @@ export function screenInlineTextLivePatches(before:string,after:string,parser:DO
     const marker=node.getAttribute('data-northstar-inline-text');if(marker!==null&&marker!=='true')return;
     let html:string;try{html=screenInlineTextMarkup(node.innerHTML,parser)}catch{return}
     if(old.innerHTML===html&&old.getAttribute('data-northstar-inline-text')===marker)continue;
+    // Text editing can make the same owner wrap and grow. Transfer only
+    // these flow properties; the full-document comparison still rejects
+    // unrelated owner attributes or layout changes.
+    const styles:Record<string,string>={};
+    for(const property of ['white-space','overflow-wrap'])if(old.style.getPropertyValue(property)!==node.style.getPropertyValue(property)){
+      styles[property]=node.style.getPropertyValue(property);
+      if(styles[property])old.style.setProperty(property,styles[property]);else old.style.removeProperty(property);
+    }
+    if(!node.hasAttribute('style')&&!old.style.length)old.removeAttribute('style');
     old.innerHTML=html;
     if(marker===null)old.removeAttribute('data-northstar-inline-text');else old.setAttribute('data-northstar-inline-text','true');
     if(edits.length>=24)return;
-    edits.push({selector,html,styles:{},...(marker===null?{inlineText:false}:{})});
+    edits.push({selector,html,styles,...(marker===null?{inlineText:false}:{})});
   }
   return edits.length&&oldDoc.body.innerHTML===newDoc.body.innerHTML?edits:undefined;
 }

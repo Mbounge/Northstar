@@ -210,7 +210,7 @@ export function editScreenText(screen: CanvasV2InteractiveScreen, target: Canvas
   const {element} = currentElement(screen,target,parser);
   if ((element.textContent || '').slice(0,500) !== target.text) throw new Error('This text changed. Select it again.');
   if(element.children.length){const escaped=parser.parseFromString('<span></span>','text/html').body.firstElementChild!;escaped.textContent=text;return editScreenRichText(screen,target,escaped.innerHTML,parser);}
-  return encodeCanvasV2Screen({...screen,html:patchCanvasV2ScreenElement(screen.html,target.selector,{text},parser)});
+  return encodeCanvasV2Screen({...screen,html:patchCanvasV2ScreenElement(screen.html,target.selector,{text,...(element instanceof HTMLElement&&!element.style.whiteSpace?{styles:{'white-space':'pre-wrap','overflow-wrap':'anywhere'}}:{})},parser)});
 }
 
 /** Formatting creates native inline runs in the existing element. */
@@ -219,6 +219,7 @@ export function editScreenRichText(screen:CanvasV2InteractiveScreen,target:Canva
   const {doc,element}=currentElement(screen,target,parser);
   element.innerHTML=screenInlineTextMarkup(html,parser);
   element.setAttribute('data-northstar-inline-text','true');
+  if(!element.style.whiteSpace){element.style.whiteSpace='pre-wrap';element.style.overflowWrap='anywhere';}
   return encodeCanvasV2Screen({...screen,html:doc.body.innerHTML});
 }
 
@@ -271,7 +272,7 @@ export function validateScreenAppearanceStyles(styles:Record<string,string>) {
   if(!styles || typeof styles!=='object' || Array.isArray(styles) || !Object.keys(styles).length||Object.keys(styles).length>30)throw new Error('Choose an appearance change.');
   for(const [property,value] of Object.entries(styles)) {
     if(typeof value!=='string'||value.length>500||/[{};<>]|@import|url\s*\(|expression\s*\(/i.test(value))throw new Error('Choose a plain local style value.');
-    if(!['color','background-color','font-size','font-weight','font-family','font-style','font-variant','font-feature-settings','font-kerning','text-transform','text-decoration-line','letter-spacing','line-height','text-align','border-radius','object-fit','object-position','translate','width','height','min-width','min-height','max-width','max-height','padding-top','padding-right','padding-bottom','padding-left','gap','row-gap','column-gap','display','flex-direction','flex-wrap','justify-content','align-items','align-self','grid-template-columns','grid-template-rows','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','opacity','rotate','scale','visibility'].includes(property) || typeof value!=='string')throw new Error('Choose a supported appearance property.');
+    if(!['color','background-color','font-size','font-weight','font-family','font-style','font-variant','font-feature-settings','font-kerning','white-space','overflow-wrap','text-transform','text-decoration-line','letter-spacing','line-height','text-align','border-radius','object-fit','object-position','translate','width','height','min-width','min-height','max-width','max-height','padding-top','padding-right','padding-bottom','padding-left','gap','row-gap','column-gap','display','flex-direction','flex-wrap','justify-content','align-items','align-self','grid-template-columns','grid-template-rows','fill','stroke','stroke-width','stroke-linecap','stroke-linejoin','opacity','rotate','scale','visibility'].includes(property) || typeof value!=='string')throw new Error('Choose a supported appearance property.');
     if(['width','height','min-width','min-height','max-width','max-height','padding-top','padding-right','padding-bottom','padding-left','gap','row-gap','column-gap'].includes(property)&&!['auto','none','min-content','max-content','fit-content','normal'].includes(value)&&(!/^\d+(?:\.\d+)?(?:px|%|rem|em|vw|vh)$/.test(value)||parseFloat(value)>8192))throw new Error('Use Auto, a relative size, or a size within 8192 px.');
     if(['fill','stroke'].includes(property)&&!/^(?:none|transparent|currentColor|#[0-9a-f]{3,8}|rgba?\([\d\s.,%/]+\)|hsla?\([\d\s.,%/deg]+\)|[a-z]+)$/i.test(value))throw new Error('Choose a plain vector paint colour.');
     if(property==='opacity'&&(!/^\d*(?:\.\d+)?$/.test(value)||!value||Number(value)<0||Number(value)>1))throw new Error('Opacity must be between 0 and 1.');
@@ -286,6 +287,8 @@ export function validateScreenAppearanceStyles(styles:Record<string,string>) {
     if(property==='translate' && (!/^-?\d+(?:\.\d+)?px -?\d+(?:\.\d+)?px$/.test(value)||value.split(' ').some(part=>Math.abs(parseFloat(part))>8192)))throw new Error('Choose a position within 8192 px of the layout.');
     if(property==='object-position' && (!/^\d+(?:\.\d+)?% \d+(?:\.\d+)?%$/.test(value)||value.split(' ').some(part=>parseFloat(part)>100)))throw new Error('Choose a crop position between 0 and 100 percent.');
     if(property==='font-family' && (value.length>200||!/^['"\p{L}\p{N} _,.\-]+$/u.test(value)))throw new Error('Choose a local font family.');
+    if(property==='white-space'&&!['normal','pre-wrap','nowrap','pre-line','break-spaces'].includes(value))throw new Error('Choose a supported text flow.');
+    if(property==='overflow-wrap'&&!['normal','break-word','anywhere'].includes(value))throw new Error('Choose supported word wrapping.');
     if(property==='text-transform'&&!['none','uppercase','lowercase','capitalize'].includes(value))throw new Error('Choose a text case.');
     if(property==='text-decoration-line'&&!['none','underline','line-through'].includes(value))throw new Error('Choose a text decoration.');
     if(property==='font-kerning'&&!['auto','normal','none'].includes(value))throw new Error('Choose font kerning.');

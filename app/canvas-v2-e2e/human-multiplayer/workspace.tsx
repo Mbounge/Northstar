@@ -163,7 +163,7 @@ export function HumanMultiplayerFixture({ room, peer, device = 'first', personal
         <PrivateFixtureStatus client={bundle.personal} />
         <output data-testid="multiplayer-private-cache-state">{JSON.stringify({ peer, device, cacheInitiallyPresent: bundle.cacheInitiallyPresent })}</output>
         <div>Private codec copies: <output ref={codecCopies} data-testid="multiplayer-private-codec-copies">{copies.current}</output> · Camera writes: <output ref={cameraOutput} data-testid="multiplayer-camera-writes">{cameraWrites.current}</output></div>
-        <button onClick={() => void bundle.personal?.flush()}>Flush private history</button>{' '}
+        <button onClick={() => void (async()=>{await bundle.personal?.flush();if(latest.current)await bundle.view.writeCamera(latest.current.viewport);cameraWrites.current++;if(cameraOutput.current)cameraOutput.current.textContent=String(cameraWrites.current);})()}>Flush private history</button>{' '}
         <button onClick={() => void bundle.http.call('private-diagnostics').then(value => setPrivateReceipt(JSON.stringify(value))).catch(cause => setError(String(cause)))}>Read own private receipt</button>
         {privateReceipt && <textarea readOnly aria-label="Own private cloud receipt" value={privateReceipt} rows={4} style={{ width: '100%', color: '#111', font: '11px monospace' }} />}
       </>}
