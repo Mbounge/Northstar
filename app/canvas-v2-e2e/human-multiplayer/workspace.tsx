@@ -153,7 +153,7 @@ export function HumanMultiplayerFixture({ room, peer, device = 'first', personal
       <strong>DEV HTTP fixture · {peer} · {room}</strong> <span>No real-account, RLS or model claim.</span>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <button onClick={() => void reconnect()} disabled={!bundle}>{online ? 'Disconnect fixture network' : 'Reconnect fixture network'}</button>
-        {peer === 'alice' && <><button onClick={() => void ownerAction('remove-member')}>Fixture remove Bob</button><button onClick={() => void ownerAction('restore-bob')}>Fixture restore Bob</button></>}
+        {peer === 'alice' && <><button onClick={() => void ownerAction('remove-member')}>Fixture remove Bob</button><button onClick={() => void ownerAction('restore-bob')}>Fixture restore Bob</button><button onClick={() => void ownerAction('remount-root')}>Fixture rebuild ancestor layout</button></>}
         <button onClick={() => { if (bundle) void bundle.http.call('diagnostics').then(value => setReceipt(JSON.stringify(value, null, 2))).catch(cause => setError(String(cause))); }}>Read fixture server receipt</button>
         <span>Workspace React commits: <output ref={commits} data-testid="multiplayer-workspace-react-commits">{count.current}</output></span>
         <span>Workspace body renders: <output ref={bodyRenders} data-testid="multiplayer-workspace-body-renders">{bodyCount.current}</output> (add hardening=1)</span>

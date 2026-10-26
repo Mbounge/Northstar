@@ -36,7 +36,7 @@ import { runCanvasV2ScreenCommandWithControllerRetry } from '@/lib/canvas-v2/scr
 export const CANVAS_V2_SCREEN_COMMAND = 'northstar-screen-command';
 export const CanvasV2ScreenTheme = createContext<CanvasV2ArtifactTheme>('light');
 export const CanvasV2ScreenIdentities = createContext<readonly CanvasV2ProductIdentity[]>([]);
-export const CanvasV2ScreenEditing = createContext<{presence?:{pointer:(x:number,y:number)=>void;leave:()=>void};readOnly?:boolean;mode?:'design'|'preview';previewFocus?:(nodeId:string)=>void;nodeId?:string;exit:()=>void;enter:(nodeId:string)=>void;select:(nodeId?:string,targets?:CanvasV2ScreenFeedbackTarget[])=>void;chatOpen?:boolean;openChat?:()=>void;compare?:(nodeId:string)=>void}>({exit:()=>{},enter:()=>{},select:()=>{}});
+export const CanvasV2ScreenEditing = createContext<{selectionMemory?:Map<string,{encoded:string;targets:CanvasV2ScreenFeedbackTarget[]}>;presence?:{pointer:(x:number,y:number)=>void;leave:()=>void};readOnly?:boolean;mode?:'design'|'preview';previewFocus?:(nodeId:string)=>void;nodeId?:string;exit:()=>void;enter:(nodeId:string)=>void;select:(nodeId?:string,targets?:CanvasV2ScreenFeedbackTarget[])=>void;chatOpen?:boolean;openChat?:()=>void;compare?:(nodeId:string)=>void}>({exit:()=>{},enter:()=>{},select:()=>{}});
 export const CanvasV2ScreenAssets = createContext<readonly CanvasV2EvidenceAsset[]>([]);
 type ScreenResult = Record<string, unknown>;
 type CanvasV2MotionFrame = { progress:number; image:string; state:ScreenResult; details?:Array<{label:string;selector:string;image:string}>; targetImage?:string; targetCropRect?:{x:number;y:number;width:number;height:number}; motionTarget?:{selector?:string;visible?:boolean;rect?:{x:number;y:number;width:number;height:number}} };
@@ -418,7 +418,13 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const textEditorRequest=useRef<{aborter:AbortController;selector:string;version:string}|undefined>(undefined);
   const cancelPendingTextEditor=useCallback(()=>{textEditorRequest.current?.aborter.abort();textEditorRequest.current=undefined;},[]);
   const exitScreenEditing=useCallback(()=>{cancelPendingTextEditor();editingRef.current.exit();},[cancelPendingTextEditor]);
-  const writeParts=useCallback((parts:CanvasV2ScreenFeedbackTarget[],source=previousSource.current)=>{const request=textEditorRequest.current;if(request&&(source!==request.version||parts.length!==1||parts[0].selector!==request.selector))cancelPendingTextEditor();selectedPartsRef.current=parts;partsRects.current=parts;partsSource.current=source;setSelectedParts(parts)},[cancelPendingTextEditor]);
+  const writeParts=useCallback((parts:CanvasV2ScreenFeedbackTarget[],source=previousSource.current)=>{const request=textEditorRequest.current;if(request&&(source!==request.version||parts.length!==1||parts[0].selector!==request.selector))cancelPendingTextEditor();selectedPartsRef.current=parts;partsRects.current=parts;partsSource.current=source;setSelectedParts(parts);
+    const memory=editingRef.current.selectionMemory;
+    if(memory&&editingRef.current.nodeId===nodeId&&editingRef.current.mode==='design'){
+      memory.delete(nodeId);if(parts.length)memory.set(nodeId,{encoded:source,targets:parts});
+      while(memory.size>32)memory.delete(memory.keys().next().value!);
+    }
+  },[cancelPendingTextEditor,nodeId]);
 
   const [textEditor,setTextEditor]=useState<{target:CanvasV2ScreenFeedbackTarget;value:string;encoded:string;fonts:CanvasV2EditorFonts}>();
   const closeTextEditor=useCallback(()=>{cancelPendingTextEditor();setTextEditor(undefined);},[cancelPendingTextEditor]);
@@ -444,6 +450,25 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   useEffect(()=>{setDirectMenu(undefined);setDirectError('');if(!editingActive){closeTextEditor();setElementSelection(undefined)}},[encoded,editingActive,closeTextEditor]);
   const elementSelectionRef=useRef(elementSelection);elementSelectionRef.current=elementSelection;
   const [renderedLayers,setRenderedLayers]=useState<{encoded:string;layers:ScreenEditableLayer[]}>();
+  useEffect(()=>{
+    if(!editingActive||selectedPartsRef.current.length||elementSelectionRef.current?.appearance)return;
+    const memory=editing.selectionMemory,saved=memory?.get(nodeId);if(!saved)return;
+    const version=previousSource.current,source=parseCanvasV2Screen(version),parser=new DOMParser();
+    const retained=saved.targets.filter(target=>screenFeedbackSelectionCanRefresh(parseCanvasV2Screen(saved.encoded),source,target,parser));
+    if(!retained.length){memory?.delete(nodeId);return;}
+    const aborter=new AbortController(),sequence=selectionSequence.current;
+    // Ancestor layout reconstruction may remount this React object even when
+    // its saved app is identical. Recover selection from workspace UI memory,
+    // then ask the current runtime for fresh geometry and edit capabilities.
+    void inspectCanvasV2Screen(nodeId,version,{action:'edit-targets',selectors:retained.map(t=>t.selector)},aborter.signal).then(async result=>{
+      if(aborter.signal.aborted||previousSource.current!==version||selectionSequence.current!==sequence||editingRef.current.nodeId!==nodeId)return;
+      if(!Array.isArray(result.targets)||result.targets.length!==retained.length)throw Error('Read the current selected layers.');
+      const targets=result.targets.map((raw,index)=>{const target=parseCanvasV2ScreenFeedbackTarget(raw,nodeId,screen.title);if(target.selector!==retained[index].selector||target.tag!==retained[index].tag)throw Error('A selected layer changed.');return target});
+      nativeSelectionHistory.current.set(version,targets.map(t=>t.selector));writeParts(targets,version);setDirectError('');
+      await inspectCanvasV2Screen(nodeId,version,{action:'edit-target',selector:targets.at(-1)!.selector},aborter.signal);
+    }).catch(()=>{if(!aborter.signal.aborted)setDirectError('The selected layer is still loading. Your selection is kept.');});
+    return()=>aborter.abort();
+  },[editingActive,encoded,runtime,nodeId,editing.selectionMemory,screen.title,writeParts]);
   const selectedSourceDocument=useMemo(()=>editingActive&&typeof DOMParser!=='undefined'?new DOMParser().parseFromString(screen.html,'text/html'):undefined,[editingActive,screen.html]);
   const lastTextPreview=useRef<{selector:string;text:string}|undefined>(undefined);
   const inspectorPreviewTarget=useRef<{version:string;selector:string;text:boolean;appearance:boolean;runtime:boolean;wrap:boolean}|undefined>(undefined);

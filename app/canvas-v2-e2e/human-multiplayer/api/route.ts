@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
-import { applySharedChanges, cellObjectId, conflictingSharedCells, revisionFromSharedCells, sharedCellsFromRevision, type AcceptedOperation, type SharedCells, type SharedOperation } from '@/lib/canvas-v2/sessions/collaboration-document';
+import { applySharedChanges, diffSharedCells, cellObjectId, conflictingSharedCells, revisionFromSharedCells, sharedCellsFromRevision, type AcceptedOperation, type SharedCells, type SharedOperation } from '@/lib/canvas-v2/sessions/collaboration-document';
 import { parsePeerPresence, type CanvasMember, type PeerPresence } from '@/lib/canvas-v2/sessions/collaboration-client';
 import { fixtureMembers, isFixturePeer, multiplayerSeed } from '../seed';
 
@@ -100,6 +100,16 @@ export async function POST(request: Request) {
           result = { ok: true, version: room.version };
         });
         room.serial = work.catch(() => {}); await work; return response(result);
+      }
+      case 'remount-root': {
+        if(!owner||!clientId)return response({error:'Permission denied'},403);
+        const openKey='node:multiplayer-root:open',closeKey='node:multiplayer-root:close',open=room.cells.get(openKey),close=room.cells.get(closeKey);
+        const tag=open?.match(/^<(main|section)\b/)?.[1],nextTag=tag==='main'?'section':'main';
+        if(!open||!close||!tag)return response({error:'The fixture root is not ready'},400);
+        const target=new Map(room.cells).set(openKey,open.replace('<'+tag,'<'+nextTag)).set(closeKey,close.replace(tag,nextTag)),changes=await diffSharedCells(room.cells,target);
+        const next=applySharedChanges(room.cells,changes);revisionFromSharedCells(next,room.seed,'fixture-remount');
+        room.cells=next;room.version++;room.operations.push({id:randomUUID(),clientId:'fixture-layout-rebuild',changes,label:'Fixture rebuild of ancestor layout',actorId:member.userId,version:room.version});
+        return response({ok:true});
       }
       case 'claim': {
         if (!clientId) return response({ error: 'Invalid fixture client' }, 400);

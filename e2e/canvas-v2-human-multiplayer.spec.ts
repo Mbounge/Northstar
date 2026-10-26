@@ -865,5 +865,18 @@ test('shared Undo keeps the selected inspector on a populated 52-app board after
    await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toBeVisible();
    expect(await frame.locator('body').evaluate(()=>(window as typeof window&{modeResyncs:number}).modeResyncs)).toBe(0);
   }
+  const source=await object(page,'journal-a').getAttribute('data-canvas-v2-screen');
+  const rebuilt=page.waitForResponse(r=>r.url().includes('/human-multiplayer/api')&&r.request().postDataJSON()?.action==='remount-root');
+  await page.getByRole('button',{name:'Fixture rebuild ancestor layout',exact:true}).click();
+  const receipt=await rebuilt;expect(await receipt.json()).toEqual({ok:true});
+  await expect(scene(page).locator('section[data-canvas-v2-node-id="multiplayer-root"]')).toHaveCount(1);
+  expect(await object(page,'journal-a').getAttribute('data-canvas-v2-screen')).toBe(source);
+  await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toBeVisible();
+  await page.getByRole('textbox',{name:'Text colour',exact:true}).fill('#68CFE5');
+  await expect(frame.locator('#heading')).toHaveCSS('color','rgb(104, 207, 229)');
+  await page.getByRole('button',{name:'Close appearance editor',exact:true}).click();
+  await page.getByRole('button',{name:'Fixture rebuild ancestor layout',exact:true}).click();
+  await expect(scene(page).locator('main[data-canvas-v2-node-id="multiplayer-root"]')).toHaveCount(1);
+  await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toHaveCount(0);
  }finally{await page.close()}
 });
