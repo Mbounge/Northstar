@@ -842,3 +842,28 @@ test('first-open Preview selects objects without design edits and keeps live app
   await object(page,'note-bob').click();await expect(outlines).toHaveAttribute('data-selected-node-id','note-bob');
  } finally {await page.close();}
 });
+
+
+test('shared Undo keeps the selected inspector on a populated 52-app board after source and geometry refresh',async({context})=>{
+ test.setTimeout(180000);
+ const page=await openPeer(context,'dense-history-'+randomUUID(),'alice');
+ try{
+  await expect(page.locator('iframe')).toHaveCount(52);
+  const frame=page.frameLocator('iframe[title="Shared journal A"]');
+  await design(page);await object(page,'journal-a').click();
+  await page.getByRole('treeitem',{name:'Select layer heading',exact:true}).click();
+  const original=await frame.locator('#heading').evaluate(e=>getComputedStyle(e).color);
+  await frame.locator('body').evaluate(()=>{const state=window as typeof window&{modeResyncs:number};state.modeResyncs=0;window.addEventListener('message',e=>{if(e.data?.protocol==='northstar-screen-v1'&&e.data?.command?.action==='edit-mode'){state.modeResyncs++;e.stopImmediatePropagation();parent.postMessage({protocol:e.data.protocol,token:e.data.token,requestId:e.data.requestId,error:'This screen is not ready during its saved-source handoff.'},'*')}},{capture:true})});
+  for(const colour of ['#FFC84B','#68CFE5','#AB98FF']){
+   await page.getByRole('textbox',{name:'Text colour',exact:true}).fill(colour);
+   await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();await waitSaved(page);
+   await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+   await expect(frame.locator('#heading')).toHaveCSS('color',original);await waitSaved(page);
+   // Require the inspector after the shared revision has settled, rather
+   // than observing it briefly before a later geometry refresh removes it.
+   await expect(page.getByRole('button',{name:'Redo canvas action',exact:true})).toBeEnabled();
+   await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toBeVisible();
+   expect(await frame.locator('body').evaluate(()=>(window as typeof window&{modeResyncs:number}).modeResyncs)).toBe(0);
+  }
+ }finally{await page.close()}
+});

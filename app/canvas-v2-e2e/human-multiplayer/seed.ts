@@ -26,13 +26,14 @@ function screen(title: string) {
 }
 
 /** One authored seed used by every fixture peer; no model/account/storage API. */
-export function multiplayerSeed(): CanvasV2ArtifactRevision {
+export function multiplayerSeed(dense=false): CanvasV2ArtifactRevision {
   const first = screen('Shared journal A'), second = screen('Shared journal B');
+  const extra=dense?Array.from({length:50},(_,i)=>`<div data-canvas-v2-node-id="dense-${i}" data-canvas-v2-screen="${screen('Proof object '+i)}" style="position:absolute;left:${i%8*680}px;top:${900+Math.floor(i/8)*500}px;width:600px;height:420px"></div>`).join(''):'';
   return { schema: CANVAS_V2_ARTIFACT_SCHEMA, id: 'human-multiplayer-seed', state: 'committed', createdAt: '2026-10-20T00:00:00Z', evidence: [],
-    document: normalizeCanvasV2NativeGeometryDocument({ html: `<main data-canvas-v2-node-id="multiplayer-root" style="position:relative;width:1400px;height:720px">
+    document: normalizeCanvasV2NativeGeometryDocument({ html: `<main data-canvas-v2-node-id="multiplayer-root" style="position:relative;width:${dense?6000:1400}px;height:${dense?5000:720}px">
       <p data-canvas-v2-node-id="note-alice" data-canvas-v2-writable="true" data-canvas-v2-origin="user" style="position:absolute;left:0px;top:0px;width:550px;height:120px;margin:0;padding:22px;background:#eee5ff;color:#352044;font:28px Arial,sans-serif;border:2px solid #a994ff;border-radius:14px">Alice's planning note</p>
       <p data-canvas-v2-node-id="note-bob" data-canvas-v2-writable="true" data-canvas-v2-origin="user" style="position:absolute;left:660px;top:0px;width:550px;height:120px;margin:0;padding:22px;background:#def5ff;color:#203844;font:28px Arial,sans-serif;border:2px solid #55c8e9;border-radius:14px">Bob's planning note</p>
       <div data-canvas-v2-node-id="journal-a" data-canvas-v2-screen="${first}" style="position:absolute;left:0px;top:190px;width:600px;height:420px"></div>
       <div data-canvas-v2-node-id="journal-b" data-canvas-v2-screen="${second}" style="position:absolute;left:660px;top:190px;width:600px;height:420px"></div>
-    </main>`, css: '', javascript: '' }) };
+    ${extra}</main>`, css: '', javascript: '' }) };
 }

@@ -7,6 +7,7 @@ import { fixtureMembers, isFixturePeer, multiplayerSeed } from '../seed';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 type Room = {
+  seed: ReturnType<typeof multiplayerSeed>;
   cells: SharedCells; version: number; operations: AcceptedOperation[]; members: CanvasMember[];
   presence: Map<string, PeerPresence>; claims: Map<string, { clientId: string; userId: string; until: number }>;
   invites: Set<string>; serial: Promise<void>; stats: { reads: number; commits: number; presencePackets: number; presenceBytes: number };
@@ -20,12 +21,13 @@ function getRoom(id: string): Room {
   let room = rooms.get(id);
   if (!room) {
     if (rooms.size > 50) rooms.delete(rooms.keys().next().value!);
-    room = { cells: sharedCellsFromRevision(seed), version: 0, operations: [], members: fixtureMembers.map(member => ({ ...member })), presence: new Map(), claims: new Map(), invites: new Set(), serial: Promise.resolve(), stats: { reads: 0, commits: 0, presencePackets: 0, presenceBytes: 0 } };
+    const roomSeed=id.startsWith('dense-')?multiplayerSeed(true):seed;
+    room = { seed:roomSeed,cells: sharedCellsFromRevision(roomSeed), version: 0, operations: [], members: fixtureMembers.map(member => ({ ...member })), presence: new Map(), claims: new Map(), invites: new Set(), serial: Promise.resolve(), stats: { reads: 0, commits: 0, presencePackets: 0, presenceBytes: 0 } };
     rooms.set(id, room);
   }
   return room;
 }
-function wire(room: Room, role: CanvasMember['role']) { return { version: room.version, cells: [...room.cells], seed, ownerId: 'alice', role, members: room.members }; }
+function wire(room: Room, role: CanvasMember['role']) { return { version: room.version, cells: [...room.cells], seed:room.seed, ownerId: 'alice', role, members: room.members }; }
 const response = (data: unknown, status = 200) => NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 
 /** Deliberately DEV-only identities and RAM transport. Production client,
@@ -92,7 +94,7 @@ export async function POST(request: Request) {
           if (occupied.length || conflicts.length) { (room.rejections ??= []).push({ actor: body.peer, keys: op.changes.map(change => change.key), conflicts, occupied: occupied.map(String) }); result = { ok: false, version: room.version, conflicts: [...conflicts, ...occupied.map(String)] }; return; }
           const next = applySharedChanges(room.cells, op.changes);
           // A malformed parent/reference or raw source never reaches peers.
-          revisionFromSharedCells(next, seed, 'fixture-validation');
+          revisionFromSharedCells(next, room.seed, 'fixture-validation');
           room.cells = next; room.version++; room.stats.commits++;
           room.operations.push({ ...op, actorId: member.userId, version: room.version });
           result = { ok: true, version: room.version };

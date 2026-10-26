@@ -428,7 +428,15 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const selectScreenElement=editing.select;
   useEffect(()=>{if(!editingActive)return;selectScreenElement(hasElementSelection?nodeId:undefined,selectedParts);return()=>selectScreenElement(undefined)},[hasElementSelection,nodeId,editingActive,selectScreenElement,selectedParts]);
   useEffect(()=>{if(!editingActive){writeParts([]);setElementSelection(undefined);setDirectMenu(undefined);closeTextEditor();}},[editingActive,writeParts,closeTextEditor]);
-  useEffect(()=>{if(screen.simulation)return;const aborter=new AbortController();void inspectCanvasV2Screen(nodeId,encoded,{action:'edit-mode',value:editingActive?'on':'off'},aborter.signal).catch(()=>{if(!aborter.signal.aborted&&editingActive){exitScreenEditing();setDirectError('This screen is not ready to edit. Try again.')}});return()=>aborter.abort();},[editingActive,nodeId,encoded,runtime,screen.simulation,exitScreenEditing]);
+  useEffect(()=>{
+    if(screen.simulation)return;
+    const aborter=new AbortController(),controller=controllers.get(nodeId),command:ScreenAction={action:'edit-mode',value:editingActive?'on':'off'};
+    // Mode belongs to the host UI, not a saved-source revision. A property
+    // save must not re-enter editing or exit it during a slow source handoff.
+    // New frames also synchronize from editingRef in their ready handler.
+    void (controller?controller.run(command,aborter.signal):inspectCanvasV2Screen(nodeId,previousSource.current,command,aborter.signal)).catch(()=>{if(!aborter.signal.aborted&&editingActive)setDirectError('This screen is still loading. Your selection is kept.');});
+    return()=>aborter.abort();
+  },[editingActive,nodeId,runtime,screen.simulation]);
   useEffect(()=>{if(screen.simulation)return;const aborter=new AbortController();void inspectCanvasV2Screen(nodeId,encoded,{action:'presence-mode',value:editing.presence?'on':'off'},aborter.signal).catch(()=>{});return()=>aborter.abort();},[nodeId,encoded,runtime,screen.simulation,editing.presence]);
   useEffect(()=>{const request=textEditorRequest.current;if(request&&(request.version!==encoded||!editingActive))cancelPendingTextEditor();},[encoded,editingActive,cancelPendingTextEditor]);
   useEffect(()=>()=>{textEditorRequest.current?.aborter.abort();textEditorRequest.current=undefined;},[]);
