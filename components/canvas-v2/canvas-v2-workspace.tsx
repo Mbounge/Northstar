@@ -3833,8 +3833,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
       const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
       setEditingNodeId(undefined);
-      setSelectedElements([]);
-      setSelectionTarget(undefined);
+      // Do not tear down a surviving app's layer editor while native history
+      // refreshes its geometry. Its internal selection follows source history.
+      if(!editOwner){setSelectedElements([]);setSelectionTarget(undefined);}
       setToolbarMenu(undefined);
       setHistorySelectionRestore(restored&&restoredIds.length ? {
         revisionId: restored.revisionId,
@@ -3851,8 +3852,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       const editOwner=screenEditNodeId&&engine.readNativeScene()?.nodes.some(node=>(node.sourceNodeId??node.id)===screenEditNodeId&&!node.locked&&!node.hidden)?screenEditNodeId:undefined;
       const restoredIds=editOwner?[editOwner]:restored?.selectionNodeIds??[];
       setEditingNodeId(undefined);
-      setSelectedElements([]);
-      setSelectionTarget(undefined);
+      // Do not tear down a surviving app's layer editor while native history
+      // refreshes its geometry. Its internal selection follows source history.
+      if(!editOwner){setSelectedElements([]);setSelectionTarget(undefined);}
       setToolbarMenu(undefined);
       setHistorySelectionRestore(restored&&restoredIds.length ? {
         revisionId: restored.revisionId,

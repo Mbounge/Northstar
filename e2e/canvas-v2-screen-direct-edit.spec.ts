@@ -678,3 +678,22 @@ test('property changes stay responsive across repeated saves on a populated 52-s
  expect(Math.max(...samples)).toBeLessThan(150);
  await page.screenshot({path:info.outputPath('populated-responsive-editing.png')});
 });
+
+
+test('Undo and Redo retain a surviving app layer inspector and allow the next edit without reselecting',async({page})=>{
+ test.setTimeout(120000);await page.setViewportSize({width:1512,height:1000});
+ const frame=await createScreen(page);await frame.locator('#name').fill('Keep my app state');await clickScreen(page,'#save');
+ const boot=await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot);
+ await enterEdit(page);await page.getByRole('treeitem',{name:'Select layer A little space for your ideas.',exact:true}).click();
+ const text=page.getByRole('textbox',{name:'Element text',exact:true}),colour=page.getByRole('textbox',{name:'Text colour',exact:true});
+ const original=await frame.locator('h1').evaluate(e=>getComputedStyle(e).color);
+ await colour.fill('#FFC84B');await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();
+ await expect(frame.locator('h1')).toHaveCSS('color','rgb(255, 200, 75)');
+ await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+ await expect(frame.locator('h1')).toHaveCSS('color',original);await expect(text).toBeVisible();await expect(page.getByRole('button',{name:'Text flow',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Redo canvas action',exact:true}).click();
+ await expect(frame.locator('h1')).toHaveCSS('color','rgb(255, 200, 75)');await expect(text).toBeVisible();
+ await colour.fill('#68CFE5');await expect(frame.locator('h1')).toHaveCSS('color','rgb(104, 207, 229)');
+ await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();
+ await expect(frame.locator('#name')).toHaveValue('Keep my app state');expect(await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot)).toBe(boot);
+});
