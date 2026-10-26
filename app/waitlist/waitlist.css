@@ -1,16 +1,16 @@
-.waitlist-page{position:relative;isolation:isolate;display:flex;align-items:center;justify-content:center;min-height:100svh;padding:32px 20px;background:#000;color:#fff;overflow:hidden}
-.waitlist-content{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);align-items:center;gap:32px;width:min(1480px,100%)}
+.waitlist-page{position:relative;isolation:isolate;display:flex;align-items:center;justify-content:center;min-height:100svh;padding:24px 20px;background:#000;color:#fff;overflow:hidden}
 .waitlist-demo{min-width:0;margin:0;padding:8px;background:rgb(0 0 0 / .6);border:1px solid rgb(255 255 255 / .1);box-shadow:0 25px 50px -12px #0008;backdrop-filter:blur(20px)}
 .waitlist-demo video{display:block;width:100%;height:auto;aspect-ratio:16/9;background:#11111b;object-fit:contain}
 .waitlist-background{position:absolute;inset:0;z-index:-1;display:flex;align-items:center;justify-content:center;pointer-events:none;overflow:hidden}
 .waitlist-background-art{position:relative;flex-shrink:0;margin-top:12vh;width:max(1350px,75vmax);height:max(1350px,75vmax);transform:rotate(309deg)}
 .waitlist-background-art img{object-fit:cover;transform:scaleX(-1)}
-.waitlist-card{width:599px;max-width:100%;min-height:535px;padding:86px 64px 28px;background:rgb(0 0 0 / .6);backdrop-filter:blur(40px);border:1px solid rgb(255 255 255 / .1);box-shadow:0 25px 50px -12px #0008;text-align:center}
+.waitlist-card{width:880px;max-width:100%;padding:40px 40px 28px;background:rgb(0 0 0 / .6);backdrop-filter:blur(40px);border:1px solid rgb(255 255 255 / .1);box-shadow:0 25px 50px -12px #0008;text-align:center}
 .waitlist-card h1{margin:0;letter-spacing:-.02em;line-height:1.1}
 .waitlist-card h1 span{display:block;font-size:36px;font-weight:200}
 .waitlist-card h1 strong{display:block;margin-top:8px;font-size:40px;font-weight:600}
-.waitlist-intro{font-size:12px;line-height:1.8;font-weight:300;margin:27px 0;color:#dedede}
-.waitlist-form{position:relative;max-width:349px;margin:auto;font-family:Arial,sans-serif}
+.waitlist-intro{font-size:12px;line-height:1.8;font-weight:300;margin:20px 0 28px;color:#dedede}
+.waitlist-enrollment{margin-top:28px}
+.waitlist-form{position:relative;max-width:420px;margin:auto;font-family:Arial,sans-serif}
 .waitlist-form-row{display:flex;flex-direction:column;gap:12px}
 .waitlist-form-row input{width:100%;height:52px;padding:0 16px;background:rgb(0 0 0 / .28);border:1px solid #ffffff40;border-radius:0;color:white;font:inherit;font-size:15px;outline:none}
 .waitlist-form-row input::placeholder{color:#b4b4b4}
@@ -21,17 +21,16 @@
 .waitlist-promise{font-size:12px;line-height:1.7;color:#b1b1b1;margin:16px 0 0}
 .waitlist-error{color:#fda4af;font-size:13px;line-height:1.5;margin:12px 0 0}
 .waitlist-error:empty{display:none}
-.waitlist-success{max-width:349px;min-height:157px;margin:auto;display:flex;align-items:center;justify-content:center;gap:14px;text-align:left;font-family:Arial,sans-serif}
+.waitlist-success{max-width:420px;min-height:157px;margin:auto;display:flex;align-items:center;justify-content:center;gap:14px;text-align:left;font-family:Arial,sans-serif}
 .waitlist-success strong{font-size:18px;font-weight:600}
 .waitlist-success p{font-size:13px;color:#ccc;line-height:1.7;margin:6px 0 0}
 .waitlist-check{display:grid;place-items:center;flex-shrink:0;width:36px;height:36px;border:1px solid #fff5;border-radius:50%}
-.waitlist-footer{display:flex;justify-content:center;flex-wrap:wrap;align-items:center;gap:12px;font-family:Arial,sans-serif;font-size:11px;font-weight:300;margin-top:35px;color:#b1b1b1;line-height:1.6}
+.waitlist-footer{display:flex;justify-content:center;flex-wrap:wrap;align-items:center;gap:12px;font-family:Arial,sans-serif;font-size:11px;font-weight:300;margin-top:24px;color:#b1b1b1;line-height:1.6}
 .waitlist-footer a{color:inherit;text-decoration:none}
 .waitlist-footer a:hover{color:#fff}
 .waitlist-page a:focus-visible,.waitlist-page button:focus-visible{outline:2px solid #fff;outline-offset:5px}
 .waitlist-trap,.waitlist-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .waitlist-spin{animation:waitlist-spin 1s linear infinite}
 @keyframes waitlist-spin{to{transform:rotate(360deg)}}
-@media(max-width:1199px){.waitlist-content{display:flex;flex-direction:column;gap:24px;max-width:720px}.waitlist-demo{width:100%}.waitlist-card{width:599px;min-height:0;padding-top:44px}}
-@media(max-width:600px){.waitlist-page{padding:24px 18px}.waitlist-content{gap:20px}.waitlist-demo{padding:4px}.waitlist-card{padding:36px 25px 28px;min-height:0}.waitlist-card h1 span{font-size:28px}.waitlist-card h1 strong{font-size:32px}.waitlist-intro{font-size:10px;margin:22px 0}.waitlist-background-art{margin-top:0;transform:rotate(309deg) translateY(-10vh)}.waitlist-footer{font-size:11px;gap:9px;margin-top:26px}}
+@media(max-width:600px){.waitlist-page{padding:24px 18px}.waitlist-demo{padding:4px}.waitlist-card{padding:28px 18px 24px}.waitlist-card h1 span{font-size:28px}.waitlist-card h1 strong{font-size:32px}.waitlist-intro{font-size:10px;margin:18px 0 24px}.waitlist-enrollment{margin-top:24px}.waitlist-background-art{margin-top:0;transform:rotate(309deg) translateY(-10vh)}.waitlist-footer{font-size:11px;gap:9px;margin-top:26px}}
 @media(prefers-reduced-motion:reduce){.waitlist-spin{animation:none}.waitlist-form-row button{transition:none}}

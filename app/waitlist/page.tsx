@@ -25,15 +25,17 @@ export default function WaitlistPage() {
           <Image src="/topaz_enhance.png" alt="" fill priority quality={100} sizes="150vmax" />
         </div>
       </div>
-      <div className="waitlist-content">
-      <WaitlistDemo />
       <section className={`waitlist-card ${unbounded.className}`} aria-labelledby="waitlist-heading">
-        <h1 id="waitlist-heading"><span>Welcome to</span><strong>North Star AI</strong></h1>
-        <p className="waitlist-intro">Your creative studio. On one canvas.</p>
-        <WaitlistForm />
-        <footer className="waitlist-footer"><Link href="/waitlist/privacy">Privacy</Link><span aria-hidden="true">·</span><Link href="/signin">Already have access? Sign in ↗</Link></footer>
+        <header>
+          <h1 id="waitlist-heading"><span>Welcome to</span><strong>North Star AI</strong></h1>
+          <p className="waitlist-intro">Your creative studio. On one canvas.</p>
+        </header>
+        <WaitlistDemo />
+        <div className="waitlist-enrollment">
+          <WaitlistForm />
+          <footer className="waitlist-footer"><Link href="/waitlist/privacy">Privacy</Link><span aria-hidden="true">·</span><Link href="/signin">Already have access? Sign in ↗</Link></footer>
+        </div>
       </section>
-      </div>
     </main>
   );
 }
