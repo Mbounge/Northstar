@@ -46,11 +46,13 @@ export default async function CanvasPage({ searchParams }: { searchParams: Promi
   }
 
   const params = await searchParams;
+  const ownerName=[user.user_metadata?.full_name,user.user_metadata?.name,user.email?.split('@')[0]]
+    .find((value):value is string=>typeof value==='string'&&!!value.trim())?.trim().slice(0,48)||'Teammate';
   if (params.workspace) {
     const temporary = params.temporary === '1' && /^tmp-[0-9a-f-]{36}$/.test(params.workspace);
     if (!temporary && !/^[0-9a-f-]{36}$/.test(params.workspace)) redirect('/canvas');
     return params.embedded==='1'
-      ? <SessionWorkspace id={params.workspace} temporary={temporary} owner={user.id} agentEndpoint={agentEndpoint}/>
+      ? <SessionWorkspace id={params.workspace} temporary={temporary} owner={user.id} ownerName={ownerName} agentEndpoint={agentEndpoint}/>
       : <SessionShell owner={user.id} initialWorkspaceId={params.workspace} temporary={temporary}/>;
   }
   return <SessionShell owner={user.id} initialId={params.s} temporary={params.temporary === '1'}/>;

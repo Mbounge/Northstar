@@ -43,11 +43,19 @@ export class PrivateWorkspaceSync {
     });return this.caching;
   }
   async open(fallback?:PrivateCanvasHistory|(()=>Promise<PrivateCanvasHistory|undefined>)){
-    let cached:PrivateWorkspaceEntry|undefined;
-    try{cached=await this.options.cache.read();}catch{/* Cloud can still restore the conversation. */}
+    // The device journal and authenticated cloud read are independent. Keep
+    // both results settled before choosing authority: a fast cloud failure
+    // must still retain a slower dirty local branch, without an unhandled
+    // rejection or an upload based on an unknown remote version.
+    const [local,remote]=await Promise.allSettled([
+      Promise.resolve().then(()=>this.options.cache.read()),
+      Promise.resolve().then(()=>this.options.remote.read()),
+    ]);
+    const cached=local.status==='fulfilled'?local.value:undefined;
     this.entry=cached;
     try{
-      const cloud=await this.options.remote.read();this.authorityKnown=true;
+      if(remote.status==='rejected')throw remote.reason;
+      const cloud=remote.value;this.authorityKnown=true;
       if(cached?.dirty){
         const accepted=cached.inFlight&&cloud?.path.endsWith(`/${cached.inFlight.operationId}.json`);
         if(accepted){const done=cached.inFlight!;this.entry={...cached,version:cloud!.version,dirty:cached.operationId!==done.operationId,inFlight:undefined};}

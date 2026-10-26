@@ -69,6 +69,12 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     // prompt should modify rather than relying on creation-tool focus.
     await page.getByRole("button", { name: "Select", exact: true }).click();
     await text.click();
+    // Opening the design chat deliberately reframes the available canvas
+    // space. Establish the camera after that explicit navigation action;
+    // subsequent model commits and history must leave it exactly unchanged.
+    const openChat = page.getByRole('button', { name: 'Open North Star panel', exact: true });
+    if (await openChat.isVisible()) await openChat.click();
+    await expect(page.getByLabel('Message North Star')).toBeVisible();
     const camera = await surface.evaluate((element) => getComputedStyle(element).transform);
 
     const routing = page.waitForRequest(request => request.url().endsWith('/canvas-v2-e2e/route') || request.url().endsWith('/api/canvas-v2/route'));

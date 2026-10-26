@@ -55,6 +55,14 @@ test("surfaces and fine rules remain visible without turning the canvas into car
   assert.ok((canvasV2ContrastRatio(rule, darkBackground) ?? 0) >= 1.5);
 });
 
+test('readable authored accent rules retain their exact colour in either host theme', () => {
+  assert.equal(canvasV2ThemeRuleColor('#68CFE5', '#0d0e11', 'dark'), undefined);
+  assert.equal(canvasV2ThemeRuleColor('#AAA0E8', '#0d0e11', 'dark'), undefined);
+  assert.equal(canvasV2ThemeRuleColor('#2369BA', '#fafbff', 'light'), undefined);
+  const faint = resolved('#252439', canvasV2ThemeRuleColor('#252439', '#0d0e11', 'dark'));
+  assert.ok((canvasV2ContrastRatio(faint, '#0d0e11') ?? 0) >= 1.5, 'low-contrast rules still receive a readable counterpart');
+});
+
 test("contrast measurement accepts authored hex, alpha hex, comma rgb, and modern rgb syntax", () => {
   assert.ok((canvasV2ContrastRatio("#ffffff", "#000000") ?? 0) > 20);
   assert.ok((canvasV2ContrastRatio("#ffffffcc", "rgb(0 0 0)") ?? 0) > 12);
@@ -65,7 +73,7 @@ test("a new native authored color cannot be overwritten by the previous theme pa
   const source = readFileSync("lib/canvas-v2/artifact-theme.ts", "utf8");
   const nativeScene = readFileSync("components/canvas-v2/native-canvas-scene.tsx", "utf8");
   assert.match(source, /style\.getPropertyValue\(property\)\.trim\(\) !== stored\.appliedValue\.trim\(\)/);
-  assert.match(source, /appliedValue: next/);
+  assert.match(source, /stored\.appliedValue=style\.getPropertyValue\(property\)/);
   assert.doesNotMatch(nativeScene, /applyCanvasV2ArtifactTheme\(document/);
   assert.match(nativeScene, /applyCanvasV2ArtifactThemeToElement\(root/);
 });

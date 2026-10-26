@@ -50,6 +50,26 @@ const active=(page:Page)=>page.frameLocator('iframe[aria-hidden="false"]');
 const send=async(page:Page,text:string)=>{const f=active(page);await f.getByLabel('Message North Star',{exact:true}).fill(text);await f.getByRole('button',{name:'Send message',exact:true}).click();};
 const menu=async(page:Page)=>{await active(page).getByRole('button',{name:'Canvas menu',exact:true}).click();};
 
+test('a saved link opens its authenticated workspace while History is still loading',async({page})=>{
+ const db=await storage(page),id=randomUUID();
+ db.rows[id]={id,owner_id:'11111111-1111-4111-8111-111111111111',title:'Known saved canvas',version:0,snapshot_path:null,model:'gpt-5.6-luna',effort:'high',archived:false,updated_at:new Date().toISOString()};
+ let release!:()=>void;const listing=new Promise<void>(resolve=>{release=resolve;});
+ await page.route('**/rest/v1/northstar_sessions*',async route=>{
+  const url=new URL(route.request().url());
+  if(!url.searchParams.has('id')){await listing;await route.fulfill({status:503,json:{message:'History temporarily unavailable'}});return;}
+  await route.fallback();
+ });
+ try{
+  await page.goto('/canvas?sessionTest=1&s='+id);
+  await expect(active(page).getByLabel('Message North Star',{exact:true})).toBeVisible();
+  await expect(page.locator('iframe[aria-hidden="false"]')).toHaveAttribute('title','Canvas: Known saved canvas');
+ }finally{release();}
+ await expect(active(page).getByLabel('Message North Star',{exact:true})).toBeVisible();
+ await menu(page);await expect(page.getByRole('complementary',{name:'Canvas sessions',exact:true}).getByRole('alert')).toContainText('History temporarily unavailable');
+ await page.getByRole('button',{name:'Close sessions sidebar',exact:true}).click();
+ await expect(active(page).getByLabel('Message North Star',{exact:true})).toBeVisible();
+});
+
 test('saved sessions autosave chat, native canvas, draft and selected model; temporary sessions reset',async({page})=>{
  test.setTimeout(180_000);const db=await storage(page);
  await page.goto('/canvas?sessionTest=1');

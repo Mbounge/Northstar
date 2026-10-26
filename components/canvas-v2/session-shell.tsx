@@ -48,14 +48,21 @@ export function SessionShell({owner, initialId, initialWorkspaceId, temporary=fa
           select({id:initialWorkspaceId,frameId:initialWorkspaceId,title:temporary?'Untitled canvas':'Shared canvas',temporary,originalTemporary:temporary,sharedEntry:!temporary});
           await refresh();return;
         }
-        const all=await refresh();
         const handoff=Boolean(sessionStorage.getItem(CANVAS_V2_GATEWAY_HANDOFF_KEY));
+        // A saved link already identifies the workspace. Its embedded route
+        // verifies access and reads the current title; History is navigation,
+        // so a slow or unavailable listing must not gate that workspace.
+        if(initialId&&!temporary&&!handoff){
+          select({id:initialId,frameId:initialId,title:'Canvas',temporary:false,originalTemporary:false});
+          await refresh();return;
+        }
+        const all=await refresh();
         if(temporary){await add(true);return;}
         const chosen=!handoff && (initialId?all.find(s=>s.id===initialId):all.find(s=>!s.archived));
         if(initialId && !chosen && !handoff){setError('This saved session is unavailable for your account.');setSidebar(true);return;}
         if(chosen)select({id:chosen.id,frameId:chosen.id,title:chosen.title,temporary:false,originalTemporary:false});
         else await add();
-      }catch(e){setError((e as Error).message);if(!initialWorkspaceId)setSidebar(true);if(temporary&&!initialWorkspaceId)await add(true);}
+      }catch(e){setError((e as Error).message);if(!initialWorkspaceId&&!initialId)setSidebar(true);if(temporary&&!initialWorkspaceId)await add(true);}
     })();
   },[add,initialId,initialWorkspaceId,refresh,select,temporary]);
   useEffect(()=>{

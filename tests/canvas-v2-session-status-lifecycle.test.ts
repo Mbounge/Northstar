@@ -8,7 +8,7 @@ type Element = { type: unknown; props: Record<string, unknown> };
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
 /** Run SessionShell's actual component, refs, mount effects and message handler.
  * Only React scheduling and external account/list services are substituted. */
-async function shell(options: { shared?: boolean; listFails?: boolean } = {}) {
+async function shell(options: { shared?: boolean; listFails?: boolean; listGate?: Promise<void> } = {}) {
   const slots: unknown[] = []; let cursor = 0, listCalls = 0;
   const effects: Array<() => unknown> = [], cleanups: Array<() => void> = [];
   const equal = (a: unknown[] | undefined, b: unknown[] | undefined) => Boolean(a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i])));
@@ -23,7 +23,7 @@ async function shell(options: { shared?: boolean; listFails?: boolean } = {}) {
     react,
     'react/jsx-runtime': { Fragment: 'fragment', jsx: (type: unknown, props: Record<string, unknown>) => ({ type, props }), jsxs: (type: unknown, props: Record<string, unknown>) => ({ type, props }) },
     './canvas-invitation': { PendingCanvasInvitation: () => null }, 'lucide-react': {},
-    '@/lib/canvas-v2/sessions/store': { listSessions: async () => { listCalls++; if(options.listFails)throw new Error('Listing unavailable'); return options.shared?[]:[{ id: 'room', title: 'Canvas', archived: false }]; }, createSession: () => { throw new Error('Unexpected session creation'); } },
+    '@/lib/canvas-v2/sessions/store': { listSessions: async () => { listCalls++; await options.listGate; if(options.listFails)throw new Error('Listing unavailable'); return options.shared?[]:[{ id: 'room', title: 'Canvas', archived: false }]; }, createSession: () => { throw new Error('Unexpected session creation'); } },
     '@/lib/supabase/client': { createClient: () => { throw new Error('No auth calls in isolated test mode'); } },
     '@/lib/canvas-v2/gateway-handoff': { CANVAS_V2_GATEWAY_HANDOFF_KEY: 'test-handoff' },
   };
@@ -48,6 +48,20 @@ async function shell(options: { shared?: boolean; listFails?: boolean } = {}) {
   const send = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => { const event = { origin: 'https://northstar.invalid', source: frameWindows.get('room'), data: { type: 'northstar-session', frameId: 'room', ...data }, ...extra }; for (const handler of events.get('message') ?? []) handler(event); };
   return { render, send, nodes, locations, listCalls: () => listCalls, close: () => { for (const cleanup of cleanups) cleanup(); } };
 }
+
+test('a known saved canvas mounts before the History listing finishes and is not remounted when it arrives', async t => {
+  let release!: () => void; const listGate = new Promise<void>(resolve => { release = resolve; });
+  const f = await shell({ listGate }); t.after(f.close);
+  try {
+    const frame = f.nodes(f.render()).find(node => node.type === 'iframe');
+    assert.ok(frame, 'the authenticated workspace must open independently of History loading');
+    assert.equal(frame.props.src, '/canvas?sessionTest=1&workspace=room&embedded=1');
+    f.send({ title: 'Live title', saveStatus: 'saved' });
+  } finally { release(); }
+  await settle();
+  const frames = f.nodes(f.render()).filter(node => node.type === 'iframe');
+  assert.equal(frames.length, 1); assert.equal(frames[0].props.title, 'Canvas: Live title');
+});
 
 test('duplicate saved reports and busy/title updates never refresh session lists; real save transitions still refresh before React rerenders', async t => {
   const f = await shell(); t.after(f.close); const boot = f.listCalls();

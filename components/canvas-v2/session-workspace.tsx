@@ -19,7 +19,7 @@ import { createClient } from '@/lib/supabase/client';
 import type { CanvasV2ArtifactRevision } from '@/lib/canvas-v2/types';
 import { LiveSessionChannel } from '@/lib/canvas-v2/sessions/live-channel';
 
-export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:string; temporary:boolean; owner:string; agentEndpoint?:string}) {
+export function SessionWorkspace({id, temporary, owner, ownerName, agentEndpoint}: {id:string; temporary:boolean; owner:string; ownerName?:string; agentEndpoint?:string}) {
   const [loaded,setLoaded] = useState<{snapshot?:NorthstarSnapshot} | null>(null);
   const [title,setTitle] = useState('Untitled canvas');
   const [error,setError] = useState('');
@@ -119,9 +119,15 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
         const db=createClient(),transport=new SupabaseCanvasTransport(id,db);
         const invitation=new URLSearchParams(window.location.hash.slice(1)).get('invite');
         if(invitation){const joined=await transport.redeem(invitation);if(joined!==id)throw new Error('This invitation belongs to another canvas.');window.history.replaceState(null,'',window.location.pathname+window.location.search);}
-        const {data:{user}}=await db.auth.getUser();
-        const name=[user?.user_metadata?.full_name,user?.user_metadata?.name,user?.email?.split('@')[0]].find((value):value is string=>typeof value==='string'&&!!value.trim())?.trim().slice(0,48)||'Teammate';
-        const clientId=await claimSessionWriter(`northstar-collaborator:${owner}:${id}`,sessionStorage,navigator.locks);
+        // /canvas already authenticated this account on the server. Reuse its
+        // display name rather than making another network identity round trip.
+        // This is presentation only: every room read and write remains RLS/RPC
+        // authorized. Standalone hosts retain their authenticated fallback.
+        const [name,clientId]=await Promise.all([
+          ownerName!==undefined?Promise.resolve(ownerName.trim().slice(0,48)||'Teammate'):db.auth.getUser().then(({data:{user}})=>
+            [user?.user_metadata?.full_name,user?.user_metadata?.name,user?.email?.split('@')[0]].find((value):value is string=>typeof value==='string'&&!!value.trim())?.trim().slice(0,48)||'Teammate'),
+          claimSessionWriter(`northstar-collaborator:${owner}:${id}`,sessionStorage,navigator.locks),
+        ]);
         if(disposed)return;privateClientId.current=clientId;
         const multiplayer=new CanvasCollaborationClient({clientId,userId:owner,name,transport,...canvasCollaborationJournal(`${owner}:${id}:${clientId}`)});
         const shared=await multiplayer.connect();
@@ -129,8 +135,8 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
         collaborationRef.current=multiplayer;setCollaboration(multiplayer);
         if(shared){
           channel.current?.close();channel.current=null;
-          const session=await getSession(id),local=await localView.current.read().catch(()=>undefined);
-          const viewport=await localView.current.readCamera().catch(()=>undefined)??local?.viewport;
+          const [session,local,camera]=await Promise.all([getSession(id),localView.current.read().catch(()=>undefined),localView.current.readCamera().catch(()=>undefined)]);
+          const viewport=camera??local?.viewport;
           const history=await openPrivate(async()=>{
             if(local)return privateCanvasHistory(local);
             // Only the original owner may migrate their pre-sharing history.
@@ -147,11 +153,11 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
         }
         const editable = await leaseSession(id,writer.current);
         const session = await getSession(id);
-        let snapshot = await loadSnapshot(session);
+        const [savedSnapshot,camera]=await Promise.all([loadSnapshot(session),localView.current.readCamera().catch(()=>undefined)]);
+        let snapshot = savedSnapshot;
         const journal=new SoloSnapshotRecovery({cache:soloRecoveryCache(owner,id,writer.current),encode:encodeSnapshot,decode:decodeSnapshotBlob,onError:setError});
         let restored:Awaited<ReturnType<SoloSnapshotRecovery['open']>>;
         try{restored=await journal.open(session);}catch{setError('Local recovery storage is unavailable. Keep this canvas open until changes are saved.');}
-        const camera=await localView.current.readCamera().catch(()=>undefined);
         if (!disposed) {
           recovery.current=journal;
           if(restored&&editable){
@@ -203,7 +209,7 @@ export function SessionWorkspace({id, temporary, owner, agentEndpoint}: {id:stri
     const hide=()=>{void personal.current?.flush();if(!blockedRef.current&&!collaborationRef.current?.enabled){void recovery.current?.flush();void queue.current?.flush();}if(latest.current)void localView.current.writeCamera(latest.current.viewport).catch(()=>{});};
     window.addEventListener('online',reconnect);window.addEventListener('pagehide',hide);
     return () => {disposed=true;if(!blockedRef.current&&!collaborationRef.current?.enabled){void recovery.current?.flush();void queue.current?.flush();}void personal.current?.close();personal.current=undefined;privateOpening.current=undefined;window.removeEventListener('online',reconnect);window.removeEventListener('pagehide',hide);collaborationRef.current?.close();collaborationRef.current=undefined;clearTimeout(privateSave.current);clearInterval(heartbeat);clearInterval(checkpoint);clearInterval(sync);channel.current?.close();channel.current=null;window.removeEventListener('beforeunload',unload);};
-  },[id,temporary,owner,attach,report,openPrivate]);
+  },[id,temporary,owner,ownerName,attach,report,openPrivate]);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.frameId !== id) return;

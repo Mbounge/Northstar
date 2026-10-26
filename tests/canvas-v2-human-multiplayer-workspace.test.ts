@@ -16,7 +16,7 @@ const snapshot = (value:CanvasV2ArtifactRevision):NorthstarSnapshot=>({schema:1,
 type Element = {type:unknown;props:Record<string,unknown>};
 /** Run the real SessionWorkspace component, effects and callbacks. Substitute
  * only React scheduling and external services, so no browser/DB calls occur. */
-function workspace(options:{denied?:boolean;shared?:boolean;user?:string;sessionOwner?:string;remoteHistory?:PrivateCanvasHistory;remoteFailure?:boolean;remoteGate?:Promise<void>;cachedEntry?:PrivateWorkspaceEntry;localHistory?:PrivateCanvasWorkspace;camera?:NorthstarSnapshot['viewport']}={}) {
+function workspace(options:{ownerName?:string;metadataGate?:Promise<void>;denied?:boolean;shared?:boolean;user?:string;sessionOwner?:string;remoteHistory?:PrivateCanvasHistory;remoteFailure?:boolean;remoteGate?:Promise<void>;cachedEntry?:PrivateWorkspaceEntry;localHistory?:PrivateCanvasWorkspace;camera?:NorthstarSnapshot['viewport']}={}) {
   const slots:unknown[]=[];let cursor=0;const effects:Array<()=>unknown>=[],cleanups:Array<()=>unknown>=[];
   const same=(before:unknown[]|undefined,after:unknown[]|undefined)=>Boolean(before&&after&&before.length===after.length&&before.every((value,index)=>Object.is(value,after[index])));
   const react={
@@ -39,7 +39,9 @@ function workspace(options:{denied?:boolean;shared?:boolean;user?:string;session
   const queues:Array<{dirty:boolean;flush:()=>Promise<void>}> = [];
   const channels:Array<{callbacks:{multiplayer?:()=>void};closed:boolean}> = [];
   const marker=()=>null;
+  const startupReads:string[]=[],names:string[]=[];let authReads=0;
   class Client {
+    constructor(options:{name:string}){names.push(options.name);}
     enabled=false;
     async connect(){connectCalls++;if(options.denied)throw new Error('Canvas access denied');this.enabled=shared;return shared;}
     getRevision(){return accepted;}
@@ -79,26 +81,26 @@ function workspace(options:{denied?:boolean;shared?:boolean;user?:string;session
     './canvas-v2-workspace':{CanvasV2Workspace:marker},
     '@/lib/canvas-v2/sessions/snapshot':{SnapshotQueue:Queue,encodeSnapshot,decodeSnapshotBlob},
     '@/lib/canvas-v2/sessions/solo-recovery':{SoloSnapshotRecovery,sameSoloSnapshotContent,soloRecoveryCache:()=>({read:async()=>soloEntry,write:async(entry:SoloRecoveryEntry)=>{soloEntry=entry;},clear:async(expected?:readonly string[])=>{if(!expected||!soloEntry||expected.includes(soloEntry.id))soloEntry=undefined;}})},
-    '@/lib/canvas-v2/sessions/store':{getSession:async()=>({id:'room',owner_id:options.sessionOwner??'owner',title:'Canvas',snapshot_path:'legacy.json',version:1}),leaseSession:async()=>{leaseCalls++;return true;},loadSnapshot:async()=>{legacyReads++;return local;},renameSession:async()=>{},saveSnapshot:async()=>{}},
+    '@/lib/canvas-v2/sessions/store':{getSession:async()=>{startupReads.push('session');await options.metadataGate;return {id:'room',owner_id:options.sessionOwner??'owner',title:'Canvas',snapshot_path:'legacy.json',version:1};},leaseSession:async()=>{leaseCalls++;return true;},loadSnapshot:async()=>{legacyReads++;return local;},renameSession:async()=>{},saveSnapshot:async()=>{}},
     '@/lib/canvas-v2/sessions/writer':{claimSessionWriter:async()=> 'tab'},
     '@/lib/canvas-v2/sessions/collaboration-client':{CanvasCollaborationClient:Client},
     '@/lib/canvas-v2/sessions/collaboration-supabase':{SupabaseCanvasTransport:class {},canvasCollaborationJournal:()=>({})},
-    '@/lib/canvas-v2/sessions/collaboration-local':{privateCanvasWorkspace:()=>({read:async()=>options.localHistory,write:async()=>{},readCamera:async()=>options.camera,writeCamera:async(value:NorthstarSnapshot['viewport'])=>{cameraWrites.push(value);},historyCacheFor:(clientId:string)=>{cacheKeys.push(clientId);return {read:async()=>cached,write:async(entry:PrivateWorkspaceEntry)=>{cached=structuredClone(entry);privateWrites.push(cached.history);}};}})},
+    '@/lib/canvas-v2/sessions/collaboration-local':{privateCanvasWorkspace:()=>({read:async()=>{startupReads.push('local');return options.localHistory;},write:async()=>{},readCamera:async()=>{startupReads.push('camera');return options.camera;},writeCamera:async(value:NorthstarSnapshot['viewport'])=>{cameraWrites.push(value);},historyCacheFor:(clientId:string)=>{cacheKeys.push(clientId);return {read:async()=>cached,write:async(entry:PrivateWorkspaceEntry)=>{cached=structuredClone(entry);privateWrites.push(cached.history);}};}})},
     '@/lib/canvas-v2/sessions/private-workspace-sync':{PrivateWorkspaceSync:Personal},
     '@/lib/canvas-v2/sessions/private-workspace':{privateCanvasHistory},
     '@/lib/canvas-v2/sessions/private-workspace-supabase':{SupabasePrivateWorkspace:Remote},
     '@/lib/canvas-v2/model-catalog':{CANVAS_V2_DEFAULT_MODEL:'gpt-6.1-sol'},
     '@/lib/canvas-v2/workspace-coordinate-space':{centeredCanvasV2WorkspaceViewport:()=>({x:0,y:0,scale:1})},
-    '@/lib/supabase/client':{createClient:()=>({auth:{getUser:async()=>({data:{user:{id:'owner',email:'owner@example.invalid'}}})}})},
+    '@/lib/supabase/client':{createClient:()=>({auth:{getUser:async()=>{authReads++;return {data:{user:{id:'owner',email:'owner@example.invalid'}}};}}})},
     '@/lib/canvas-v2/sessions/live-channel':{LiveSessionChannel:Live},
   };
   const exports:{SessionWorkspace?:(props:unknown)=>Element}={};
   const code=ts.transpileModule(readFileSync(new URL('../components/canvas-v2/session-workspace.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
   vm.runInNewContext(code,{exports,URLSearchParams,sessionStorage:{},navigator:{locks:{}},BroadcastChannel:class {},window:{parent,location:{hash:'',origin:'https://northstar.invalid'},addEventListener:(type:string,callback:(value:unknown)=>void)=>{let handlers=events.get(type);if(!handlers){handlers=new Set();events.set(type,handlers);}handlers.add(callback);},removeEventListener:(type:string,callback:(value:unknown)=>void)=>events.get(type)?.delete(callback)},setInterval:(callback:()=>void,delay:number)=>{intervals.push({callback,delay});return intervals.length;},clearInterval:()=>{},setTimeout:(callback:()=>void)=>{timeouts.push(callback);return timeouts.length;},clearTimeout:()=>{},require:(name:string)=>{assert.ok(Object.hasOwn(dependencies,name),`Unexpected dependency: ${name}`);return dependencies[name];}});
-  const render=()=>{cursor=0;const tree=exports.SessionWorkspace!({id:'room',owner:options.user??'owner',temporary:false});while(effects.length){const cleanup=effects.shift()!();if(typeof cleanup==='function')cleanups.push(cleanup as ()=>unknown);}return tree;};
+  const render=()=>{cursor=0;const tree=exports.SessionWorkspace!({id:'room',owner:options.user??'owner',ownerName:options.ownerName,temporary:false});while(effects.length){const cleanup=effects.shift()!();if(typeof cleanup==='function')cleanups.push(cleanup as ()=>unknown);}return tree;};
   const find=(tree:Element):Element|undefined=>tree.type===marker?tree:(Array.isArray(tree.props.children)?tree.props.children:[tree.props.children]).filter(Boolean).map(value=>typeof value==='object'?find(value as Element):undefined).find(Boolean);
   const unmount=()=>{for(const cleanup of cleanups.splice(0).reverse())cleanup();};
-  return {render,unmount,reports,parent,pending:(value:number)=>{pending=value;},dispose:()=>{unmount();for(const sync of syncs)void sync.close();},view:()=>find(render())!,recoveries,privateWrites,cloudWrites,cameraWrites,identities,cacheKeys,syncs,queues,channels,intervals,local,accepted,activate:()=>{shared=true;},leases:()=>leaseCalls,connects:()=>connectCalls,legacyReads:()=>legacyReads,remoteReads:()=>remoteReads,online:()=>{remoteFailure=false;},dispatch:(type:string,value:unknown={})=>{for(const handler of events.get(type)??[])handler(value);}};
+  return {render,unmount,reports,parent,startupReads,names,authReads:()=>authReads,pending:(value:number)=>{pending=value;},dispose:()=>{unmount();for(const sync of syncs)void sync.close();},view:()=>find(render())!,recoveries,privateWrites,cloudWrites,cameraWrites,identities,cacheKeys,syncs,queues,channels,intervals,local,accepted,activate:()=>{shared=true;},leases:()=>leaseCalls,connects:()=>connectCalls,legacyReads:()=>legacyReads,remoteReads:()=>remoteReads,online:()=>{remoteFailure=false;},dispatch:(type:string,value:unknown={})=>{for(const handler of events.get(type)??[])handler(value);}};
 }
 const settle=async()=>{for(let index=0;index<6;index++)await new Promise<void>(resolve=>setImmediate(resolve));};
 
@@ -251,4 +253,25 @@ test('shared camera snapshots emit no repeated parent status while genuine statu
   assert.equal(f.reports.at(-1)?.title,'New canvas title');
   const menu=f.view().props.onSessionMenu as ()=>void,beforeMenu=f.reports.length;menu();menu();
   assert.equal(f.reports.length,beforeMenu+2,'identical menu actions are intentional toggles, not duplicate status');assert.equal(f.reports.at(-1)?.menu,true);
+});
+
+
+test('shared startup overlaps metadata and device reads and reuses the server authenticated display name',async t=>{
+  let release!:()=>void;const metadataGate=new Promise<void>(resolve=>{release=resolve;});
+  const f=workspace({shared:true,user:'bob',sessionOwner:'owner',ownerName:'  Bob  ',metadataGate});t.after(f.dispose);
+  f.render();await settle();
+  try{
+    assert.deepEqual(f.startupReads,['session','local','camera']);
+    assert.equal(f.authReads(),0,'a server authenticated name needs no repeated identity network call');
+    assert.deepEqual(f.names,['Bob']);assert.equal(f.leases(),0);assert.equal(f.legacyReads(),0);
+    assert.equal(f.view(),undefined,'the canvas must not accept input before room metadata and private history settle');
+  }finally{release();}
+  await settle();assert.equal((f.view().props.initialSnapshot as NorthstarSnapshot).revision.id,'accepted');
+  assert.equal(f.legacyReads(),0,'teammates still cannot load the owner legacy snapshot');
+});
+
+test('a supplied display name cannot bypass a rejected shared room authorization',async t=>{
+  const f=workspace({denied:true,ownerName:'Bob'});t.after(f.dispose);f.render();await settle();
+  assert.equal(f.authReads(),0);assert.equal(f.leases(),0);assert.equal(f.legacyReads(),0);
+  assert.equal(f.view(),undefined);assert.match(JSON.stringify(f.render()),/Canvas access denied/);
 });

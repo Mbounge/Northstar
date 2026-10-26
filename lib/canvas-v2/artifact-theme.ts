@@ -294,7 +294,10 @@ export function canvasV2ThemeRuleColor(
   theme: CanvasV2ArtifactTheme,
   minimumRatio = 1.5,
 ): string | undefined {
-  const semanticRule = theme === "dark" ? darkRule(value) : lightRule(value);
+  // Neutral rules can follow the host chrome. A deliberately coloured accent
+  // should retain its literal palette whenever it is already readable against
+  // its backing surface; tinting every bright border desaturated cyan edits.
+  const semanticRule = colorFacts(value)?.neutral ? (theme === "dark" ? darkRule(value) : lightRule(value)) : undefined;
   const candidate = semanticRule ?? value;
   return ensureContrast(candidate, background, minimumRatio, theme) ?? semanticRule;
 }
@@ -389,11 +392,17 @@ function themeElements(
     const style = (element as HTMLElement | SVGElement).style;
     const applyProperty = (property: string, next: string | undefined) => {
       if (!next) return;
-      original.set(property, { value: style.getPropertyValue(property), priority: style.getPropertyPriority(property), appliedValue: next, ...(property === "background-color" ? { backgroundShorthand: style.getPropertyValue("background"), backgroundPriority: style.getPropertyPriority("background") } : {}) });
+      const stored:StoredStyle={ value: style.getPropertyValue(property), priority: style.getPropertyPriority(property), appliedValue: '', ...(property === "background-color" ? { backgroundShorthand: style.getPropertyValue("background"), backgroundPriority: style.getPropertyPriority("background") } : {}) };
       // Authored compositions may contain stylesheet declarations marked
       // !important. Theme and contrast are host invariants, so this final
       // scoped override intentionally outranks authored presentation CSS.
       style.setProperty(property, next, "important");
+      // Compare CSSOM values with CSSOM values on the next pass. Browsers
+      // normalize hex/space-rgb/rgba strings; retaining the unparsed input made
+      // an installed override look like a newer authored value, so it stayed
+      // stuck over subsequent stylesheet edits and theme-preserve changes.
+      stored.appliedValue=style.getPropertyValue(property);
+      original.set(property,stored);
     };
 
     const authoredBackground = authoredValues.get("background-color") ?? "";

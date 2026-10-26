@@ -6,6 +6,42 @@ import { privateCanvasHistory, type PrivateCanvasHistory } from '../lib/canvas-v
 const history = (draft = 'Private note'): PrivateCanvasHistory => ({ turns: [{ id: 'turn', message: 'Private question', answer: 'Private answer', status: 'responded', createdAt: '2026-10-20T00:00:00Z' }], draft, model: 'gpt-5.6-sol', effort: 'high' });
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; };
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
+
+test('opening starts the private cloud read while the local recovery read is still pending', async t => {
+  const gate = deferred(), events: string[] = [], value = history('Saved on another device');
+  const sync = new PrivateWorkspaceSync({
+    cache: { read: async () => { events.push('cache'); await gate.promise; return undefined; }, write: async () => {} },
+    remote: { read: async () => { events.push('cloud'); return { history: value, version: 3, path: 'user/canvas/current.json' }; }, write: async () => { throw new Error('Opening must not upload'); } },
+  });
+  t.after(() => sync.close());
+  const opening = sync.open(); await settle();
+  try { assert.deepEqual([...events], ['cache', 'cloud'], 'independent recovery and authenticated cloud reads must overlap'); }
+  finally { gate.resolve(); }
+  assert.equal(await opening, value); assert.equal(sync.getStatus().phase, 'saved');
+});
+
+test('a failed parallel cloud read still retains a delayed dirty local recovery without uploading', async t => {
+  const gate = deferred(), local = history('Unsaved local edits'); let reads = 0, writes = 0;
+  const sync = new PrivateWorkspaceSync({
+    cache: { read: async () => { await gate.promise; return { history: local, version: 2, dirty: true, operationId: 'pending' }; }, write: async () => {} },
+    remote: { read: async () => { reads++; throw new Error('Offline'); }, write: async () => { writes++; throw new Error('Must not upload without authority'); } },
+  });
+  t.after(() => sync.close());
+  const opening = sync.open(history('Blank fallback')); await settle();
+  try { assert.equal(reads, 1, 'cloud failure must be handled even before slow local storage completes'); }
+  finally { gate.resolve(); }
+  assert.equal(await opening, local); assert.equal(sync.getStatus().phase, 'offline'); assert.equal(writes, 0);
+});
+
+test('synchronously unavailable local storage still permits authenticated cloud restoration', async t => {
+  const value = history('Cloud copy');
+  const sync = new PrivateWorkspaceSync({
+    cache: { read: () => { throw new Error('Device storage unavailable'); }, write: async () => {} },
+    remote: { read: async () => ({ history: value, version: 1, path: 'user/canvas/one.json' }), write: async () => { throw new Error('No upload needed'); } },
+  });
+  t.after(() => sync.close());
+  assert.equal(await sync.open(), value); assert.equal(sync.getStatus().phase, 'saved');
+});
 function fixture(options: { cache?: PrivateWorkspaceEntry; cloud?: CloudPrivateWorkspace; failRead?: boolean; failCache?: boolean } = {}) {
   let cached = options.cache && structuredClone(options.cache), cloud = options.cloud && structuredClone(options.cloud);
   let failRead = options.failRead ?? false, failWrite = false, loseAck = false, active = 0, maxActive = 0;
