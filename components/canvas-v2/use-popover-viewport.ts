@@ -51,7 +51,7 @@ export function useCanvasV2PopoverViewport(root: RefObject<HTMLElement | null>, 
     // Most camera frames leave the screen-space anchor untouched. If visibility
     // requires a relocation, clamp its open menus before the next paint too.
     const movement = new MutationObserver(place);
-    movement.observe(root.current, { attributes: true, attributeFilter: ["style"] });
+    movement.observe(root.current.closest('[data-testid="canvas-v2-context-toolbar"]') ?? root.current, { attributes: true, attributeFilter: ["style"] });
     root.current.querySelectorAll("[data-canvas-v2-popover]").forEach(popup => observer.observe(popup));
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);

@@ -96,6 +96,7 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await selectLayer(page, ids[1], true);
     await selectLayer(page, ids[2], true);
     await expect(app(page).getByText("3 selected", { exact: true })).toBeVisible();
+    await app(page).getByRole("button", { name: "Alignment and distribution", exact: true }).click();
     await app(page).getByRole("button", { name: "Align selected objects left" }).click();
     await expect.poll(async () => {
       const x = (await Promise.all(Array.from({ length: 3 }, (_, index) => shapes.nth(index).boundingBox()))).map((bounds) => bounds!.x);

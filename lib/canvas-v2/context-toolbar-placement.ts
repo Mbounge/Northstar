@@ -116,12 +116,13 @@ export function resolveCanvasV2ContextToolbarPosition(input: {
     preference: 3,
   };
   // A selection filling the viewport can make overlap unavoidable. Keep the
-  // existing anchor unless another position actually improves that obstruction.
+  // existing anchor until a clear position opens up, rather than chasing a
+  // marginally smaller overlap on every camera frame.
   if (previousRect && previous) {
     const best = scored[0];
     const oldSelectionOverlap = intersectionArea(previousRect, input.selection);
     const oldChromeOverlap = input.chrome.reduce((total, rect) => total + intersectionArea(previousRect, rect), 0);
-    if (best && oldSelectionOverlap <= best.selectionOverlap && oldChromeOverlap <= best.chromeOverlap) return previous;
+    if (best && (best.selectionOverlap > 0 || oldSelectionOverlap <= best.selectionOverlap) && oldChromeOverlap <= best.chromeOverlap) return previous;
   }
   return { placement: chosen.placement, center: chosen.center, top: chosen.top };
 }

@@ -162,3 +162,10 @@ test("resizing clamps a stable toolbar minimally and respects newly opened chrom
   const moved=resolveCanvasV2ContextToolbarPosition({...input,previous:clamped,chrome:[chrome]});
   assert.equal(overlap(toolbarRect(moved,336,42),chrome),0);
 });
+
+
+test("a viewport-filling selection does not make an unavoidably overlapping toolbar chase each frame", () => {
+  const input={selection:{left:0,top:0,right:1500,bottom:1000},toolbar:{width:336,height:42},viewport:{left:16,top:96,right:1424,bottom:808},obstacles:[],chrome:[]};
+  const previous=resolveCanvasV2ContextToolbarPosition(input);
+  for(let offset=1;offset<30;offset++) assert.deepEqual(resolveCanvasV2ContextToolbarPosition({...input,selection:{left:offset,top:offset,right:1500,bottom:1000},previous}),previous);
+});
