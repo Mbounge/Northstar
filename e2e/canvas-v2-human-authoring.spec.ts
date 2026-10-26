@@ -1,6 +1,15 @@
 import { placeActivatedTool, fitAllCanvas } from "./canvas-v2-authoring-helpers";
 import { expect, test, type Page } from "@playwright/test";
 
+// Compile the deterministic server endpoints before mounting the client.
+// Next dev can invalidate shared fixture modules on their first compilation;
+// doing that during a research turn remounts the board and discards the turn.
+// This is bootstrap work, not extra time allowed for a failed product action.
+test.beforeAll(async ({ request }) => {
+  const responses = await Promise.all(["/canvas-v2-e2e/route", "/canvas-v2-e2e/design"].map(path => request.get(path)));
+  for (const response of responses) expect(response.status()).toBe(405);
+});
+
 function app(page: Page) {
   return page.getByRole("main");
 }

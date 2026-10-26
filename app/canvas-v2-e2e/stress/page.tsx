@@ -4,6 +4,7 @@ import { CanvasV2Workspace } from "@/components/canvas-v2/canvas-v2-workspace";
 import { createCanvasV2CommittedRevision } from "@/lib/canvas-v2/revisions";
 import type { CanvasV2EvidenceAsset } from "@/lib/canvas-v2/types";
 import type { NorthstarSnapshot } from "@/lib/canvas-v2/sessions/types";
+import { CANVAS_V2_WORKSPACE } from "@/lib/canvas-v2/workspace-coordinate-space";
 import { CanvasStressPerfProbe } from "./perf-probe";
 import { loadMixedCanvasFixture } from "./mixed-fixture.server";
 
@@ -41,6 +42,6 @@ export default async function CanvasStressFixture({ searchParams }: { searchPara
   const revision = createCanvasV2CommittedRevision({
     id: composed ? "stress-composition" : "stress-800", document: { html: `<main data-canvas-v2-node-id="stress-root" style="position:relative;width:6400px;height:7600px">${cards.join("")}</main>`, css: "" }, evidence, createdAt: "2026-10-03T12:00:00.000Z",
   });
-  const snapshot: NorthstarSnapshot = { schema: 1, revision, turns: [], draft: "", model: "gpt-5.6-luna", effort: "high", viewport: { x: 800, y: 500, scale: 1 } };
+  const snapshot: NorthstarSnapshot = { schema: 1, revision, turns: [], draft: "", model: "gpt-5.6-luna", effort: "high", viewport: composed ? { x: 940 - (CANVAS_V2_WORKSPACE.aiAuthoringOriginX + 5500) * .5, y: 350 - (CANVAS_V2_WORKSPACE.aiAuthoringOriginY + 3740) * .5, scale: .5 } : { x: 800, y: 500, scale: 1 } };
   return <><CanvasStressPerfProbe /><CanvasV2Workspace initialSnapshot={snapshot} /></>;
 }

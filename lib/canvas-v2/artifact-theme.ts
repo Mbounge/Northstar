@@ -449,5 +449,19 @@ export function applyCanvasV2ArtifactThemeToElement(
     restoreTheme(state);
     return;
   }
-  themeElements([root, ...Array.from(root.querySelectorAll<Element>("*"))], view, theme, state);
+  // Isolated apps own their product appearance and host controls. Walking
+  // their loading/preview chrome on every unrelated source save adds hundreds
+  // of computed-style reads without theming any authored canvas content.
+  // Only renderer-owned, validated screen roots form this boundary; ordinary
+  // theme-preserve markers still cannot exempt readable island descendants.
+  const isolated = (element: Element) => element.getAttribute("data-canvas-v2-native-runtime-node") === "true"
+    && element.hasAttribute("data-canvas-v2-screen");
+  const elements: Element[] = isolated(root) ? [] : [root];
+  if (elements.length) {
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: node => isolated(node as Element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    });
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) elements.push(node as Element);
+  }
+  themeElements(elements, view, theme, state);
 }

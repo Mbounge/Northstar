@@ -15,7 +15,7 @@ export async function proxy(request: NextRequest) {
   if (process.env.NODE_ENV === "production"
     && process.env.NORTHSTAR_E2E === "1"
     && process.env.NORTHSTAR_LOCAL_PRODUCTION_PROBE === "1"
-    && request.nextUrl.pathname === "/canvas-v2-e2e/stress"
+    && ["/canvas-v2-e2e/stress", "/canvas-v2-e2e/responsive-editing"].includes(request.nextUrl.pathname)
     && /^((127\.0\.0\.1)|(localhost)):\d+$/.test(request.headers.get("host") ?? "")) {
     return NextResponse.next({ request })
   }

@@ -679,6 +679,30 @@ export class DiscoveryReviewContext {
       const verified=comparisonSound && baselineSound && languageSound && componentCropsSound && behaviorSound && defaultStateSound && appearanceSound && visualSound && designDirectionSound && runtimeSound && screen.reviewed===true && check && citations.includes(`screen:${id}:render`) && hasDetails && check.componentConsistency==='pass' && check.assetQuality==='pass' && ((check.referenceComparison==='not_applicable' && (!Array.isArray(references)||!references.length))||(check.referenceComparison==='pass' && hasReference));
       const issueId=`product-quality:${id}`;
       const concreteDirectionGap=blockingFindings.length ? blockingFindings.map(finding=>`${string(finding.requirement)} Observed: ${string(finding.observation)}`).join(' ') + (!directionEvidenceSound ? ' Verify the claimed defect against current cited pixels before editing.' : '') : '';
+      // Report the complete measured gap set together. Returning only the
+      // first failed gate makes the author discover one missing assessment
+      // per provider round even when all current evidence is already held.
+      // These diagnostics never resolve work or substitute for assessment.
+      const unmetChecks = [
+        ["current render and detail citations", screen.reviewed===true&&Boolean(check)&&citations.includes(`screen:${id}:render`)&&hasDetails],
+        ["refinement baseline and citation", baselineSound],
+        ["reference assets and comparison", hasReference&&comparisonSound],
+        ["product design-language comparison", languageSound],
+        ["paired component crops", componentCropsSound],
+        ["fresh default state and appearance", defaultStateSound&&appearanceSound],
+        ["per-dimension visual assessment", visualSound],
+        ["brief-derived design direction", designDirectionSound],
+        ["runtime, font, image and overflow health", runtimeSound],
+        ["component consistency and asset quality", check?.componentConsistency==='pass'&&check?.assetQuality==='pass'],
+        ...(!initial ? [
+          ["interaction assessment and successful behavior probes", interactionSound],
+          ["navigation destinations and scrolling", navigationDestinationsSound&&scrollSound],
+          ["motion frames, craft and reduced-motion behavior", motionSound&&motionCraftSound&&reducedSound],
+          ["temporal and transition behavior", temporalSound&&transitionsSound],
+          ["visible video loading", videoSound],
+        ] : []),
+      ].filter(([, sound])=>!sound).map(([label])=>label);
+      const gapDiagnostics=unmetChecks.length?`Unmet current-source checks: ${JSON.stringify(unmetChecks)}. Address the applicable checks together; reuse valid current-source captures and journeys. Recapture only missing, stale or insufficient evidence. An assessment gap alone is not permission to redesign the screen.`:'';
       if (initial) {
         const failures = Object.entries(object(check?.visualChecks)).filter(([, raw]) => object(raw).basis!=='preference'&&['revise', 'unverified'].includes(string(object(raw).status)))
           .map(([dimension, raw]) => `${dimension}: ${string(object(raw).assessment)}`);
@@ -695,7 +719,7 @@ export class DiscoveryReviewContext {
             : 'The initial rendered appearance remains unverified.',
           draftBasis: { passage: 'Initial appearance of the committed product screen', existingQualification: 'This is appearance review only; behavior and completion remain deferred.' },
           whyItMatters: 'Observed component details must be reproduced before further feature work builds on them.',
-          reasoningToDevelop: 'Compare the current default and supplied component pixels with their corresponding reference at the same scale/state. Correct visible content, geometry, wrapping, icons and crops locally. Infer unseen destinations in the established component language; do not require a reference screenshot for them. This check does not request journeys, motion tests or final approval.',
+          reasoningToDevelop: 'Compare the current default and supplied component pixels with their corresponding reference at the same scale/state. Correct visible content, geometry, wrapping, icons and crops locally. Infer unseen destinations in the established component language; do not require a reference screenshot for them. This check does not request journeys, motion tests or final approval. '+gapDiagnostics,
           investigation: [], resolutionSignal: 'Current cited pixels and explicit visual assessments establish the observed details or identify a genuinely unavailable input.'
         });
         else remaining.delete(issueId);
@@ -711,6 +735,7 @@ export class DiscoveryReviewContext {
         });
         const unresolvedProbes=(Array.isArray(screen.failedChecks)?screen.failedChecks:[]).map(object).filter(failed=>!resolutionFor(failed.checkNumber)).map(failed=>`${failed.checkNumber} (${string(failed.tool)})`);
         const notes=[
+          gapDiagnostics,
           incompleteFamilies.length?`Incomplete current motion families: ${incompleteFamilies.join('; ')}. Check these exact families' current-source frames, elapsed timing, target crops and citations. A different moving family does not replace them; reuse already valid families.`:'',
           unresolvedProbes.length?`Recorded checks needing explicit productChecks.probeResolutions: ${unresolvedProbes.join(', ')}. Account for each checkNumber with a basis grounded in later successful checks; retain unresolved product behavior. A prose pass or resolvedWork entry does not supply probeResolutions.`:'',
         ].filter(Boolean);

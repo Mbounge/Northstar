@@ -16,16 +16,34 @@ function compile(relative: string, dependencies: Record<string, unknown>, global
   }});
   return exports;
 }
-function guard() {
+function guard(environment:Record<string,string|undefined>={}) {
   let authCalls=0;
   const entry=compile('../proxy.ts',{
     '@supabase/ssr':{createServerClient:()=>({auth:{getUser:async()=>{authCalls++;return {data:{user:null}};}}})},
     'next/server':{NextResponse},
     '@/e2e/canvas-v2-deterministic-evaluation':{canvasV2LocalCodexEvaluationAllowed:()=>false},
     '@/lib/canvas-v2/local-evaluation':{canvasV2LocalEvaluationEnabled:()=>false},
-  },{process:{env:{NODE_ENV:'production',NEXT_PUBLIC_SUPABASE_URL:'https://accounts.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'fixture-only-public-key'}}});
+  },{process:{env:{NODE_ENV:'production',NEXT_PUBLIC_SUPABASE_URL:'https://accounts.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'fixture-only-public-key',...environment}}});
   return {run:entry.proxy as (request:NextRequest)=>Promise<NextResponse>,calls:()=>authCalls};
 }
+test('optimized performance fixtures require both explicit flags, loopback host and an exact disposable route',async()=>{
+  const enabled={NORTHSTAR_E2E:'1',NORTHSTAR_LOCAL_PRODUCTION_PROBE:'1'};
+  for(const route of ['/canvas-v2-e2e/stress','/canvas-v2-e2e/responsive-editing']){
+    const allowed=guard(enabled);
+    assert.equal((await allowed.run(new NextRequest('http://127.0.0.1:3201'+route,{headers:{host:'127.0.0.1:3201'}}))).status,200);
+    assert.equal(allowed.calls(),0);
+    for(const environment of [{},{NORTHSTAR_E2E:'1'},{NORTHSTAR_LOCAL_PRODUCTION_PROBE:'1'}]){
+      assert.equal((await guard(environment).run(new NextRequest('http://127.0.0.1:3201'+route,{headers:{host:'127.0.0.1:3201'}}))).status,307);
+    }
+    assert.equal((await guard(enabled).run(new NextRequest('https://northstar.invalid'+route,{headers:{host:'northstar.invalid','x-forwarded-host':'localhost:3201'}}))).status,307);
+  }
+  const guarded=guard(enabled);
+  for(const route of ['/canvas-v2-e2e/responsive-editing/private','/canvas-v2-e2e/stress-other','/canvas']){
+    assert.equal((await guarded.run(new NextRequest('http://localhost:3201'+route,{headers:{host:'localhost:3201'}}))).status,307);
+  }
+  assert.equal((await guarded.run(new NextRequest('http://localhost:3201/api/canvas-v2/private',{headers:{host:'localhost:3201'}}))).status,401);
+});
+
 test('unauthenticated invitation landing reaches the fragment-preserving client before sign-in',async()=>{
   const g=guard(), response=await g.run(new NextRequest('https://northstar.invalid/canvas/join'));
   assert.equal(response.status,200,'the join page must mount to retain the fragment token before OAuth');

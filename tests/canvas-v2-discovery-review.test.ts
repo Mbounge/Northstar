@@ -1822,3 +1822,24 @@ test('copy refinements use one final independent review and cannot silently appr
   assert.equal((await t.snapshot()).review.status,'continuing','missing current visual assessment remains real work');
  }finally{t.close();}
 });
+
+
+test('review diagnostics expose simultaneous measured gaps without approving them or demanding behavior during early appearance review',()=>{
+  const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText' as const,text:JSON.stringify(value)});
+  context.user([{type:'text',text:'Create a usable booking screen.',text_elements:[]}]);
+  context.tool('canvas_screen',{nodeId:'screen'},[text({nodeId:'screen',committed:true})]);
+  context.tool('canvas_review',{nodeId:'screen'},[text({nodeId:'screen',sourceVersion:'current',viewport:{width:640,height:560},state:{fonts:[],errors:['Observed runtime failure'],overflow:{horizontal:true},controls:[{label:'Reserve'}]}}),{type:'inputImage',imageUrl:'data:image/png;base64,current'}]);
+  const checks=(initial=false)=>{
+    const feedback=JSON.parse(context.reconcileFeedback(feedbackFor(),initial?['screen']:undefined));
+    const issue=feedback.work.find((item:{id:string})=>item.id==='product-quality:screen');assert.ok(issue,'diagnostics must never approve missing evidence');
+    const match=/Unmet current-source checks: (\[[^\n]*?\])\./.exec(issue.reasoningToDevelop);assert.ok(match);
+    return JSON.parse(match[1]) as string[];
+  };
+  const final=checks();
+  assert.ok(final.includes('runtime, font, image and overflow health'));
+  assert.ok(final.includes('per-dimension visual assessment'));
+  assert.ok(final.includes('interaction assessment and successful behavior probes'));
+  const early=checks(true);assert.ok(early.includes('runtime, font, image and overflow health'));
+  assert.equal(early.includes('interaction assessment and successful behavior probes'),false);
+  assert.equal(early.includes('motion frames, craft and reduced-motion behavior'),false);
+});

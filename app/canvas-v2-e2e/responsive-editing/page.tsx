@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import { CanvasV2Workspace } from '@/components/canvas-v2/canvas-v2-workspace';
 import { encodeCanvasV2Screen } from '@/lib/canvas-v2/interactive-screen';
 import { CANVAS_V2_ARTIFACT_SCHEMA } from '@/lib/canvas-v2/types';
@@ -7,8 +8,14 @@ import { CANVAS_V2_WORKSPACE } from '@/lib/canvas-v2/workspace-coordinate-space'
 import type { NorthstarSnapshot } from '@/lib/canvas-v2/sessions/types';
 
 /** A populated real workspace, without live accounts, models or campaign data. */
-export default function ResponsiveEditingFixture() {
-  if(process.env.NODE_ENV==='production'||process.env.NORTHSTAR_E2E!=='1')notFound();
+export const dynamic = 'force-dynamic';
+
+export default async function ResponsiveEditingFixture() {
+  if(process.env.NORTHSTAR_E2E!=='1')notFound();
+  if(process.env.NODE_ENV==='production'){
+    const host=(await headers()).get('host')??'';
+    if(process.env.NORTHSTAR_LOCAL_PRODUCTION_PROBE!=='1'||!/^((127\.0\.0\.1)|(localhost)):\d+$/.test(host))notFound();
+  }
   const nodes=Array.from({length:52},(_,index)=>{
     const title=index?'Studio object '+index:'Campaign · responsive headline';
     const source=encodeCanvasV2Screen({version:1,device:'none',title,width:600,height:700,referenceAssetIds:[],

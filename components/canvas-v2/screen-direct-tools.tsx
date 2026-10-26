@@ -206,6 +206,8 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
   const KindIcon=target.tag==='img'?ImagePlus:textValue!==undefined?Type:Palette;
   const busy=useRef(false);
   const previewDraft=useRef(onPreviewDraft);previewDraft.current=onPreviewDraft;
+  const savedAppearance=useRef<{before?:string;after:string;styles:Record<string,string>;delivered:boolean}|undefined>(undefined);
+  useLayoutEffect(()=>{const saved=savedAppearance.current;if(saved&&sourceVersion===saved.after)saved.delivered=true;},[sourceVersion,ready,changes]);
   useLayoutEffect(()=>{
     if(!ready||!previewDraft.current)return;
     const aborter=new AbortController();
@@ -216,22 +218,30 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
     return()=>{cancelAnimationFrame(animation);aborter.abort();};
   },[changes,draftText,sourceVersion,ready]);
   const set=(property:string,value:string)=>{setError('');setChanges(previous=>{const next={...previous};if(value===target.styles[property]&&target.styles[property+'-mixed']!=='true'&&!busy.current)delete next[property];else next[property]=value;return next})};
-  const value=(property:string)=>changes[property]??(property.startsWith('attr:')?target.attributes?.[property.slice(5)]:target.styles[property])??'';
+  const acknowledged=savedAppearance.current;
+  // Source commits before the iframe returns fresh computed styles. Keep its
+  // acknowledged values through that exact handoff, never across peer/history.
+  const handoffStyles=acknowledged&&(sourceVersion===acknowledged.after&&!ready||!acknowledged.delivered&&sourceVersion===acknowledged.before)?acknowledged.styles:undefined;
+  const value=(property:string)=>changes[property]??handoffStyles?.[property]??(property.startsWith('attr:')?target.attributes?.[property.slice(5)]:target.styles[property])??'';
   const save=async()=>{
     if(busy.current)return;
     const changes=draft.current.styles,text=draft.current.text!==savedText.current?draft.current.text:undefined;
     dirty.current=Object.keys(changes).length>0||text!==undefined;
     if(!Object.keys(changes).length&&text===undefined)return;
-    const signature=JSON.stringify([version.current,changes,text]);
+    const expectedVersion=version.current;
+    const signature=JSON.stringify([expectedVersion,changes,text]);
     if(signature===lastAttempt.current)return;
     lastAttempt.current=signature;busy.current=true;ownCommit.current=true;pendingText.current=text;setSaving(true);setError('');saveFailure.current='';
     try{
       const styles=Object.fromEntries(Object.entries(changes).filter(([key])=>!key.startsWith('attr:'))),attributes=Object.fromEntries(Object.entries(changes).filter(([key])=>key.startsWith('attr:')).map(([key,value])=>[key.slice(5),value]));
-      pendingSave.current=onSave(styles,text,version.current,Object.keys(attributes).length?attributes:undefined);
+      pendingSave.current=onSave(styles,text,expectedVersion,Object.keys(attributes).length?attributes:undefined);
       const result=await pendingSave.current;
       if(!result.ok){void previewDraft.current?.({styles:{},attributes:{}},new AbortController().signal).catch(()=>{});ownCommit.current=false;saveFailure.current=result.error||'This item changed. Select it again.';setError(saveFailure.current);}
       else{
-        if(result.encoded)version.current=result.encoded;
+        if(result.encoded){
+          savedAppearance.current={before:expectedVersion,after:result.encoded,styles:{...changes},delivered:sourceVersion===result.encoded};
+          version.current=result.encoded;
+        }
         if(text!==undefined)savedText.current=text;
         const remaining=Object.fromEntries(Object.entries(draft.current.styles).filter(([property,value])=>changes[property]!==value));
         draft.current={styles:remaining,text:draft.current.text};
@@ -290,7 +300,7 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
           <label className="block text-xs">Font family<StudioSelect label="Font family" display={target.styles['font-family-mixed']==='true'&&!changes['font-family']?'Mixed':undefined} value={value('font-family')} options={families.map(family=>({value:family,label:family.split(',')[0].replaceAll('"','')}))} previewFont disabled={!canStyle} onChange={family=>set('font-family',family)}/></label>
           {textValue!==undefined&&<label className="block text-xs">Text flow<StudioSelect label="Text flow" value={value('white-space')==='nowrap'?'nowrap':'pre-wrap'} options={[{value:'pre-wrap',label:'Wrap · auto height'},{value:'nowrap',label:'Single line'}]} onChange={next=>{set('white-space',next);set('overflow-wrap',next==='nowrap'?'normal':'anywhere')}}/></label>}
           <div className="grid grid-cols-2 gap-3"><label className="text-xs">Size<input aria-label="Text size" type="number" min={1} max={200} step="any" disabled={!canStyle} className={inputClass} placeholder="Mixed" value={target.styles['font-size-mixed']==='true'&&!changes['font-size']?'':parseFloat(value('font-size'))||''} onChange={e=>set('font-size',e.target.value+'px')}/></label><label className="text-xs">Weight<StudioSelect label="Text weight" display={target.styles['font-weight-mixed']==='true'&&!changes['font-weight']?'Mixed':undefined} value={value('font-weight')} options={['100','200','300','400','500','600','700','800','900'].map(weight=>({value:weight,label:({'100':'Thin','200':'Extra light','300':'Light','400':'Regular','500':'Medium','600':'Semibold','700':'Bold','800':'Extra bold','900':'Black'} as Record<string,string>)[weight]}))} disabled={!canStyle} onChange={weight=>set('font-weight',weight)}/></label></div>
-          <label className="block text-xs">Text colour<StudioColour label="Text colour" value={value(vector?'fill':'color')} display={changes[vector?'fill':'color']??(target.styles['color-mixed']==='true'?'Mixed':colourHex(value(vector?'fill':'color')).toUpperCase())} disabled={!canStyle} inputClass={inputClass} onChange={colour=>set(vector?'fill':'color',colour)}/></label>
+          <label className="block text-xs">Text colour<StudioColour label="Text colour" value={value(vector?'fill':'color')} display={changes[vector?'fill':'color']??handoffStyles?.[vector?'fill':'color']??(target.styles['color-mixed']==='true'?'Mixed':colourHex(value(vector?'fill':'color')).toUpperCase())} disabled={!canStyle} inputClass={inputClass} onChange={colour=>set(vector?'fill':'color',colour)}/></label>
           <div className="flex gap-1" role="group" aria-label="Text alignment">{['left','center','right'].map(align=><button key={align} type="button" aria-label={'Align text '+align} aria-pressed={value('text-align')===align} disabled={!canStyle} onClick={()=>set('text-align',align)} className="h-8 flex-1 rounded-lg border border-current/10 text-xs capitalize aria-pressed:bg-[#8b73f8]/15">{align==='left'?<AlignLeft size={14} className="mx-auto"/>:align==='center'?<AlignCenter size={14} className="mx-auto"/>:<AlignRight size={14} className="mx-auto"/>}</button>)}<button type="button" aria-label="Italic text" aria-pressed={value('font-style')==='italic'} disabled={!canStyle} onClick={()=>set('font-style',value('font-style')==='italic'?'normal':'italic')} className="h-8 w-9 rounded-lg border border-current/10 text-xs italic aria-pressed:bg-[#8b73f8]/15">I</button></div>
           <details><summary className="cursor-pointer text-xs text-[#968aa3]">Spacing</summary><div className="mt-3 grid grid-cols-2 gap-3"><label className="text-xs">Letters (px)<input aria-label="Letter spacing" className={inputClass} type="number" min={-20} max={100} step="0.1" disabled={!canStyle} value={parseFloat(value('letter-spacing'))||0} onChange={e=>set('letter-spacing',e.target.value+'px')}/></label><label className="text-xs">Line height<StudioSelect label="Line height" value={value('line-height')||'normal'} options={[{value:target.styles['line-height']||'normal',label:'Current ('+(target.styles['line-height']||'normal')+')'},{value:'normal',label:'Default'},...['0.8','1','1.1','1.2','1.4','1.5','1.8','2'].map(n=>({value:n,label:n}))].filter((option,index,all)=>all.findIndex(item=>item.value===option.value)===index)} disabled={!canStyle} onChange={height=>set('line-height',height)}/></label></div></details>
         </div></details>}
