@@ -697,3 +697,25 @@ test('Undo and Redo retain a surviving app layer inspector and allow the next ed
  await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();
  await expect(frame.locator('#name')).toHaveValue('Keep my app state');expect(await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot)).toBe(boot);
 });
+
+test('the first Undo after reopening a populated saved board keeps the selected layer and running app',async({page})=>{
+ test.setTimeout(120000);await page.setViewportSize({width:1512,height:1000});
+ await page.goto('/canvas-v2-e2e/responsive-editing');await expect(page.locator('iframe')).toHaveCount(52);
+ const frame=page.frameLocator('iframe[title="Campaign · responsive headline"]');
+ await frame.locator('#draft').fill('My draft survives the first undo');await frame.getByRole('button',{name:'Save',exact:true}).click();
+ const boot=await frame.locator('body').evaluate(()=>(window as typeof window&{fixtureBoot:number}).fixtureBoot);
+ await page.getByRole('button',{name:'Collapse North Star panel',exact:true}).click();
+ await page.getByRole('button',{name:'Design view',exact:true}).click();
+ await page.getByTestId('canvas-v2-native-scene').getByText('Campaign · responsive headline',{exact:true}).click();
+ await page.getByRole('treeitem',{name:'Select layer YOUR BEST.',exact:true}).click();
+ await page.getByRole('textbox',{name:'Text colour',exact:true}).fill('#FFC84B');
+ await expect(page.getByRole('status').filter({hasText:'All changes saved'})).toBeVisible();
+ await page.getByRole('button',{name:'Undo canvas action',exact:true}).click();
+ await expect(frame.locator('.first')).toHaveCSS('color','rgb(255, 255, 255)');
+ await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toBeVisible();
+ expect(await frame.locator('body').evaluate(()=>(window as typeof window&{fixtureBoot:number}).fixtureBoot)).toBe(boot);
+ await expect(frame.locator('#draft')).toHaveValue('My draft survives the first undo');await expect(frame.locator('#status')).toHaveText('Saved 1');
+ await page.getByRole('button',{name:'Redo canvas action',exact:true}).click();await expect(frame.locator('.first')).toHaveCSS('color','rgb(255, 200, 75)');
+ await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toBeVisible();
+ await page.getByRole('textbox',{name:'Text colour',exact:true}).fill('#68CFE5');await expect(frame.locator('.first')).toHaveCSS('color','rgb(104, 207, 229)');
+});

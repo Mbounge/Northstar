@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   commitCanvasV2HistoryTransaction,
   createCanvasV2TransactionalHistory,
+  retainCanvasV2HistoryScene,
   travelCanvasV2History,
 } from "@/lib/canvas-v2/transactional-history";
 import { createCanvasV2CommittedRevision } from "@/lib/canvas-v2/revisions";
@@ -136,4 +137,15 @@ test("history travel retains the exact native composition instead of recompiling
   assert.equal(history.nativeScenes[history.index], undefined);
   history = travelCanvasV2History(history, 1);
   assert.deepEqual(history.nativeScenes[history.index]?.rootIds, ["signal", "evidence", "interpretation", "hypothesis", "decision"]);
+});
+
+
+test('initial compiler geometry joins its matching history slot without adding an Undo step',()=>{
+ const initial=revision('loaded-board','Saved work'),history=createCanvasV2TransactionalHistory(initial),scene=nativeScene(initial.id,['poster']);
+ const measured=retainCanvasV2HistoryScene(history,scene);
+ assert.equal(measured.index,0);assert.deepEqual(measured.revisions,[initial]);assert.deepEqual(measured.selectionNodeIds,[[]]);assert.equal(history.nativeScenes[0],undefined);assert.equal(measured.nativeScenes[0],scene);
+ const edited=revision('edited-board','One property changed'),after=commitCanvasV2HistoryTransaction({history:measured,revision:edited,transactionId:'user-colour',nativeScene:nativeScene(edited.id,['poster']),selectionNodeIds:['poster']});
+ const undone=travelCanvasV2History(after,-1);assert.equal(undone.revisions[undone.index],initial);assert.equal(undone.nativeScenes[undone.index],scene);
+ assert.equal(retainCanvasV2HistoryScene(measured,nativeScene('unrelated-board',['other'])),measured);
+ assert.equal(retainCanvasV2HistoryScene(measured,nativeScene(initial.id,['late-measurement'])),measured);
 });

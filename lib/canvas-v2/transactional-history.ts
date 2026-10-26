@@ -92,6 +92,16 @@ export function commitCanvasV2HistoryTransaction(input: {
   };
 }
 
+/** A measured, immutable compiler scene belongs to its existing source slot.
+ * Initial/imported revisions can be measured after history is initialized.
+ * Retain that owned scene without a second full-board clone; history travel
+ * clones it before exposing it to subsequent edits. */
+export function retainCanvasV2HistoryScene(history:CanvasV2TransactionalHistory,scene:CanvasV2NativeSceneDocument):CanvasV2TransactionalHistory {
+  if(history.revisions[history.index]?.id!==scene.revisionId||history.nativeScenes[history.index])return history;
+  const nativeScenes=[...history.nativeScenes];nativeScenes[history.index]=scene;
+  return {...history,nativeScenes};
+}
+
 export function travelCanvasV2History(
   history: CanvasV2TransactionalHistory,
   direction: -1 | 1,

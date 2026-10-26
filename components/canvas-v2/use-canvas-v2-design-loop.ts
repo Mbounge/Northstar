@@ -96,6 +96,7 @@ import { validateCanvasV2MultiplayerPlacement } from "@/lib/canvas-v2/multiplaye
 import {
   commitCanvasV2HistoryTransaction,
   createCanvasV2TransactionalHistory,
+  retainCanvasV2HistoryScene,
   travelCanvasV2History,
   type CanvasV2TransactionalHistory,
 } from "@/lib/canvas-v2/transactional-history";
@@ -306,6 +307,10 @@ export function useCanvasV2DesignLoop(designEndpoint: string, restored?: CanvasV
       inspectionScenesRef.current.set(next.revisionId, next);
       return;
     }
+    // Source history starts before an imported board has geometry. Remember
+    // its first measured scene in that same slot so the first Undo does not
+    // rebuild every app and discard the active layer selection.
+    transactionalHistoryRef.current=retainCanvasV2HistoryScene(transactionalHistoryRef.current,next);
     // The compiler establishes native truth for a newly committed AI source.
     // A direct manual mutation then updates that scene synchronously. Any
     // later compiler callback for the *same* revision is verification only;
