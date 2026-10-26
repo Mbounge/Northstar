@@ -22,9 +22,9 @@ async function openCleanCanvas(page: Page, path: "/canvas-v2-e2e" | "/canvas") {
 }
 
 async function selectLayer(page: Page, nodeId: string, additive = false) {
-  await app(page).getByTitle("Layers").click();
-  const panel = app(page).getByRole("complementary", { name: "Layers panel" });
-  await panel.getByRole("button", { name: `object${nodeId}`, exact: true }).click({ modifiers: additive ? ["Shift"] : [] });
+  const panel = app(page).getByRole("complementary", { name: "Object layers" });
+  if (!await panel.isVisible()) await app(page).getByTitle("Layers").click();
+  await panel.locator(`[data-layer-row-id="${nodeId}"] [data-layer-control="0"]`).click({ modifiers: additive ? ["Shift"] : [] });
 }
 
 test("deterministic deletion retires the object and every selection surface in the input task", async ({ page }) => {
@@ -68,7 +68,7 @@ test("deterministic deletion retires the object and every selection surface in t
   await expect(app(page).getByTestId("canvas-v2-element-selection")).toHaveCount(0);
   await expect(app(page).getByTestId("canvas-v2-context-toolbar")).toHaveCount(0);
 
-  await app(page).getByRole("button", { name: "Undo" }).click();
+  await app(page).getByRole("button", { name: "Undo canvas action", exact: true }).click();
   await expect(scene(page).locator(`[data-canvas-v2-node-id="${nodeId}"]`)).toHaveCount(1);
 });
 

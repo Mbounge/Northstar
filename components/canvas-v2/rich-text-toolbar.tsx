@@ -25,6 +25,7 @@ export function CanvasV2RichTextToolbar({ editable, finish, inlineOnly=false }: 
   const [position, setPosition] = useState({ left: 16, top: 100, maxWidth: 550 });
   const [below, setBelow] = useState(false);
   useEffect(() => {
+    let anchor: ReturnType<typeof resolveCanvasV2ContextToolbarPosition> | undefined;
     const track = () => {
       const selection = window.getSelection();
       if (selection?.rangeCount && editable.contains(selection.anchorNode) && editable.contains(selection.focusNode)) {
@@ -45,7 +46,8 @@ export function CanvasV2RichTextToolbar({ editable, finish, inlineOnly=false }: 
       const maxWidth = right - left;
       const width = Math.min(toolbar.current?.offsetWidth ?? 550, maxWidth);
       const height = toolbar.current?.offsetHeight ?? 56;
-      const placed = resolveCanvasV2ContextToolbarPosition({ selection: bounds, toolbar: { width, height }, viewport: { left, right, top: 90, bottom: window.innerHeight - 92 }, obstacles: [], chrome: [], gap: 16 });
+      const placed = resolveCanvasV2ContextToolbarPosition({ previous: anchor, selection: bounds, toolbar: { width, height }, viewport: { left, right, top: 90, bottom: window.innerHeight - 92 }, obstacles: [], chrome: [], gap: 16 });
+      anchor = placed;
       setBelow(placed.placement === 'below');
       const next = { left: placed.center - width / 2, top: placed.top, maxWidth };
       setPosition(current => current.left === next.left && current.top === next.top && current.maxWidth === next.maxWidth ? current : next);

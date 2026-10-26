@@ -719,3 +719,23 @@ test('the first Undo after reopening a populated saved board keeps the selected 
  await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toBeVisible();
  await page.getByRole('textbox',{name:'Text colour',exact:true}).fill('#68CFE5');await expect(frame.locator('.first')).toHaveCSS('color','rgb(104, 207, 229)');
 });
+
+test('app element actions keep a stable screen anchor while the canvas pans and zooms',async({page})=>{
+  test.setTimeout(120000);await page.setViewportSize({width:1700,height:1000});
+  await createScreen(page);await enterEdit(page);await clickScreen(page,'h1');
+  const actions=page.getByRole('toolbar',{name:'Selected element tools',exact:true});await expect(actions).toBeVisible();
+  const original=(await actions.boundingBox())!;
+  const camera=page.getByTestId('canvas-v2-workspace-surface');const before=await camera.getAttribute('style');
+  await page.mouse.move(1250,700);
+  for(const [x,y] of [[-20,-10],[-20,-10],[10,5]]){
+    await page.mouse.wheel(x,y);
+    await expect.poll(()=>page.getByRole('region',{name:'Canvas workspace',exact:true}).getAttribute('data-canvas-v2-camera-preview')).toBeNull();
+    const next=(await actions.boundingBox())!;expect(next.x).toBeCloseTo(original.x,0);expect(next.y).toBeCloseTo(original.y,0);
+  }
+  expect(await camera.getAttribute('style')).not.toBe(before);
+  await page.keyboard.down('Control');await page.mouse.wheel(0,10);await page.keyboard.up('Control');
+  await expect.poll(()=>page.getByRole('region',{name:'Canvas workspace',exact:true}).getAttribute('data-canvas-v2-camera-preview')).toBeNull();
+  const next=(await actions.boundingBox())!;expect(next.x).toBeCloseTo(original.x,0);expect(next.y).toBeCloseTo(original.y,0);
+  await actions.getByRole('button',{name:'Give feedback on selected element',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Comment for marked area',exact:true})).toBeVisible();
+});

@@ -30,6 +30,8 @@ export function resolveCanvasV2ContextToolbarPosition(input: {
   obstacles: readonly CanvasV2ScreenRect[];
   chrome: readonly CanvasV2ScreenRect[];
   gap?: number;
+  /** Screen-space anchor for the same selection. Camera motion must not chase it. */
+  previous?: CanvasV2ContextToolbarPosition;
 }): CanvasV2ContextToolbarPosition {
   const width = Math.max(1, Math.min(input.toolbar.width, input.viewport.right - input.viewport.left));
   const height = Math.max(1, Math.min(input.toolbar.height, input.viewport.bottom - input.viewport.top));
@@ -50,6 +52,20 @@ export function resolveCanvasV2ContextToolbarPosition(input: {
   const selectionCenterY = (selection.top + selection.bottom) / 2;
   const clampCenter = (value: number) => Math.max(minimumCenter, Math.min(maximumCenter, value));
   const clampTop = (value: number) => Math.max(minimumTop, Math.min(maximumTop, value));
+  const previous = input.previous && {
+    ...input.previous,
+    center: clampCenter(input.previous.center),
+    top: clampTop(input.previous.top),
+  };
+  const previousRect = previous && {
+    left: previous.center - halfWidth, right: previous.center + halfWidth,
+    top: previous.top, bottom: previous.top + height,
+  };
+  // Surrounding artwork and distance are soft preferences for initial placement,
+  // not reasons to move controls that the person is already using.
+  if (previousRect && intersectionArea(previousRect, input.selection) === 0
+    && input.chrome.every(rect => intersectionArea(previousRect, rect) === 0)) return previous!;
+
   const candidates: Array<CanvasV2ContextToolbarPosition & { preference: number }> = [];
   const addRow = (placement: CanvasV2ContextToolbarPosition["placement"], top: number, preference: number) => {
     candidates.push({ placement, center: clampCenter(selectionCenterX), top: clampTop(top), preference });
@@ -99,5 +115,13 @@ export function resolveCanvasV2ContextToolbarPosition(input: {
     top: minimumTop,
     preference: 3,
   };
+  // A selection filling the viewport can make overlap unavoidable. Keep the
+  // existing anchor unless another position actually improves that obstruction.
+  if (previousRect && previous) {
+    const best = scored[0];
+    const oldSelectionOverlap = intersectionArea(previousRect, input.selection);
+    const oldChromeOverlap = input.chrome.reduce((total, rect) => total + intersectionArea(previousRect, rect), 0);
+    if (best && oldSelectionOverlap <= best.selectionOverlap && oldChromeOverlap <= best.chromeOverlap) return previous;
+  }
   return { placement: chosen.placement, center: chosen.center, top: chosen.top };
 }

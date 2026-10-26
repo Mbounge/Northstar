@@ -133,3 +133,32 @@ test("panning an object and its visible canvas together moves the toolbar by the
   assert.equal(moved.center, first.center + 130);
   assert.equal(moved.top, first.top + 60);
 });
+
+
+test("a screen-space anchor stays unchanged across pans, zooms and nearby artwork changes", () => {
+  const input = { selection: {left:500,top:340,right:700,bottom:480}, toolbar:{width:336,height:42}, viewport:{left:16,top:96,right:1424,bottom:808}, obstacles:[],chrome:[] };
+  const previous=resolveCanvasV2ContextToolbarPosition(input);
+  for (const selection of [{left:550,top:360,right:750,bottom:500},{left:430,top:350,right:790,bottom:600},{left:800,top:400,right:950,bottom:500}]) {
+    assert.deepEqual(resolveCanvasV2ContextToolbarPosition({...input,selection,previous,obstacles:[toolbarRect(previous,336,42)]}),previous);
+  }
+});
+
+test("an obstructed anchor moves once to a clear place and stays there on a small reversal", () => {
+  const input = {selection:{left:500,top:340,right:700,bottom:480},toolbar:{width:336,height:42},viewport:{left:16,top:96,right:1424,bottom:808},obstacles:[],chrome:[]};
+  const previous=resolveCanvasV2ContextToolbarPosition(input);
+  const selection={left:500,top:260,right:700,bottom:450};
+  const moved=resolveCanvasV2ContextToolbarPosition({...input,selection,previous});
+  assert.notDeepEqual(moved,previous);
+  assert.equal(overlap(toolbarRect(moved,336,42),selection),0);
+  assert.deepEqual(resolveCanvasV2ContextToolbarPosition({...input,previous:moved,selection:{...selection,top:265,bottom:455}}),moved);
+});
+
+test("resizing clamps a stable toolbar minimally and respects newly opened chrome", () => {
+  const input = {selection:{left:500,top:340,right:700,bottom:480},toolbar:{width:336,height:42},viewport:{left:16,top:96,right:1424,bottom:808},obstacles:[],chrome:[]};
+  const previous={center:1100,top:180,placement:'above' as const};
+  const clamped=resolveCanvasV2ContextToolbarPosition({...input,previous,viewport:{...input.viewport,right:1100}});
+  assert.equal(clamped.center,932);assert.equal(clamped.top,180);
+  const chrome=toolbarRect(clamped,336,42);
+  const moved=resolveCanvasV2ContextToolbarPosition({...input,previous:clamped,chrome:[chrome]});
+  assert.equal(overlap(toolbarRect(moved,336,42),chrome),0);
+});

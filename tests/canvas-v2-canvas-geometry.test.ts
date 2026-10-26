@@ -190,7 +190,7 @@ test("changed and new region detail priority retains the real full-board reading
 });
 
 
-test("camera preview keeps the real contextual toolbar near its visible object and hides it only offscreen", () => {
+test("camera preview holds the toolbar steady, relocates only for collisions and hides it offscreen", () => {
   const source = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
   const tree = ts.createSourceFile("workspace.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let callback: ts.Expression | undefined;
@@ -206,6 +206,7 @@ test("camera preview keeps the real contextual toolbar near its visible object a
   const published: Array<{x:number;y:number;scale:number}> = [];
   vm.runInNewContext(code, { exports, resolveCanvasV2ContextToolbarPosition, nativeViewportStore:createCanvasV2NativeViewportStore(), canvasV2VisibleWorkspaceBounds,CANVAS_V2_EMPTY_INSETS,workspaceSizeRef:{current:{width:1000,height:800}},publishViewRef: {current:(next:{x:number;y:number;scale:number})=>published.push(next)},
     workspaceSurfaceRef: { current: surface }, selectionSizeRef: { current: { style: readout } }, measurementHostRef: { current: { style: { setProperty: (name: string, value: string) => { ruler[name] = value; } } } }, gridOverlayRef: {}, zoomPercentageRef: {}, contextualToolbarRef: { current: { style } },
+    toolbarAnchorRef: { current: { key: "same-selection" } },
     activeSelectionBoundsRef: { current: { x: 400, y: 300, width: 200, height: 100 } }, toolbarPreviewGeometry: { current: { viewport, toolbar: { width: 336, height: 56 }, chrome: [] } },
     atmosphereLayerRef: {}, workspaceRef: {},
   });
@@ -218,11 +219,12 @@ test("camera preview keeps the real contextual toolbar near its visible object a
     const overlap = Math.max(0, Math.min(toolbar.right, selected.right) - Math.max(toolbar.left, selected.left)) * Math.max(0, Math.min(toolbar.bottom, selected.bottom) - Math.max(toolbar.top, selected.top));
     assert.equal(overlap, 0, "controls must not cover the selected object");
     const gap = Math.hypot(Math.max(0, toolbar.left - selected.right, selected.left - toolbar.right), Math.max(0, toolbar.top - selected.bottom, selected.top - toolbar.bottom));
-    assert.ok(gap <= 24, "camera previews must keep the toolbar attached to the visible selection");
-    return center;
+    assert.ok(Number.isFinite(gap), "placement remains in real screen space");
+    return { center, top };
   };
   const before = check({ x: 0, y: 0, scale: 1 }), after = check({ x: 150, y: 50, scale: 1 });
-  assert.equal(after - before, 150, "moving the camera must immediately move its contextual controls");
+  assert.deepEqual(after, before, "camera movement must not drag safe controls around");
+  for(let x=140;x>=40;x-=10) assert.deepEqual(check({x,y:50,scale:1}),before,"small reversing pans retain the same anchor");
   check({ x: 0, y: 0, scale: 1.5 });
   assert.equal(readout.transform, 'translateX(-50%) scale(0.6666666666666666)');
   assert.equal(readout.top, 'calc(100% + 4px)');

@@ -8,8 +8,8 @@ test('the public waitlist plays its real demo without a gesture and signup remai
   await expect(video).toBeVisible();
   const heading=await page.getByRole('heading',{name:'Welcome to North Star AI'}).boundingBox(),player=await video.boundingBox(),form=await page.getByRole('form',{name:'Join the Northstar waitlist'}).boundingBox();
   expect(heading&&player&&form&&heading.y+heading.height<player.y&&player.y+player.height<form.y).toBe(true);
-  await expect.poll(()=>video.evaluate(v=>({playing:!v.paused,loaded:v.readyState>=2,muted:v.muted,time:v.currentTime>0})),{timeout:30000}).toEqual({playing:true,loaded:true,muted:true,time:true});
-  expect(await video.evaluate(v=>({controls:v.controls,inline:v.playsInline,loop:v.loop,source:v.currentSrc}))).toEqual({controls:true,inline:true,loop:true,source:expect.stringContaining('northstar-demo-20261026.mp4')});
+  await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>({playing:!v.paused,loaded:v.readyState>=2,muted:v.muted,time:v.currentTime>0})),{timeout:30000}).toEqual({playing:true,loaded:true,muted:true,time:true});
+  expect(await video.evaluate((v:HTMLVideoElement)=>({controls:v.controls,inline:v.playsInline,loop:v.loop,source:v.currentSrc}))).toEqual({controls:true,inline:true,loop:true,source:expect.stringContaining('northstar-demo-20261026.mp4')});
   const media=await page.request.get('/northstar/demo/northstar-demo-20261026.mp4',{headers:{Range:'bytes=0-1023'}});
   expect(media.status()).toBe(206);expect(media.headers()['content-type']).toContain('video/mp4');
   await page.screenshot({path:info.outputPath('waitlist-desktop.png'),fullPage:true});
@@ -23,8 +23,8 @@ test('phones receive the smaller inline demo with no horizontal overflow',async(
   const video=page.locator('video');
   const heading=await page.getByRole('heading',{name:'Welcome to North Star AI'}).boundingBox(),player=await video.boundingBox(),form=await page.getByRole('form',{name:'Join the Northstar waitlist'}).boundingBox();
   expect(heading&&player&&form&&heading.y+heading.height<player.y&&player.y+player.height<form.y).toBe(true);
-  await expect.poll(()=>video.evaluate(v=>v.currentSrc)).toContain('northstar-demo-20261026-720p.mp4');
-  await expect.poll(()=>video.evaluate(v=>!v.paused&&v.currentTime>0),{timeout:30000}).toBe(true);
+  await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>v.currentSrc)).toContain('northstar-demo-20261026-720p.mp4');
+  await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>!v.paused&&v.currentTime>0),{timeout:30000}).toBe(true);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await expect(page.getByRole('button',{name:'Join the waitlist',exact:true})).toBeInViewport();
   await page.screenshot({path:info.outputPath('waitlist-mobile.png'),fullPage:true});
@@ -33,7 +33,7 @@ test('phones receive the smaller inline demo with no horizontal overflow',async(
 test('reduced motion keeps the poster still and leaves playback controls available',async({page})=>{
   await page.emulateMedia({reducedMotion:'reduce'});await page.goto('/waitlist');
   const video=page.locator('video');await expect(video).toBeVisible();
-  await expect.poll(()=>video.evaluate(v=>v.paused)).toBe(true);
-  expect(await video.evaluate(v=>v.controls)).toBe(true);
+  await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>v.paused)).toBe(true);
+  expect(await video.evaluate((v:HTMLVideoElement)=>v.controls)).toBe(true);
   await expect(page.getByLabel('Email address',{exact:true})).toBeVisible();
 });

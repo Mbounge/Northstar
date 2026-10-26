@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, X, PenTool, Pencil, Trash2, ArrowUp, ArrowDown, Plus, SlidersHorizontal, Sparkles, Eye, ImagePlus, Type, Move, Palette, AlignLeft, AlignCenter, AlignRight, ChevronDown, ChevronRight, ArrowLeft, Search, Layers, Lock, Square, Image as ImageIcon, Folder, MousePointer2, MessageSquare } from 'lucide-react';
+import { resolveCanvasV2ContextToolbarPosition } from '@/lib/canvas-v2/context-toolbar-placement';
 import { CanvasV2RichTextToolbar } from './rich-text-toolbar';
 import type { ScreenEditableLayer } from '@/lib/canvas-v2/screen-vector-edit';
 import { canvasV2EditorFontFamily, canvasV2EditorInlineFontRules, type CanvasV2EditorFonts } from '@/lib/canvas-v2/screen-editor-fonts';
@@ -162,6 +163,9 @@ export function ScreenInspectorEmpty({title}:{title:string}) {
 
 export function ScreenLayerActions({frame,screenWidth,selectionRect,target,onEditText,onAsk,onDraw}:{frame:RefObject<HTMLIFrameElement|null>;screenWidth:number;selectionRect?:RefObject<CanvasV2ScreenFeedbackTarget['rect']|undefined>;target:CanvasV2ScreenFeedbackTarget;onEditText?:()=>void;onAsk?:()=>void;onDraw?:()=>void}){
   const toolbar=useRef<HTMLDivElement>(null);
+  const anchor = useRef<{ key: string; position?: ReturnType<typeof resolveCanvasV2ContextToolbarPosition> }>({ key: '' });
+  const key = JSON.stringify([target.nodeId, target.selector]);
+  if (anchor.current.key !== key) anchor.current = { key };
   useLayoutEffect(()=>{
     let raf=0,last='';
     const place=()=>{
@@ -170,10 +174,11 @@ export function ScreenLayerActions({frame,screenWidth,selectionRect,target,onEdi
         const rect=selectionRect?.current??target.rect,scale=box.width/screenWidth;
         const left=Math.max(box.left,box.left+rect.x*scale),right=Math.min(box.right,box.left+(rect.x+rect.width)*scale),top=Math.max(box.top,box.top+rect.y*scale),bottom=Math.min(box.bottom,box.top+(rect.y+rect.height)*scale);
         const width=element.offsetWidth,height=element.offsetHeight;
-        const minX=innerWidth>900?256:16,maxX=Math.max(minX,innerWidth-312-width),maxY=innerHeight-92-height;
-        const x=Math.max(minX,Math.min(maxX,(left+right-width)/2));
-        const y=Math.max(96,Math.min(maxY,top-height-28>=96?top-height-28:bottom+8));
-        const visible=right>left&&bottom>top&&bottom>96&&top<innerHeight-92;
+        const minX=innerWidth>900?256:16, maxRight=Math.max(minX+width,innerWidth-312);
+        const visible=right>Math.max(left,minX)&&left<maxRight&&bottom>top&&bottom>96&&top<innerHeight-92;
+        const position=resolveCanvasV2ContextToolbarPosition({selection:{left,right,top,bottom},toolbar:{width,height},viewport:{left:minX,right:maxRight,top:96,bottom:innerHeight-92},obstacles:[],chrome:[],gap:28,previous:anchor.current.position});
+        if(visible)anchor.current.position=position;
+        const x=position.center-width/2,y=position.top;
         const signature=[x,y,visible].join('|');
         if(signature!==last){last=signature;Object.assign(element.style,{left:x+'px',top:y+'px',visibility:visible?'visible':'hidden'});}
       }

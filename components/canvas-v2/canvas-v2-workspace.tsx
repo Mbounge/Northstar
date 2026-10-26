@@ -974,6 +974,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const chatPanelRef = useRef<HTMLElement>(null);
   const contextualToolbarRef = useRef<HTMLElement>(null);
   const toolbarPreviewGeometry = useRef<Pick<Parameters<typeof resolveCanvasV2ContextToolbarPosition>[0], 'toolbar'|'viewport'|'chrome'>|undefined>(undefined);
+  const toolbarAnchorRef = useRef<{ key: string; position?: ReturnType<typeof resolveCanvasV2ContextToolbarPosition> }>({ key: '' });
   useCanvasV2PopoverViewport(contextualToolbarRef, toolbarMenu);
   const activeSelectionBoundsRef = useRef<CanvasV2InspectableElement["bounds"] | undefined>(undefined);
   const objectMenuRef = useRef<HTMLDivElement>(null);
@@ -1404,10 +1405,15 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         const rect={left:next.x+selection.x*next.scale,top:next.y+selection.y*next.scale,right:next.x+(selection.x+selection.width)*next.scale,bottom:next.y+(selection.y+selection.height)*next.scale};
         const visible=rect.right>geometry.viewport.left&&rect.left<geometry.viewport.right&&rect.bottom>geometry.viewport.top&&rect.top<geometry.viewport.bottom;
         if(visible){
-          const position=resolveCanvasV2ContextToolbarPosition({...geometry,selection:rect,obstacles:[]});
-          toolbar.style.left=`${position.center}px`;toolbar.style.top=`${position.top}px`;toolbar.style.transform='';
+          const position=resolveCanvasV2ContextToolbarPosition({...geometry,selection:rect,obstacles:[],previous:toolbarAnchorRef.current.position});
+          toolbarAnchorRef.current.position=position;
+          const left=`${position.center}px`,top=`${position.top}px`;
+          if(toolbar.style.left!==left)toolbar.style.left=left;
+          if(toolbar.style.top!==top)toolbar.style.top=top;
+          if(toolbar.style.transform)toolbar.style.transform='';
         }
-        toolbar.style.visibility=visible?'':'hidden';
+        const visibility=visible?'':'hidden';
+        if(toolbar.style.visibility!==visibility)toolbar.style.visibility=visibility;
       }
     }
     const atmosphereLayer = atmosphereLayerRef.current;
@@ -4265,7 +4271,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     return [...authored, ...nativeOnly];
   }, [canvasView, engine.committed, engine.nativeScene, layersOpen, sceneElements]);
   const contextualToolbarPosition = useMemo(() => {
-    if (!activeSelectionBounds) return undefined;
+    const selectionKey = JSON.stringify([canvasView, selectedElements.map(item => item.nodeId).sort()]);
+    if (toolbarAnchorRef.current.key !== selectionKey) toolbarAnchorRef.current = { key: selectionKey };
+    if (!activeSelectionBounds) { toolbarPreviewGeometry.current = undefined; return undefined; }
     const availableWidth = workspaceRef.current?.clientWidth ?? 1_440;
     const availableHeight = workspaceRef.current?.clientHeight ?? 900;
     const bottomChrome = 92;
@@ -4276,7 +4284,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const selectionTop = viewport.y + toolbarBounds.y * viewport.scale;
     const selectionBottom = viewport.y + (toolbarBounds.y + toolbarBounds.height) * viewport.scale;
     const usable = {left:canvasView==='design'?(editChatOpen?388:264):(chatOpen?442:28),top:96,right:availableWidth-(canvasView==='design'?312:16),bottom:availableHeight-bottomChrome};
-    if(selectionRight<=usable.left||selectionLeft>=usable.right||selectionBottom<=usable.top||selectionTop>=usable.bottom)return undefined;
+
     const selectedIds = new Set(selectedElements.map((item) => item.nodeId));
     const byId = new Map(sceneElements.map(item=>[item.nodeId,item]));
     const relatedToSelection = (item:(typeof sceneElements)[number]) => {
@@ -4299,7 +4307,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
         return [{ left: bounds.left - 8, top: bounds.top - 8, right: bounds.right + 8, bottom: bounds.bottom + 8 }];
       });
     toolbarPreviewGeometry.current={toolbar:{width:resolvedToolbarWidth,height:toolbarSize.height},viewport:usable,chrome};
+    if(selectionRight<=usable.left||selectionLeft>=usable.right||selectionBottom<=usable.top||selectionTop>=usable.bottom)return undefined;
     const chosen = resolveCanvasV2ContextToolbarPosition({
+      previous: toolbarAnchorRef.current.position,
       selection: {
         left: selectionLeft,
         top: selectionTop,
@@ -4311,6 +4321,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
       obstacles: occupied,
       chrome,
     });
+    toolbarAnchorRef.current.position = chosen;
     return {
       placement: chosen.placement,
       style: { left: chosen.center, top: chosen.top },

@@ -27,7 +27,16 @@ function placePopovers(toolbar: HTMLElement | null, menu: string | undefined) {
     popup.style.overflow = "auto";
     const anchor = (popup.offsetParent ?? toolbar).getBoundingClientRect();
     const delta = canvasV2PopoverTranslation(popup.getBoundingClientRect(), anchor, { width: window.innerWidth, height: window.innerHeight });
-    popup.style.translate = `${delta.x}px ${delta.y}px`;
+    // Retain the menu's CSS centring. Replacing translate with just our pixel
+    // correction drops Tailwind's -50% anchor and makes repeated clamps drift.
+    const computed = getComputedStyle(popup);
+    const base = (axis: string) => {
+      const value = computed.getPropertyValue(`--tw-translate-${axis}`).trim();
+      // Tailwind's unitless zero is valid for translate, but not in a calc sum
+      // with a length. Resolve it before adding the viewport correction.
+      return !value || value === "0" ? "0px" : value;
+    };
+    popup.style.translate = `calc(${base('x')} + ${delta.x}px) calc(${base('y')} + ${delta.y}px)`;
   }
 }
 
@@ -39,9 +48,13 @@ export function useCanvasV2PopoverViewport(root: RefObject<HTMLElement | null>, 
     const place = () => placePopovers(root.current, menu);
     const observer = new ResizeObserver(place);
     observer.observe(root.current);
+    // Most camera frames leave the screen-space anchor untouched. If visibility
+    // requires a relocation, clamp its open menus before the next paint too.
+    const movement = new MutationObserver(place);
+    movement.observe(root.current, { attributes: true, attributeFilter: ["style"] });
     root.current.querySelectorAll("[data-canvas-v2-popover]").forEach(popup => observer.observe(popup));
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
-    return () => { observer.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+    return () => { movement.disconnect(); observer.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [menu, root]);
 }
