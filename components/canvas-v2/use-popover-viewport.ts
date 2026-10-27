@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, type RefObject } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 
 type Bounds = { left: number; top: number; right: number; bottom: number; width: number; height: number };
 
@@ -41,20 +41,29 @@ function placePopovers(toolbar: HTMLElement | null, menu: string | undefined) {
 }
 
 export function useCanvasV2PopoverViewport(root: RefObject<HTMLElement | null>, menu: string | undefined) {
-  // Reposition after toolbar movement as well as menu changes, before paint.
-  useLayoutEffect(() => placePopovers(root.current, menu));
+  const subscription = useRef<{ element: HTMLElement; menu: string; popups: HTMLElement[]; dispose: () => void } | undefined>(undefined);
   useLayoutEffect(() => {
-    if (!menu || !root.current) return;
-    const place = () => placePopovers(root.current, menu);
+    const element = root.current;
+    const popups = Array.from(element?.querySelectorAll<HTMLElement>("[data-canvas-v2-popover]") ?? []);
+    placePopovers(element, menu);
+    const previous = subscription.current;
+    if (previous?.element === element && previous.menu === menu && previous.popups.length === popups.length && previous.popups.every((popup, index) => popup === popups[index])) return;
+    previous?.dispose();
+    subscription.current = undefined;
+    if (!menu || !element) return;
+    // A selected object can leave the viewport and remount its toolbar with
+    // the same open menu. Rebind to the actual nodes, not just the menu name.
+    const place = () => placePopovers(element, menu);
     const observer = new ResizeObserver(place);
-    observer.observe(root.current);
+    observer.observe(element);
     // Most camera frames leave the screen-space anchor untouched. If visibility
     // requires a relocation, clamp its open menus before the next paint too.
     const movement = new MutationObserver(place);
-    movement.observe(root.current.closest('[data-testid="canvas-v2-context-toolbar"]') ?? root.current, { attributes: true, attributeFilter: ["style"] });
-    root.current.querySelectorAll("[data-canvas-v2-popover]").forEach(popup => observer.observe(popup));
+    movement.observe(element.closest('[data-testid="canvas-v2-context-toolbar"]') ?? element, { attributes: true, attributeFilter: ["style"] });
+    popups.forEach(popup => observer.observe(popup));
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
-    return () => { movement.disconnect(); observer.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
-  }, [menu, root]);
+    subscription.current = { element, menu, popups, dispose: () => { movement.disconnect(); observer.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); } };
+  });
+  useLayoutEffect(() => () => { subscription.current?.dispose(); subscription.current = undefined; }, []);
 }

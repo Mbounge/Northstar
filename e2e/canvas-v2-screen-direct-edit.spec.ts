@@ -438,13 +438,14 @@ test('scrolling an app keeps element selection, inspector and canvas camera stab
   test.setTimeout(120000);await page.setViewportSize({width:1512,height:900});
   const frame=await createScreen(page);await enterEdit(page);await clickScreen(page,'h1');
   const editor=await page.getByRole('textbox',{name:'Element text',exact:true}).elementHandle();
-  const before=await page.locator('iframe').boundingBox(),revision=await page.getByTestId('canvas-v2-committed-revision').textContent();
+  const liveFrame=page.locator('iframe[title="Fieldnotes · studio editing"]');
+  const before=await liveFrame.boundingBox(),revision=await page.getByTestId('canvas-v2-committed-revision').textContent();
   await page.mouse.move(before!.x+before!.width/2,before!.y+before!.height*0.6);
   for(let i=0;i<5;i++)await page.mouse.wheel(0,80);
   await expect.poll(()=>frame.locator('#feed').evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
   expect(await editor!.evaluate(el=>el.isConnected)).toBe(true);
   await expect(page.getByRole('textbox',{name:'Element text',exact:true})).toBeVisible();
-  const after=await page.locator('iframe').boundingBox();expect(after!.x).toBeCloseTo(before!.x,1);expect(after!.y).toBeCloseTo(before!.y,1);
+  const after=await liveFrame.boundingBox();expect(after!.x).toBeCloseTo(before!.x,1);expect(after!.y).toBeCloseTo(before!.y,1);
   expect(await page.getByTestId('canvas-v2-committed-revision').textContent()).toBe(revision);
   for(let i=0;i<8;i++)await page.mouse.wheel(0,-100);
   await expect.poll(()=>frame.locator('#feed').evaluate(el=>el.scrollTop)).toBe(0);
@@ -605,6 +606,7 @@ test('inspector colour, size and text reflow paint before held saves; bounds fol
  await frame.locator('#name').fill('Keep this notebook draft');
  const boot=await frame.locator('body').evaluate(()=>(window as typeof window&{studioBoot:number}).studioBoot);
  await enterEdit(page);await clickScreen(page,'h1 .first');
+ await expect(page.getByRole('textbox',{name:'Text colour',exact:true})).toBeVisible();
  const object=page.locator('[data-canvas-v2-screen]'),before=await object.getAttribute('data-canvas-v2-screen');
  await page.evaluate(()=>{const state=window as typeof window&{held?:unknown[];release?:()=>void;colourInputAt?:number};const dispatch=window.dispatchEvent.bind(window);state.held=[];window.dispatchEvent=(event:Event)=>{if(event.type==='northstar-screen-direct-edit'){state.held!.push((event as CustomEvent).detail);return true;}return dispatch(event);};state.release=()=>{window.dispatchEvent=dispatch;for(const detail of state.held!)dispatch(new CustomEvent('northstar-screen-direct-edit',{detail}));};document.querySelector('[aria-label="Text colour"]')!.addEventListener('input',()=>{state.colourInputAt=performance.timeOrigin+performance.now();},{once:true});});
  await frame.locator('h1 .first').evaluate(el=>{const state=window as typeof window&{colourPaintAt?:number};const observer=new MutationObserver(()=>{if(getComputedStyle(el).color==='rgb(255, 200, 75)')requestAnimationFrame(()=>{state.colourPaintAt=performance.timeOrigin+performance.now();observer.disconnect();});});observer.observe(el,{attributes:true,attributeFilter:['style']});});
@@ -612,6 +614,7 @@ test('inspector colour, size and text reflow paint before held saves; bounds fol
  await expect(frame.locator('h1 .first')).toHaveCSS('color','rgb(255, 200, 75)');
  await expect.poll(()=>frame.locator('body').evaluate(()=>(window as typeof window&{colourPaintAt?:number}).colourPaintAt)).toBeTruthy();
  const latency=(await frame.locator('body').evaluate(()=>(window as typeof window&{colourPaintAt:number}).colourPaintAt))-(await page.evaluate(()=>(window as typeof window&{colourInputAt:number}).colourInputAt));
+ await writeFile(info.outputPath('input-to-colour-paint.json'),JSON.stringify({milliseconds:latency,saveHeld:true}));
  expect(latency).toBeLessThan(150);
  await page.getByRole('spinbutton',{name:'Text size',exact:true}).fill('48');
  await expect(frame.locator('h1 .first')).toHaveCSS('font-size','48px');

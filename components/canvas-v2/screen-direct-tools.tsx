@@ -219,8 +219,11 @@ export function ScreenAppearanceEditor({target,position,layers,fontFamilies=[],d
     const styles=Object.fromEntries(Object.entries(changes).filter(([key])=>!key.startsWith('attr:')));
     const attributes=Object.fromEntries(Object.entries(changes).filter(([key])=>key.startsWith('attr:')).map(([key,value])=>[key.slice(5),value]));
     const text=draftText===savedText.current?undefined:draftText;
-    const animation=requestAnimationFrame(()=>{void previewDraft.current?.({text,styles,attributes},aborter.signal).catch(()=>{});});
-    return()=>{cancelAnimationFrame(animation);aborter.abort();};
+    // Send the validated draft before paint. The controller serializes source
+    // patches and drops aborted drafts; waiting another frame here only adds
+    // latency to typing and colour changes inside the live app.
+    void previewDraft.current({text,styles,attributes},aborter.signal).catch(()=>{});
+    return()=>aborter.abort();
   },[changes,draftText,sourceVersion,ready]);
   const set=(property:string,value:string)=>{setError('');setChanges(previous=>{const next={...previous};if(value===target.styles[property]&&target.styles[property+'-mixed']!=='true'&&!busy.current)delete next[property];else next[property]=value;return next})};
   const acknowledged=savedAppearance.current;

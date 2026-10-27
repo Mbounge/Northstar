@@ -52,3 +52,34 @@ test('object controls and an open line palette stay still through live and settl
   await shape.click();await expect(toolbar).toBeVisible();
   const preview=await box(toolbar);await page.mouse.move(950,650);await page.mouse.wheel(-30,-12);await settled(page);sameBox(preview,await box(toolbar));
 });
+
+test('an open palette follows its current toolbar after an offscreen roundtrip',async({page})=>{
+  test.setTimeout(90000);
+  await page.setViewportSize({width:1280,height:800});
+  await page.goto('/canvas-v2-e2e');
+  const collapse=page.getByRole('button',{name:'Collapse North Star panel',exact:true});if(await collapse.isVisible())await collapse.click();
+  await page.getByTitle('Create Shape · drag to place').click();await placeActivatedTool(page);
+  const shape=page.getByTestId('canvas-v2-native-scene').locator('[data-canvas-v2-primitive="shape"]');
+  await shape.click();
+  const toolbar=page.getByTestId('canvas-v2-context-toolbar');
+  await toolbar.getByRole('button',{name:'Change line',exact:true}).click();
+  const palette=page.getByTestId('canvas-v2-line-palette'),original=await toolbar.elementHandle();
+  const source=await shape.getAttribute('style');
+  await page.mouse.move(850,450);await page.mouse.wheel(0,1800);await settled(page);
+  await expect(toolbar).toHaveCount(0);
+  await page.mouse.wheel(0,-1800);await settled(page);
+  await expect(palette).toBeVisible();expect(await original!.evaluate(el=>el.isConnected)).toBe(false);
+  // Camera preview writes the anchor imperatively between React commits. Move
+  // the returned toolbar near the edge through that same DOM boundary, so a
+  // later React render cannot conceal a subscription left on the old node.
+  await toolbar.evaluate(async element=>{
+    const anchor=element.getBoundingClientRect(),menu=element.querySelector('[data-canvas-v2-popover]')!.getBoundingClientRect();
+    (element as HTMLElement).style.top=menu.bottom<=anchor.top?'4px':'755px';
+    await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+  });
+  const menu=await box(palette);
+  expect(menu.y).toBeGreaterThanOrEqual(11);expect(menu.y+menu.height).toBeLessThanOrEqual(789);
+  await palette.getByRole('button',{name:'Use Teal',exact:true}).click();
+  await expect(palette.getByRole('button',{name:'Use Teal',exact:true})).toHaveAttribute('aria-pressed','true');
+  expect(await shape.getAttribute('style')).not.toBe(source);
+});
