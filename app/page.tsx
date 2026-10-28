@@ -142,22 +142,16 @@ export default async function PortfolioPage() {
       </header>
 
       <div data-northstar-home-content className="w-full pl-[200px] pr-16 box-border relative z-10 flex-1 flex flex-col">
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex flex-row items-center gap-8">
-            <button className="h-[49px] px-4 flex items-center justify-center bg-white/50 hover:bg-white/70 transition-colors duration-200 ease-in-out border-none text-[16px] font-bold text-black dark:text-white cursor-pointer whitespace-nowrap rounded-none">
-              Recently viewed
-            </button>
-
-            {["Direct", "Indirect", "Top Apps"].map((tab) => (
-              <button
-                key={tab}
-                className="bg-transparent border-none p-0 text-[16px] font-medium text-black dark:text-white/70 cursor-pointer whitespace-nowrap hover:opacity-70 transition-opacity duration-200"
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
-
+        <div className="flex items-center mb-6">
+          <Link
+            href="/canvas"
+            prefetch
+            className="inline-flex h-12 items-center gap-3 rounded-full border border-white/65 bg-white/65 px-5 text-[13px] font-medium text-[#363047] shadow-[0_8px_28px_rgba(66,54,132,.12),inset_0_1px_0_rgba(255,255,255,.8)] backdrop-blur-2xl transition-[background-color,box-shadow] hover:bg-white/85 hover:shadow-[0_10px_32px_rgba(87,65,180,.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a58af7] focus-visible:ring-offset-4 focus-visible:ring-offset-[#EEF0F8] dark:border-white/[.14] dark:bg-[#211d2c]/85 dark:text-[#eee9fa] dark:shadow-[0_10px_32px_rgba(0,0,0,.25),inset_0_1px_0_rgba(255,255,255,.06)] dark:hover:bg-[#30283e]/95 dark:focus-visible:ring-offset-[#09090b]"
+          >
+            <Layers3 aria-hidden="true" size={17} strokeWidth={1.7} className="text-[#8061d7] dark:text-[#bca4ff]" />
+            Open canvas
+            <ArrowUpRight aria-hidden="true" size={15} strokeWidth={1.8} className="text-[#8a7ba4] dark:text-[#baaccc]" />
+          </Link>
         </div>
 
         <main className="flex-1 w-full pb-40 box-border">
@@ -443,7 +437,7 @@ export default async function PortfolioPage() {
         id="bottom-bar"
         className="fixed bottom-8 left-0 right-0 z-20 pointer-events-none transition-all duration-300 ease-in-out"
       >
-        <div className="w-full px-8 box-border flex flex-col-reverse gap-5 lg:flex-row lg:justify-between lg:items-end pointer-events-auto relative">
+        <div className="w-full px-8 box-border flex items-end pointer-events-auto relative">
           <div data-northstar-home-account className="flex flex-row items-center gap-2.5">
             <div className="w-10 h-10 bg-[rgba(215,213,207,0.85)] dark:bg-zinc-700 rounded-none flex items-center justify-center font-bold text-[15px] text-[#0A0A0A] dark:text-white shrink-0">
               {userInitial}
@@ -483,16 +477,6 @@ export default async function PortfolioPage() {
               </div>
             </div>
           </div>
-
-          <Link
-            href="/canvas"
-            prefetch
-            className="group self-center inline-flex h-12 items-center gap-3 rounded-full border border-white/65 bg-white/65 px-5 text-[13px] font-medium text-[#363047] shadow-[0_8px_28px_rgba(66,54,132,.12),inset_0_1px_0_rgba(255,255,255,.8)] backdrop-blur-2xl transition-[background-color,box-shadow] hover:bg-white/85 hover:shadow-[0_10px_32px_rgba(87,65,180,.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a58af7] focus-visible:ring-offset-4 focus-visible:ring-offset-[#EEF0F8] lg:absolute lg:left-1/2 lg:-translate-x-1/2 dark:border-white/[.14] dark:bg-[#211d2c]/85 dark:text-[#eee9fa] dark:shadow-[0_10px_32px_rgba(0,0,0,.25),inset_0_1px_0_rgba(255,255,255,.06)] dark:hover:bg-[#30283e]/95 dark:focus-visible:ring-offset-[#09090b]"
-          >
-            <Layers3 aria-hidden="true" size={17} strokeWidth={1.7} className="text-[#8061d7] dark:text-[#bca4ff]" />
-            Open canvas
-            <ArrowUpRight aria-hidden="true" size={15} strokeWidth={1.8} className="text-[#8a7ba4] dark:text-[#baaccc]" />
-          </Link>
         </div>
       </div>
     </div>
