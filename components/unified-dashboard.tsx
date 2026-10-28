@@ -45,7 +45,8 @@ export function UnifiedDashboard({
 
   const [platform, setPlatform] = useState<Platform>(defaultPlatform);
   const [mode, setMode] = useState<Mode>(
-    appData[defaultPlatform]?.browsing ? "browsing" : "onboarding"
+    appData[defaultPlatform]?.onboarding?.media?.some((asset: any) => ["onboarding_journey", "overview_reel"].includes(asset.role))
+      ? "onboarding" : appData[defaultPlatform]?.browsing ? "browsing" : "onboarding"
   );
 
   const [activeTab, setActiveTab] = useState<ProductTab>("overview");
@@ -439,7 +440,7 @@ export function UnifiedDashboard({
     Array.isArray(activeData?.media) &&
     activeData.media.some(
       (asset: any) =>
-        asset?.role === "onboarding_journey" &&
+        ["onboarding_journey", "overview_reel"].includes(asset?.role) &&
         asset?.kind === "video" &&
         typeof asset?.url === "string" &&
         asset.url.startsWith("https://")

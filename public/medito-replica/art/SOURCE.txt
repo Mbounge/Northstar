@@ -1,0 +1,7 @@
+Unmodified artwork matching the captured Medito onboarding screens.
+Source: https://github.com/meditohq/medito-app/tree/develop/assets/images
+License: AGPL-3.0; original source images are included here.
+Google Sans fonts in ../fonts are separately licensed under SIL OFL 1.1.
+
+payment-marks.png is a decorative crop from the original authorized onboarding captures.
+moon-sat.svg retains its original geometry with a duplicated XML attribute removed for browser compatibility.

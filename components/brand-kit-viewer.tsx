@@ -628,7 +628,30 @@ function FontDownloadBtn({
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
-export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUrl, appName, tenantId, platform, mode }: BrandKitViewerProps) {
+export function BrandKitViewer({ brandKit: captureBrandKit, apkIntelligence, framework, appIconUrl, appName, tenantId, platform, mode }: BrandKitViewerProps) {
+  const analysis = apkIntelligence?.ai_vision_analysis;
+  const useApkRead = analysis?.ran && !captureBrandKit?.color_system?.canonical_palette?.length;
+  const brandKit: BrandKit = useApkRead ? {
+    design_language_summary: analysis.designer_summary,
+    color_system: {
+      color_harmony: analysis.ai_design_language?.color_harmony,
+      color_temperature: analysis.ai_design_language?.color_temperature,
+    },
+    typography_system: {
+      primary_font: analysis.ai_typography?.primary_font_guess,
+      font_source: apkIntelligence?.typography?.embedded_fonts?.length ? "Embedded APK font files" : undefined,
+      weight_range: analysis.ai_typography?.weight_range_observed,
+      type_personality: analysis.ai_typography?.notable_type_treatments,
+    },
+    shape_system: {
+      dominant_corner_style: analysis.ai_design_language?.corner_radius_character,
+      button_shape_language: analysis.ai_design_language?.corner_radius_character?.replace(/_/g, " "),
+      card_elevation_style: analysis.ai_design_language?.elevation_style,
+    },
+    iconography_system: {
+      icon_style: analysis.ai_design_language?.iconography_style,
+    },
+  } : captureBrandKit;
   const [paletteExpanded,  setPaletteExpanded]  = useState(false);
   const [tokenMapExpanded, setTokenMapExpanded] = useState(false);
 
@@ -651,7 +674,7 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
   const paletteVisible = paletteExpanded ? palette : palette.slice(0, PALETTE_INITIAL_COUNT);
 
   const semanticEntries = Object.entries(isFlutter ? {} : apkSemantic).filter(([, v]) => isHex(v));
-  const aiPalette       = apkAi?.ai_palette ?? [];
+  const aiPalette       = (apkAi?.ai_palette ?? []).filter(color => !(isFlutter && color.semantic_role === "brand" && apkIcons.dominant_colors?.some(icon => icon.confidence === "exact")));
   const iconColors      = apkIcons?.dominant_colors ?? [];
   const embeddedFonts   = apkTypo?.embedded_fonts ?? [];
   const previewFont = embeddedFonts.find(font => font.weight_hint === "400" && font.style_hint !== "italic" && !/material.?icons/i.test(font.filename));

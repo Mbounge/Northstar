@@ -65,7 +65,7 @@ export function VideoOverview({
     return () => cancelAnimationFrame(frame);
   }, [showFullSummary]);
 
-  if (!journey) return null;
+  if (!journey && !reel) return null;
 
   const handleEnded = () => {
     setSegment((current) => current === "splash" ? "journey" : "splash");

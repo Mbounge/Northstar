@@ -38,5 +38,5 @@ export default async function MeditoReplicaPage() {
     });
     if (response.ok) defaults = meditoCaptureDefaults(await response.json());
   } catch { /* The captured screens remain available if optional field metadata is unavailable. */ }
-  return <MeditoReplica screenshots={screenshots} defaults={defaults} />;
+  return <MeditoReplica screenshots={screenshots} demoCode={defaults.code || "123456"} />;
 }
