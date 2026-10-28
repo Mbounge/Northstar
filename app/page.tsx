@@ -3,6 +3,7 @@ import { PendingCanvasInvitation } from '@/components/canvas-v2/canvas-invitatio
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
+import { ArrowUpRight, Layers3 } from "lucide-react";
 import { getReviewApps } from "@/lib/review-data";
 import { createClient } from "@/lib/supabase/server";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -442,7 +443,7 @@ export default async function PortfolioPage() {
         id="bottom-bar"
         className="fixed bottom-8 left-0 right-0 z-20 pointer-events-none transition-all duration-300 ease-in-out"
       >
-        <div className="w-full px-8 box-border flex justify-between items-end pointer-events-auto relative">
+        <div className="w-full px-8 box-border flex flex-col-reverse gap-5 lg:flex-row lg:justify-between lg:items-end pointer-events-auto relative">
           <div data-northstar-home-account className="flex flex-row items-center gap-2.5">
             <div className="w-10 h-10 bg-[rgba(215,213,207,0.85)] dark:bg-zinc-700 rounded-none flex items-center justify-center font-bold text-[15px] text-[#0A0A0A] dark:text-white shrink-0">
               {userInitial}
@@ -483,6 +484,15 @@ export default async function PortfolioPage() {
             </div>
           </div>
 
+          <Link
+            href="/canvas"
+            prefetch
+            className="group self-center inline-flex h-12 items-center gap-3 rounded-full border border-white/65 bg-white/65 px-5 text-[13px] font-medium text-[#363047] shadow-[0_8px_28px_rgba(66,54,132,.12),inset_0_1px_0_rgba(255,255,255,.8)] backdrop-blur-2xl transition-[background-color,box-shadow] hover:bg-white/85 hover:shadow-[0_10px_32px_rgba(87,65,180,.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#a58af7] focus-visible:ring-offset-4 focus-visible:ring-offset-[#EEF0F8] lg:absolute lg:left-1/2 lg:-translate-x-1/2 dark:border-white/[.14] dark:bg-[#211d2c]/85 dark:text-[#eee9fa] dark:shadow-[0_10px_32px_rgba(0,0,0,.25),inset_0_1px_0_rgba(255,255,255,.06)] dark:hover:bg-[#30283e]/95 dark:focus-visible:ring-offset-[#09090b]"
+          >
+            <Layers3 aria-hidden="true" size={17} strokeWidth={1.7} className="text-[#8061d7] dark:text-[#bca4ff]" />
+            Open canvas
+            <ArrowUpRight aria-hidden="true" size={15} strokeWidth={1.8} className="text-[#8a7ba4] dark:text-[#baaccc]" />
+          </Link>
         </div>
       </div>
     </div>
