@@ -11,6 +11,9 @@ export function ProductAppPreview({ appName, active }: { appName: string; active
   const [opened, setOpened] = useState(active);
   const [selectedSection, setSelectedSection] = useState<GraetPreviewSection>("onboarding");
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [frameReady, setFrameReady] = useState(false);
+  const [frameSlow, setFrameSlow] = useState(false);
+  const [frameStarted, setFrameStarted] = useState(false);
   const simulator = simulatorForApp(appName);
 
   useEffect(() => {
@@ -29,6 +32,29 @@ export function ProductAppPreview({ appName, active }: { appName: string; active
     return () => window.removeEventListener("message", onMessage);
   }, [simulator?.slug]);
 
+  useEffect(() => {
+    if (!active || !opened || !simulator) return;
+    // Start the first iframe navigation after its force-mounted tab is visibly
+    // laid out. Retain that frame and all app state on subsequent tab switches.
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => setFrameStarted(true));
+    });
+    const timeout = window.setTimeout(() => setFrameSlow(true), 10000);
+    return () => { cancelAnimationFrame(firstFrame); cancelAnimationFrame(secondFrame); window.clearTimeout(timeout); };
+  }, [active, opened, simulator]);
+
+  const onFrameLoad = () => {
+    try {
+      if (iframeRef.current?.contentDocument?.URL === "about:blank") return;
+    } catch { /* The authenticated route may briefly be navigating. */ }
+    setFrameReady(true);
+  };
+  const frameLoading = !frameReady && opened ? <div role="status" className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-xs text-[#847b98] dark:text-[#bcb0d1]">
+    Loading {appName} preview…
+    {frameSlow && <button type="button" className="pointer-events-auto rounded-full border border-current/25 px-4 py-2" onClick={() => { if (iframeRef.current && simulator) iframeRef.current.src = simulator.embedPath; }}>Retry preview</button>}
+  </div> : null;
+
   const navigatePreview = (section: GraetPreviewSection) => {
     setSelectedSection(section);
     iframeRef.current?.contentWindow?.postMessage({ type: GRAET_PREVIEW_NAVIGATE, section }, window.location.origin);
@@ -36,7 +62,8 @@ export function ProductAppPreview({ appName, active }: { appName: string; active
 
   if (simulator?.slug === "medito") return <section className="relative mx-auto mb-8 w-full max-w-[1450px]">
     <h2 className="sr-only">Medito interactive captured preview</h2>
-    {opened && <iframe title="Medito interactive simulator" src={simulator.embedPath} className="block h-[760px] w-full border-0 bg-transparent max-[760px]:h-[1120px]" />}
+    {frameLoading}
+    {opened && <iframe ref={iframeRef} onLoad={onFrameLoad} title="Medito interactive simulator" src={frameStarted ? simulator.embedPath : undefined} className="block h-[760px] w-full border-0 bg-transparent max-[760px]:h-[1120px]" />}
   </section>;
 
   return <section className="relative mx-auto mb-16 w-full max-w-[1450px] text-[#252438] dark:text-[#f3f1fb]">
@@ -64,7 +91,8 @@ export function ProductAppPreview({ appName, active }: { appName: string; active
           })}
         </div>
       </nav>}
-      {opened && <iframe ref={iframeRef} title={`${appName} interactive simulator`} src={simulator.embedPath} className="block h-[660px] w-full border-0 bg-transparent" />}
+      {frameLoading}
+      {opened && <iframe ref={iframeRef} onLoad={onFrameLoad} title={`${appName} interactive simulator`} src={frameStarted ? simulator.embedPath : undefined} className="block h-[660px] w-full border-0 bg-transparent" />}
     </div> : <div className="flex min-h-64 flex-col justify-center px-7 py-14 sm:px-10">
       <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[#8666df] dark:text-[#af9af5]">App preview</p>
       <h3 className="m-0 text-2xl font-semibold tracking-[-0.04em]">Interactive simulator in preparation</h3>

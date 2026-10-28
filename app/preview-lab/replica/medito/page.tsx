@@ -28,11 +28,13 @@ export default async function MeditoReplicaPage() {
       .eq("platform", "mobile").eq("session_type", "onboarding").maybeSingle(),
   ]);
   if (appResult.error || !appResult.data || sessionResult.error) notFound();
-  const catalog = Array.isArray(sessionResult.data?.catalog) ? sessionResult.data.catalog : [];
+  const rawCatalog = Array.isArray(sessionResult.data?.catalog) ? sessionResult.data.catalog : [];
+  const catalog = rawCatalog.flatMap(screen => screen && typeof screen === "object" && !Array.isArray(screen) && typeof screen.screenshot_file === "string"
+    ? [{ screenshot_file: screen.screenshot_file }] : []);
   const screenshots: Record<number, string> = {};
   const appBase = `${url}/storage/v1/object/public/reviews/${encodeURIComponent(profile.customer_id)}/${encodeURIComponent(appResult.data.app_name)}/`;
   for (const capture of meditoCaptures) {
-    const source = catalog.find((screen: { screenshot_file?: string }) => reviewScreenshotFileName(screen.screenshot_file) === meditoScreenFile(capture.step))?.screenshot_file;
+    const source = catalog.find(screen => reviewScreenshotFileName(screen.screenshot_file) === meditoScreenFile(capture.step))?.screenshot_file;
     if (typeof source !== "string" || !source.startsWith(appBase)) notFound();
     screenshots[capture.step] = source;
   }
