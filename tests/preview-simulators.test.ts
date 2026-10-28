@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { simulatorForApp } from "../lib/preview/simulator-registry";
+import { canvasSimulatorForApp, simulatorForApp } from "../lib/preview/simulator-registry";
 
 test("GRAET resolves to its simulator regardless of assignment casing", () => {
   assert.deepEqual(simulatorForApp(" graet "), {
@@ -13,4 +13,14 @@ test("GRAET resolves to its simulator regardless of assignment casing", () => {
 
 test("unreleased apps have no simulator", () => {
   assert.equal(simulatorForApp("Another App"), null);
+});
+
+test("Medito resolves to the protected capture preview without enabling editable source reuse", () => {
+  assert.deepEqual(simulatorForApp(" MEDITO "), {
+    slug: "medito",
+    path: "/preview-lab/replica/medito",
+    embedPath: "/preview-lab/replica/medito?embedded=1",
+  });
+  assert.equal(canvasSimulatorForApp("Medito"), null);
+  assert.equal(canvasSimulatorForApp("GRAET")?.slug, "graet");
 });

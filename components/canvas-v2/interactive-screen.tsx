@@ -13,7 +13,7 @@ import { readCanvasV2ScreenAssetPixels, readCanvasV2ScreenModelBytes } from '@/l
 import { toCooperativeJpeg, toPreparedCanvasPng } from '@/lib/canvas-v2/cooperative-capture';
 import { noteCanvasInputActivity, waitForCanvasInputQuiet } from '@/lib/canvas-v2/capture-input-scheduler';
 import { createScreenPresentationCache, recordScreenPresentationTiming, screenPresentationCommandChangesState, type ScreenPresentation } from '@/lib/canvas-v2/screen-presentation-cache';
-import { simulatorForApp } from '@/lib/preview/simulator-registry';
+import { canvasSimulatorForApp as simulatorForApp } from '@/lib/preview/simulator-registry';
 import { GRAET_PREVIEW_NAVIGATE, GRAET_PREVIEW_SECTION } from '@/lib/preview/graet-navigation';
 import { unpackScreenCaptureImages, bindScreenCaptureImages, screenCaptureImageDataUrls } from '@/lib/canvas-v2/screen-capture-resources';
 import { readSimulationSource, type SimulationSource } from '@/lib/canvas-v2/simulation-source';

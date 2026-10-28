@@ -44,7 +44,7 @@ import { mergeCanvasV2EvidencePackets } from '@/lib/canvas-v2/evidence-packets';
 import { insertCanvasV2CanonicalFlow } from '@/lib/canvas-v2/flow-insertion';
 import type { AppDataApp, AppDataFlow } from '@/lib/app-data/canvas-v2-catalog';
 import type { CanvasV2EvidencePacket, CanvasV2EvidenceAsset } from '@/lib/canvas-v2/types';
-import { simulatorForApp } from '@/lib/preview/simulator-registry';
+import { canvasSimulatorForApp as simulatorForApp } from '@/lib/preview/simulator-registry';
 import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
 import { parseCanvasV2Screen, readCanvasV2Screens, canvasV2ScreenReviewAssets, canvasV2ScreenBoundAssets, canvasV2ScreenPreviewAsset, canvasV2ScreenReferencePreview } from '@/lib/canvas-v2/interactive-screen';
 import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, appendCanvasV2NativeScreen, canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';

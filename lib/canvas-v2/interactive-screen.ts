@@ -1,6 +1,6 @@
 import {validateScreenDesignSystem, type ScreenDesignSystem} from './screen-design-edit';
 import { isGraetPreviewSection, type GraetPreviewSection } from '../preview/graet-navigation';
-import { simulatorForApp } from '../preview/simulator-registry';
+import { canvasSimulatorForApp as simulatorForApp } from '../preview/simulator-registry';
 import type { CanvasV2EvidenceAsset } from './types';
 import type { CanvasV2TrustedRuntimeLibrary } from './screen-trusted-runtime';
 import { validateCanvasV2WasmModules, type CanvasV2WasmModule } from './screen-wasm';

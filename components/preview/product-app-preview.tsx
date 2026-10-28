@@ -34,6 +34,11 @@ export function ProductAppPreview({ appName, active }: { appName: string; active
     iframeRef.current?.contentWindow?.postMessage({ type: GRAET_PREVIEW_NAVIGATE, section }, window.location.origin);
   };
 
+  if (simulator?.slug === "medito") return <section className="relative mx-auto mb-8 w-full max-w-[1450px]">
+    <h2 className="sr-only">Medito interactive captured preview</h2>
+    {opened && <iframe title="Medito interactive simulator" src={simulator.embedPath} className="block h-[760px] w-full border-0 bg-transparent max-[760px]:h-[1120px]" />}
+  </section>;
+
   return <section className="relative mx-auto mb-16 w-full max-w-[1450px] text-[#252438] dark:text-[#f3f1fb]">
     <h2 className="sr-only">{appName} interactive app preview</h2>
     {simulator ? <div className="relative">
