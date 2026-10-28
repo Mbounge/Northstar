@@ -790,7 +790,7 @@ export function BrandKitViewer({ brandKit: captureBrandKit, apkIntelligence, fra
 
       {/* ── INTELLIGENCE 3-COL ── */}
       {hasApk && (semanticEntries.length > 0 || aiPalette.length > 0 || iconColors.length > 0) && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 16, marginBottom: 32 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,280px),1fr))", gap: 16, marginBottom: 32 }}>
 
           {semanticEntries.length > 0 && (
             <Card>
@@ -879,7 +879,7 @@ export function BrandKitViewer({ brandKit: captureBrandKit, apkIntelligence, fra
 
       {/* ── COLOR SYSTEM 3-COL ── */}
       {(bgEntries.length > 0 || textEntries.length > 0 || stateEntries.length > 0) && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 16, marginBottom: 32 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,280px),1fr))", gap: 16, marginBottom: 32 }}>
           <Card>
             <SectionLabel>Backgrounds</SectionLabel>
             {bgEntries.length > 0
@@ -995,7 +995,7 @@ export function BrandKitViewer({ brandKit: captureBrandKit, apkIntelligence, fra
               <div className="text-zinc-500 dark:text-zinc-400" style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: "0.1em", marginBottom: 8 }}>Font files</div>
               {embeddedFonts.map((f, i) => (
                 <div key={i} className="border-b border-black/5 dark:border-white/10" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "6px 0", gap: 10 }}>
-                  <span className="text-zinc-800 dark:text-zinc-200" style={{ fontFamily: T.mono, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{f.font_name_clean}</span>
+                  <span className="text-zinc-800 dark:text-zinc-200" style={{ fontFamily: T.mono, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{f.font_name_clean}{f.style_hint === "italic" ? " Italic" : ""}</span>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
                     {f.weight_hint   && <span className="text-zinc-500 dark:text-zinc-400" style={{ fontSize: 10, fontWeight: 500 }}>{f.weight_hint}w</span>}
                     {f.file_size_kb  && <span className="text-zinc-500 dark:text-zinc-400" style={{ fontSize: 10, fontWeight: 500 }}>{f.file_size_kb}kb</span>}

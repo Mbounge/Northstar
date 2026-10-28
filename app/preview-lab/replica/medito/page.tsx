@@ -1,8 +1,7 @@
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { getAppFlowsData } from "@/lib/review-data";
-import { meditoCaptureDefaults, meditoCaptures, meditoScreenFile } from "@/lib/preview/medito-captures";
+import { meditoCaptures, meditoScreenFile } from "@/lib/preview/medito-captures";
 import { reviewScreenshotFileName } from "@/lib/app-data/review-media";
 import { MeditoReplica } from "@/components/preview/medito-replica";
 
@@ -18,25 +17,25 @@ export default async function MeditoReplicaPage() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) notFound();
   const admin = createAdminClient(url, key, { auth: { persistSession: false } });
-  const { data: app, error } = await admin.from("target_apps").select("app_name")
-    .eq("tenant_id", profile.customer_id).ilike("app_name", "Medito").maybeSingle();
-  if (error || !app) notFound();
-  const result = await getAppFlowsData(app.app_name, profile.customer_id, "mobile", "onboarding");
-  const catalog = result.flowsData?.screen_catalog ?? [];
+  // The registered catalog already contains canonical tenant URLs. Loading the
+  // entire Flows service here repeated storage-layout probes and media fetches
+  // that the simulation does not use.
+  const [appResult, sessionResult] = await Promise.all([
+    admin.from("target_apps").select("app_name")
+      .eq("tenant_id", profile.customer_id).ilike("app_name", "Medito").maybeSingle(),
+    admin.from("app_sessions").select("catalog:flows_data->screen_catalog")
+      .eq("tenant_id", profile.customer_id).ilike("app_name", "Medito")
+      .eq("platform", "mobile").eq("session_type", "onboarding").maybeSingle(),
+  ]);
+  if (appResult.error || !appResult.data || sessionResult.error) notFound();
+  const catalog = Array.isArray(sessionResult.data?.catalog) ? sessionResult.data.catalog : [];
   const screenshots: Record<number, string> = {};
-  const tenantBase = `${url}/storage/v1/object/public/reviews/${encodeURIComponent(profile.customer_id)}/`;
+  const appBase = `${url}/storage/v1/object/public/reviews/${encodeURIComponent(profile.customer_id)}/${encodeURIComponent(appResult.data.app_name)}/`;
   for (const capture of meditoCaptures) {
     const source = catalog.find((screen: { screenshot_file?: string }) => reviewScreenshotFileName(screen.screenshot_file) === meditoScreenFile(capture.step))?.screenshot_file;
-    if (typeof source !== "string" || !source.startsWith(tenantBase)) notFound();
+    if (typeof source !== "string" || !source.startsWith(appBase)) notFound();
     screenshots[capture.step] = source;
   }
-  const sessionBase = screenshots[8].slice(0, screenshots[8].indexOf("/screenshots/") + 1);
-  let defaults = meditoCaptureDefaults(null);
-  try {
-    const response = await fetch(`${sessionBase}enriched/step_008_screen_0008_enriched.json`, {
-      next: { revalidate: 300 }, signal: AbortSignal.timeout(2500),
-    });
-    if (response.ok) defaults = meditoCaptureDefaults(await response.json());
-  } catch { /* The captured screens remain available if optional field metadata is unavailable. */ }
-  return <MeditoReplica screenshots={screenshots} demoCode={defaults.code || "123456"} />;
+  // Local demo verification is independent of any real or expired email code.
+  return <MeditoReplica screenshots={screenshots} demoCode="123456" />;
 }

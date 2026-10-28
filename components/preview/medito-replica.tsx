@@ -71,7 +71,7 @@ export function MeditoReplica({ screenshots, demoCode }: { screenshots: Record<n
       <div className={styles.wordmark}><Logo /><b>Medito</b></div>
       <h1>Meditation Made<br />Simple</h1><p>Free forever. No ads. Not-for-profit.</p>
       <div className={styles.welcomeActions}>{primary("Get started", () => send({ type: "navigate", screen: "experience" }))}<button className={styles.textButton} onClick={() => send({ type: "navigate", screen: "email" })}>Sign in or sign up</button></div>
-      <HeaderArtwork name="splashbg" className={styles.welcomeArtwork} />
+      <HeaderArtwork name="welcome-landscape" className={styles.welcomeArtwork} />
     </div>; break;
     case "email": body = <div className={styles.account}>
       {nativeBack}<div className={styles.benefits}>• Track your mindfulness journey<br />• Never lose your meditation<br />&nbsp;&nbsp;progress<br />• Build a lasting meditation practice<br /><span>💜</span></div>
