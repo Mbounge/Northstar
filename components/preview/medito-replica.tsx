@@ -104,7 +104,7 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
         </>}
         {step === 7 && <>
           {hit("Back to verification", 20, 140, 130, 140, () => go(6))}
-          {hit("Copy captured code", 70, 700, 320, 105, () => { setCode("983037"); setEditingCode(true); go(8); setNote("Captured demo code filled locally. This does not verify an account."); })}
+          {hit("Copy captured code", 84, 785, 315, 112, () => { setCode("983037"); setEditingCode(true); go(8); setNote("Captured demo code filled locally. This does not verify an account."); })}
         </>}
         {step === 9 && ["I have a regular practice", "A little, here and there", "Never tried it"].map((label, index) => hit(label, 64, 970 + index * 185, 952, 154, () => go(10)))}
         {step === 10 && <>
@@ -128,9 +128,9 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
         {step === 15 && hit("Dismiss welcome message", 720, 650, 270, 140, () => go(16))}
         {(step === 15 || step === 16) && <>
           {step === 16 && <>
-            {hit("Play Welcome course", 910, 1015, 140, 170, () => unavailable("Welcome course playback"))}
-            {["Your Daily", "Downloads", "Timer", "Sleep", "Challenges", "Emergency", "Favorites", "Course"].map((label, i) => hit(label, 40 + i % 4 * 265, 1250 + Math.floor(i / 4) * 330, 240, 305, () => unavailable(label)))}
-            {hit("Featured content", 40, 1920, 1010, 280, () => unavailable("Featured content details"))}
+            {hit("Play Welcome course", 900, 770, 160, 160, () => unavailable("Welcome course playback"))}
+            {["Your Daily", "Downloads", "Timer", "Sleep", "Challenges", "Emergency", "Favorites", "Course"].map((label, i) => hit(label, 40 + i % 4 * 257, 1000 + Math.floor(i / 4) * 330, 229, 305, () => unavailable(label)))}
+            {hit("Featured content", 40, 1790, 1010, 375, () => unavailable("Featured content details"))}
           </>}
           {["Home", "Explore", "Search", "Settings"].map((label, i) => hit(label, i * 270, 2200, 270, 150, () => i === 0 ? go(16) : unavailable(`${label} screens`)))}
         </>}
