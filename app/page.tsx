@@ -411,16 +411,6 @@ export default async function PortfolioPage() {
 
                     <div className="flex gap-[10px] items-center flex-wrap">
                       <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
-                        {app.revenue ? `${app.revenue} revenues` : "? revenues"}
-                      </span>
-
-                      <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
-                        {app.employees && app.employees !== "?"
-                          ? `${app.employees} employees`
-                          : "? employees"}
-                      </span>
-
-                      <span className="text-[12px] font-normal text-[#717182] dark:text-zinc-300 leading-[20px] tracking-[-0.15px] whitespace-nowrap">
                         {app.totalScreens || 0} insights
                       </span>
                     </div>
