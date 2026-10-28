@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveFlowCaptures } from "../lib/app-data/flow-captures";
+import { resolveFlowCaptures, captureAspectRatio } from "../lib/app-data/flow-captures";
 
 const base = "https://example.test/storage/v1/object/public/reviews/tenant/Medito/onboarding/";
 test("captures contain only splash and overview in presentation order", () => {
@@ -18,4 +18,12 @@ test("capture manifests cannot point at another tenant, external hosts or non-me
     assert.deepEqual(resolveFlowCaptures({ assets: [{ role: "app_splash", kind: "video", file }] }, base), []);
   }
   assert.deepEqual(resolveFlowCaptures(null, base), []);
+});
+
+test("recorded iOS reels preserve native dimensions without letterboxing", () => {
+ const [capture] = resolveFlowCaptures({assets:[{role:"overview_reel",kind:"video",file:"media/live.mp4",width:750,height:1624}]},base);
+ assert.equal(captureAspectRatio(capture),"750 / 1624");
+ assert.equal(captureAspectRatio({width:750,height:0}),"9 / 20");
+ assert.equal(captureAspectRatio({width:750,height:Infinity}),"9 / 20");
+ assert.equal(captureAspectRatio(),"9 / 20");
 });

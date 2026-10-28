@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Film, Scan } from "lucide-react";
-import type { FlowCapture } from "@/lib/app-data/flow-captures";
+import { captureAspectRatio, type FlowCapture } from "@/lib/app-data/flow-captures";
 
 export function flowCaptureLabel(capture: FlowCapture) {
   return capture.role === "app_splash" ? "Opening splash" : "App demo";
@@ -44,7 +44,8 @@ export function FlowCaptureCard({ capture, appName }: { capture: FlowCapture; ap
         ) : (
           <video
             ref={videoRef}
-            className="aspect-[9/20] w-full object-contain"
+            className="w-full object-cover"
+            style={{ aspectRatio: captureAspectRatio(capture) }}
             src={`${capture.url}#t=0.1`}
             aria-label={`${appName} ${label.toLowerCase()}`}
             controls

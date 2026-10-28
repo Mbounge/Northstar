@@ -60,10 +60,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
       {/* CHANGED: Now spans the entire width absolutely, removing the visual cut */}
       <main 
         className="absolute inset-0 z-10 overflow-y-auto overflow-x-hidden flex flex-col scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
-        style={{
-          WebkitMaskImage: "linear-gradient(black, black)",
-          maskImage: "linear-gradient(black, black)",
-        }}
       >
         <InsightProvider>
           {children}

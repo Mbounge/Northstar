@@ -572,7 +572,7 @@ export function UnifiedDashboard({
   return (
     <div className="flex flex-col w-full">
       <Tabs value={activeTab} onValueChange={handleSubTabChange} className="flex flex-col w-full">
-        <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-6 relative border border-white/20 dark:border-white/10 backdrop-blur-md">
+        <div className="w-full h-[200px] bg-white/20 dark:bg-white/5 flex flex-col justify-between shrink-0 mb-6 relative border border-white/20 dark:border-white/10">
           <div className="flex-1 w-full relative">{header}</div>
 
           <div className="relative flex items-end justify-center px-10 h-[64px] shrink-0 border-none">

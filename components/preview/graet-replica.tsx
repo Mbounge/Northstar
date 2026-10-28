@@ -314,6 +314,16 @@ const collegeStateRows = [
 ];
 export function GraetReplica({ embedded = false, canvas = false }: { embedded?: boolean; canvas?: boolean }) {
   const [screen, setScreen] = useState<Screen>("welcome");
+  useEffect(() => {
+    // Decode the next onboarding screens while the opening is visible so a
+    // tap never reveals an empty background while its capture is fetched.
+    const sources = [
+      ...Object.values(onboardingCaptureFiles).map(file => `/graet-replica/tenant-source/${file}.png`),
+      ...["welcome", "role", "trial-top", "trial-lower", "notifications", "career-top"].map(file => `/graet-replica/captures/${file}.png`),
+    ];
+    const images = sources.map(src => { const image = new Image(); image.decoding = "async"; image.src = src; return image; });
+    void Promise.allSettled(images.map(image => image.decode()));
+  }, []);
   const [history, setHistory] = useState<{ screen: Screen; scrollTop: number }[]>([]);
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState(false);
