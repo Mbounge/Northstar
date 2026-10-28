@@ -1,21 +1,19 @@
 import { PendingCanvasInvitation } from '@/components/canvas-v2/canvas-invitation';
 // app/page.tsx
+import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
 import { getReviewApps } from "@/lib/review-data";
 import { createClient } from "@/lib/supabase/server";
-import { Unbounded } from "next/font/google";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { AskBar } from "@/components/ask-bar";
 import { redirect } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
-import { AddCompetitorModal } from "@/components/add-competitor-modal";
 import { AuthUrlCleaner } from "@/components/auth-url-cleaner";
 
-const unbounded = Unbounded({
-  subsets: ["latin"],
-  weight: ["200", "300", "400", "600", "700"],
-});
+export const metadata: Metadata = {
+  title: "App library",
+  description: "Explore captured apps, onboarding screens and browsing flows.",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -134,9 +132,9 @@ export default async function PortfolioPage() {
 
       <header data-northstar-home-header className="relative z-10 w-full px-8 pt-9 pb-0 flex items-start justify-between box-border">
         <h1
-          className={`${unbounded.className} text-[30px] font-semibold tracking-tight text-[#0A0A0A] dark:text-white mb-5`}
+          className="text-[30px] font-semibold tracking-tight text-[#0A0A0A] dark:text-white mb-5"
         >
-          North Star
+          App library
         </h1>
 
         <ThemeToggle />
@@ -159,7 +157,6 @@ export default async function PortfolioPage() {
             ))}
           </div>
 
-          <AddCompetitorModal userEmail={userEmail} variant="text" />
         </div>
 
         <main className="flex-1 w-full pb-40 box-border">
@@ -437,7 +434,6 @@ export default async function PortfolioPage() {
               );
             })}
 
-            <AddCompetitorModal userEmail={userEmail} variant="card" />
           </div>
         </main>
       </div>
@@ -487,7 +483,6 @@ export default async function PortfolioPage() {
             </div>
           </div>
 
-          <AskBar />
         </div>
       </div>
     </div>
