@@ -745,7 +745,7 @@ export async function getAppFlowsData(
   if (!sessionBase.startsWith(tenantAppBase)) return result;
   try {
     const response = await fetch(`${sessionBase}media_manifest.json`, {
-      next: { revalidate: 300 },
+      cache: "no-store",
       signal: AbortSignal.timeout(2500),
     });
     if (!response.ok) return result;
