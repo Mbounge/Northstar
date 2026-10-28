@@ -2,7 +2,7 @@ import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getAppFlowsData } from "@/lib/review-data";
-import { meditoCaptures, meditoScreenFile } from "@/lib/preview/medito-captures";
+import { meditoCaptureDefaults, meditoCaptures, meditoScreenFile } from "@/lib/preview/medito-captures";
 import { reviewScreenshotFileName } from "@/lib/app-data/review-media";
 import { MeditoReplica } from "@/components/preview/medito-replica";
 
@@ -30,5 +30,13 @@ export default async function MeditoReplicaPage() {
     if (typeof source !== "string" || !source.startsWith(tenantBase)) notFound();
     screenshots[capture.step] = source;
   }
-  return <MeditoReplica screenshots={screenshots} />;
+  const sessionBase = screenshots[8].slice(0, screenshots[8].indexOf("/screenshots/") + 1);
+  let defaults = meditoCaptureDefaults(null);
+  try {
+    const response = await fetch(`${sessionBase}enriched/step_008_screen_0008_enriched.json`, {
+      next: { revalidate: 300 }, signal: AbortSignal.timeout(2500),
+    });
+    if (response.ok) defaults = meditoCaptureDefaults(await response.json());
+  } catch { /* The captured screens remain available if optional field metadata is unavailable. */ }
+  return <MeditoReplica screenshots={screenshots} defaults={defaults} />;
 }

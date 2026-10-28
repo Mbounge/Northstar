@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { meditoCaptures, meditoScreenFile, meditoSectionForStep, validMeditoDemoEmail } from "../lib/preview/medito-captures";
+import { meditoCaptureDefaults, meditoCaptures, meditoScreenFile, meditoSectionForStep, validMeditoDemoEmail } from "../lib/preview/medito-captures";
 
 test("Medito preserves all 16 source captures, including the email detour and loading state", () => {
   assert.equal(meditoCaptures.length, 16);
@@ -17,4 +17,9 @@ test("Medito preserves all 16 source captures, including the email detour and lo
 test("local email entry requires a complete email before advancing", () => {
   for (const value of ["", "hello", "hello@", "hello@example", "hello there@example.com"]) assert.equal(validMeditoDemoEmail(value), false);
   assert.equal(validMeditoDemoEmail(" demo@example.com "), true);
+});
+
+test("editable captured states retain their source values without taking unrelated copy as field contents", () => {
+  assert.deepEqual(meditoCaptureDefaults({ elements: { text_blocks: [null, { text: "A code was sent" }, { text: " example@demo.test " }, { text: "123456" }, { text: "6/6" }] } }), { email: "example@demo.test", code: "123456" });
+  assert.deepEqual(meditoCaptureDefaults(null), { email: "", code: "" });
 });

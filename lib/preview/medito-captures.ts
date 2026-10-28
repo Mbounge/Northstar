@@ -43,3 +43,15 @@ export function meditoSectionForStep(step: number): number {
 export function validMeditoDemoEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
+
+export interface MeditoCaptureDefaults { email: string; code: string }
+
+/** Seed editable fields from the same tenant capture that supplies the pixels. */
+export function meditoCaptureDefaults(enrichment: unknown): MeditoCaptureDefaults {
+  const blocks = (enrichment as { elements?: { text_blocks?: unknown[] } } | null)?.elements?.text_blocks;
+  const texts = Array.isArray(blocks) ? blocks.flatMap((block) => {
+    const text = (block as { text?: unknown } | null)?.text;
+    return typeof text === "string" ? [text.trim()] : [];
+  }) : [];
+  return { email: texts.find(validMeditoDemoEmail) ?? "", code: texts.find((text) => /^\d{6}$/.test(text)) ?? "" };
+}

@@ -1,15 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
-import { meditoCaptures, meditoSections, meditoSectionForStep, validMeditoDemoEmail } from "@/lib/preview/medito-captures";
+import { meditoCaptures, meditoSections, meditoSectionForStep, validMeditoDemoEmail, type MeditoCaptureDefaults } from "@/lib/preview/medito-captures";
 import styles from "./medito-replica.module.css";
 
 function bounds(x: number, y: number, width: number, height: number): CSSProperties {
   return { left: `${x / 10.8}%`, top: `${y / 24}%`, width: `${width / 10.8}%`, height: `${height / 24}%` };
 }
 
-export function MeditoReplica({ screenshots }: { screenshots: Record<number, string> }) {
+export function MeditoReplica({ screenshots, defaults }: { screenshots: Record<number, string>; defaults: MeditoCaptureDefaults }) {
   const [step, setStep] = useState(1);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -20,6 +20,7 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
   const [imageReady, setImageReady] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
   const [imageAttempt, setImageAttempt] = useState(0);
+  const [advanceAfterLoad, setAdvanceAfterLoad] = useState<number | null>(null);
   const [history, setHistory] = useState<number[]>([]);
   const emailRef = useRef<HTMLInputElement>(null);
   const codeRef = useRef<HTMLInputElement>(null);
@@ -30,25 +31,30 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
   const emailValid = validMeditoDemoEmail(email);
   const codeValid = /^\d{6}$/.test(code);
 
-  const go = (next: number) => {
+  const go = useCallback((next: number, afterLoad?: number) => {
     if (next === step) return;
     setHistory((previous) => [...previous, step]);
+    setAdvanceAfterLoad(afterLoad ?? null);
+    if (!editingEmail && next >= 2 && next <= 4) setEmail(next === 2 ? "" : defaults.email);
+    if (!editingCode && [5, 6, 8].includes(next)) setCode(next === 8 ? defaults.code : "");
     setStep(next); setNote(""); setImageReady(false); setImageFailed(false);
-  };
+  }, [step, defaults, editingEmail, editingCode]);
   const back = () => {
     const previous = history.at(-1);
     if (previous === undefined) return;
     setHistory((items) => items.slice(0, -1));
+    setAdvanceAfterLoad(null);
     setStep(previous); setNote(""); setImageReady(false); setImageFailed(false);
   };
   const unavailable = (name: string) => setNote(`${name} wasn’t captured. The preview stays on the recorded screen.`);
   const reset = () => {
     if (step !== 1) setImageReady(false);
+    setAdvanceAfterLoad(null);
     setStep(1); setHistory([]); setEmail(""); setCode(""); setEditingEmail(false); setEditingCode(false); setNote(""); setImageFailed(false);
   };
   useEffect(() => {
     const background = document.body.style.background;
-    document.body.style.background = "transparent";
+    if (window.parent !== window) document.body.style.background = "transparent";
     const syncTheme = (event: StorageEvent) => {
       if (event.key === "theme") document.documentElement.classList.toggle("dark", event.newValue === "dark");
     };
@@ -59,9 +65,14 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
     // Warm just the next recorded image; preserve the original capture bytes and aspect ratio.
     if (screenshots[step + 1]) { const image = new Image(); image.src = screenshots[step + 1]; }
   }, [step, screenshots]);
+  useEffect(() => {
+    if (!imageReady || advanceAfterLoad === null) return;
+    const timer = window.setTimeout(() => go(advanceAfterLoad), 850);
+    return () => window.clearTimeout(timer);
+  }, [imageReady, advanceAfterLoad, go]);
 
-  const hit = (label: string, x: number, y: number, width: number, height: number, action: () => void) => (
-    <button key={label} type="button" className={styles.hit} style={bounds(x, y, width, height)} aria-label={label} title={label} onClick={action} disabled={!imageReady} />
+  const hit = (label: string, x: number, y: number, width: number, height: number, action: () => void, blocked = false) => (
+    <button key={label} type="button" className={styles.hit} style={bounds(x, y, width, height)} aria-label={label} title={label} onClick={action} disabled={blocked || !imageReady} />
   );
   const capturedButton = (label: string, x: number, y: number, width: number, height: number, disabled: boolean, action: () => void) => (
     <button type="button" className={styles.formContinue} style={bounds(x, y, width, height)} disabled={disabled || !imageReady} onClick={action}>{label}</button>
@@ -90,7 +101,7 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
         {emailScreen && <>
           <input ref={emailRef} className={`${styles.field} ${editingEmail ? styles.editing : styles.capturedField}`} style={bounds(88, 1280, 904, 126)} type="email" aria-label="Email" autoComplete="off" placeholder="Email" value={email}
             onFocus={() => setEditingEmail(true)} onChange={(event) => setEmail(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && emailValid) { setEditingCode(true); go(5); } }} disabled={!imageReady} />
-          {editingEmail ? capturedButton("Continue", 84, 1452, 912, 126, !emailValid, () => { setEditingCode(true); go(5); }) : hit("Continue", 84, 1452, 912, 126, () => { if (step > 2) go(5); else emailRef.current?.focus(); })}
+          {editingEmail ? capturedButton("Continue", 84, 1452, 912, 126, !emailValid, () => { setEditingCode(true); go(5); }) : hit("Continue", 84, 1452, 912, 126, () => go(5), step === 2)}
           {hit("Terms of Service", 625, 1625, 290, 50, () => unavailable("Terms of Service"))}
           {hit("Privacy Policy", 390, 1676, 300, 50, () => unavailable("Privacy Policy"))}
         </>}
@@ -99,12 +110,12 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
           <input ref={codeRef} className={`${styles.field} ${editingCode ? styles.editing : styles.capturedField}`} style={bounds(88, 1174, 904, 130)} inputMode="numeric" maxLength={6} aria-label="Verification code" autoComplete="off" placeholder="Enter verification code" value={code}
             onFocus={() => setEditingCode(true)} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} onKeyDown={(event) => { if (event.key === "Enter" && codeValid) go(9); }} disabled={!imageReady} />
           {editingCode && <span className={styles.counter} style={bounds(880, 1330, 90, 45)}>{code.length}/6</span>}
-          {editingCode ? capturedButton("Continue", 84, 1410, 912, 126, !codeValid, () => go(9)) : hit("Continue", 84, 1410, 912, 126, () => step === 8 ? go(9) : codeRef.current?.focus())}
+          {editingCode ? capturedButton("Continue", 84, 1410, 912, 126, !codeValid, () => go(9)) : hit("Continue", 84, 1410, 912, 126, () => go(9), step !== 8)}
           {hit("Resend code", 150, 1580, 780, 100, () => setNote("Demo only. No email was sent. You can enter any six digits to explore the next captured screen."))}
         </>}
         {step === 7 && <>
           {hit("Back to verification", 20, 140, 130, 140, () => go(6))}
-          {hit("Copy captured code", 84, 785, 315, 112, () => { setCode("983037"); setEditingCode(true); go(8); setNote("Captured demo code filled locally. This does not verify an account."); })}
+          {hit("Copy captured code", 84, 785, 315, 112, () => { setCode(defaults.code); setEditingCode(true); go(8); setNote("Captured demo code filled locally. This does not verify an account."); })}
         </>}
         {step === 9 && ["I have a regular practice", "A little, here and there", "Never tried it"].map((label, index) => hit(label, 64, 970 + index * 185, 952, 154, () => go(10)))}
         {step === 10 && <>
@@ -116,8 +127,7 @@ export function MeditoReplica({ screenshots }: { screenshots: Record<number, str
           {hit("Start first meditation", 105, 1235, 870, 155, () => unavailable("Meditation playback"))}
           {hit("Maybe later", 230, 1490, 620, 145, () => go(12))}
         </>}
-        {step === 12 && hit("See how to help", 84, 1980, 912, 145, () => go(14))}
-        {step === 13 && hit("View captured home", 0, 0, 1080, 2400, () => go(15))}
+        {step === 12 && hit("See how to help", 84, 1980, 912, 145, () => go(13, 14))}
         {step === 14 && <>
           {hit("Close donation appeal", 925, 150, 135, 130, () => go(15))}
           {["Monthly", "Yearly"].map((label, i) => hit(label, 65 + i * 475, 1050, 470, 130, () => i === 0 ? setNote("The captured donation screen shows monthly amounts.") : unavailable("Yearly donation amounts")))}
