@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { selectBrandPalette } from "@/lib/brand-kit/palette";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,7 @@ export interface ApkFontEntry {
   is_variable_font?: boolean;
   google_font_match?: string | null;
   font_url?: string | null;
+  preview_url?: string | null;
 }
 
 export interface ApkIntelligence {
@@ -644,14 +646,31 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
   const apkIcons    = apkIntelligence?.icons             ?? {};
   const apkAi       = apkIntelligence?.ai_vision_analysis ?? {};
 
-  const palette = apkPalette.length > 0 ? apkPalette : (cs.canonical_palette ?? []);
+  const isFlutter = apkIntelligence?.framework === "flutter";
+  const palette = selectBrandPalette<ApkColorEntry>({ framework: apkIntelligence?.framework, extracted: apkPalette, observed: apkAi.ai_palette ?? [], icon: apkIcons.dominant_colors ?? [], fallback: cs.canonical_palette ?? [] });
   const paletteVisible = paletteExpanded ? palette : palette.slice(0, PALETTE_INITIAL_COUNT);
 
-  const semanticEntries = Object.entries(apkSemantic).filter(([, v]) => isHex(v));
+  const semanticEntries = Object.entries(isFlutter ? {} : apkSemantic).filter(([, v]) => isHex(v));
   const aiPalette       = apkAi?.ai_palette ?? [];
   const iconColors      = apkIcons?.dominant_colors ?? [];
   const embeddedFonts   = apkTypo?.embedded_fonts ?? [];
-  const fontFamilies    = apkTypo?.font_families_summary ?? [];
+  const previewFont = embeddedFonts.find(font => font.weight_hint === "400" && font.style_hint !== "italic" && !/material.?icons/i.test(font.filename));
+  const previewFontUrl = previewFont?.preview_url || previewFont?.font_url;
+  const [loadedPreview, setLoadedPreview] = useState<{ url: string; family: string }>();
+  const previewFontFamily = loadedPreview?.url === previewFontUrl ? loadedPreview?.family : undefined;
+  useEffect(() => {
+    if (!previewFontUrl) return;
+    let cancelled = false;
+    const family = `NorthstarBrand${(appName || "App").replace(/[^a-z0-9]/gi, "")}`;
+    const face = new FontFace(family, `url(${JSON.stringify(previewFontUrl)})`);
+    void face.load().then(loaded => {
+      if (cancelled) return;
+      document.fonts.add(loaded);
+      setLoadedPreview({ url: previewFontUrl, family });
+    }).catch(() => { /* The named font and downloads remain available. */ });
+    return () => { cancelled = true; document.fonts.delete(face); };
+  }, [previewFontUrl, appName]);
+  const fontFamilies    = (apkTypo?.font_families_summary ?? []).filter(font => !/material.?icons/i.test(font.family_name));
   const googleFonts     = apkTypo?.google_fonts_used ?? [];
 
   const bgEntries    = Object.entries(cs.background_system ?? {}).filter(([, v]) => isHex(v));
@@ -701,16 +720,16 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
               {fwLabel                && <Pill variant="blue">{fwLabel}</Pill>}
               {cs.color_harmony       && <Pill>{cs.color_harmony}</Pill>}
               {cs.color_temperature   && <Pill>{cs.color_temperature} temperature</Pill>}
-              {palette.length > 0     && <Pill variant="amber">{palette.length} colors extracted</Pill>}
+              {palette.length > 0     && <Pill variant="amber">{palette.length} {isFlutter ? "palette colors" : "colors extracted"}</Pill>}
             </div>
 
             <h1 style={{ fontSize: "clamp(1.75rem,4vw,2.5rem)", fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, margin: "0 0 12px" }}>
               Brand kit
             </h1>
 
-            {(brandKit?.design_language_summary || apkAi?.designer_summary) && (
+            {(apkAi?.designer_summary || brandKit?.design_language_summary) && (
               <p className="border-black/10 dark:border-white/20 text-zinc-700 dark:text-zinc-300" style={{ fontSize: "1rem", lineHeight: 1.75, maxWidth: 720, margin: 0, paddingLeft: 16, borderLeftWidth: `3px`, borderLeftStyle: 'solid' }}>
-                {brandKit?.design_language_summary || apkAi?.designer_summary}
+                {apkAi?.designer_summary || brandKit?.design_language_summary}
               </p>
             )}
           </div>
@@ -738,6 +757,7 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
         ) : (
           <p className="text-zinc-500 dark:text-zinc-400" style={{ fontSize: 13 }}>No palette data extracted.</p>
         )}
+        {isFlutter && <p className="text-zinc-500 dark:text-zinc-400" style={{ marginTop: 12, fontSize: 12, lineHeight: 1.7 }}>UI colors are inferred from captured screens. The icon color and embedded font files are extracted from the APK. Android resource colors below can include framework defaults.</p>}
         {cs.brand_color_personality && (
           <p className="text-zinc-700 dark:text-zinc-300" style={{ marginTop: 14, fontSize: 13, lineHeight: 1.7, maxWidth: 680 }}>
             {cs.brand_color_personality}
@@ -926,10 +946,10 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
 
           {/* Aa specimen */}
           <div className="bg-white/50 dark:bg-white/5 border border-white/60 dark:border-white/10" style={{ borderRadius: 16, padding: "20px 24px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-            <div className="text-zinc-900 dark:text-zinc-100" style={{ fontSize: 64, fontWeight: 700, lineHeight: 1 }}>Aa</div>
+            <div className="text-zinc-900 dark:text-zinc-100" style={{ fontSize: 64, fontWeight: previewFontFamily ? 400 : 700, lineHeight: 1, fontFamily: previewFontFamily }}>Aa</div>
             <div style={{ textAlign: "right" as const }}>
               <div className="text-zinc-900 dark:text-zinc-100" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-                {ts.primary_font || apkAi?.ai_typography?.primary_font_guess || fontFamilies[0]?.family_name || "System Default"}
+                {fontFamilies[0]?.family_name || ts.primary_font || apkAi?.ai_typography?.primary_font_guess || "System Default"}
               </div>
               {(ts.secondary_font || fontFamilies[1]?.family_name) && (
                 <div className="text-zinc-800 dark:text-zinc-200" style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
@@ -1035,7 +1055,7 @@ export function BrandKitViewer({ brandKit, apkIntelligence, framework, appIconUr
         <div style={{ marginBottom: 32 }}>
           <Card>
             <SectionLabel>
-              Full color token map — {tokenEntries.length} tokens
+              {isFlutter ? "Bundled Android resources" : "Full color token map"} — {tokenEntries.length} tokens
             </SectionLabel>
             <p className="text-zinc-500 dark:text-zinc-400" style={{ fontSize: 12, fontWeight: 500, marginBottom: 16 }}>
               Every color token. Click any row to copy.

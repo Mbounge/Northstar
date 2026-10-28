@@ -52,7 +52,7 @@ export async function GET(
   try {
     const cacheKey = [
       "apk-intelligence",
-      "v1",
+      "v2",
       profile.customer_id,
       appName,
     ].join(":");
