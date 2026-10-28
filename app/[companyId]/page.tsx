@@ -222,6 +222,7 @@ export default async function CompanyDashboardPage({
       <VisitRecorder appName={decodedCompanyId} />
 
       <CompanyDashboardTabs
+        showWorkspaceNavigation={false}
         titleClassName={`${unbounded.className} text-[30px] font-[600] tracking-[-0.02em] leading-[100%] text-[#020B26] dark:text-white m-0`}
         productData={productData}
         header={identityHeader}

@@ -81,7 +81,7 @@ export async function GET(
   try {
     const cacheKey = [
       "flows",
-      "v1",
+      "v2",
       profile.customer_id,
       appName,
       platform,

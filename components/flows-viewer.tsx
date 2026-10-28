@@ -21,6 +21,8 @@ import {
   Copy,
   Link,
 } from "lucide-react";
+import { FlowCaptureCard, flowCaptureLabel } from "./flow-capture-card";
+import type { FlowCapture } from "@/lib/app-data/flow-captures";
 import { cn } from "@/lib/utils";
 import { reviewScreenshotKey } from "@/lib/app-data/review-media";
 import { writeImageToClipboard } from "@/lib/image-clipboard";
@@ -54,6 +56,7 @@ interface FlowNode {
 }
 
 interface FlowsData {
+  captures?: FlowCapture[];
   taxonomy: FlowNode[];
   screen_catalog?: Screen[];
 }
@@ -1066,6 +1069,7 @@ export function FlowsViewer({
   mode,
   platform = "mobile",
 }: FlowsViewerProps) {
+  const captures = flowsData.captures ?? [];
   const sanitizedTaxonomy = useMemo(() => {
     if (!flowsData?.taxonomy) return [];
 
@@ -1252,7 +1256,7 @@ export function FlowsViewer({
       observer.disconnect();
       if (anchorTimeout.current) clearTimeout(anchorTimeout.current);
     };
-  }, [allFlows, sanitizedTaxonomy]);
+  }, [allFlows, sanitizedTaxonomy, flowsData.captures]);
 
   useEffect(() => {
     if (activeFlowId && !isScrollAnchoring.current) {
@@ -1315,6 +1319,17 @@ export function FlowsViewer({
 
           <div className="flex-1 min-h-0 w-full overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <div className="flex flex-col pb-8 pt-2">
+              {captures.length > 0 && (
+                <div className="mx-4 mb-3 border-b border-black/5 pb-3 dark:border-white/10">
+                  <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Captures</p>
+                  {captures.map((capture) => (
+                    <button key={capture.role} data-id={`capture-${capture.role}`} onClick={() => handleSidebarSelect(`capture-${capture.role}`)}
+                      className={cn("w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-violet-500/10 focus-visible:outline-violet-400", activeFlowId === `capture-${capture.role}` ? "bg-violet-500/10 font-semibold text-violet-700 dark:text-violet-300" : "text-zinc-600 dark:text-zinc-400")}>
+                      {flowCaptureLabel(capture)}
+                    </button>
+                  ))}
+                </div>
+              )}
               {sanitizedTaxonomy.map((node) => (
                 <SidebarNode
                   key={node.id}
@@ -1332,6 +1347,19 @@ export function FlowsViewer({
         {/* ═══ MAIN CONTENT ═══ */}
         <div className="flex-1 min-w-0 bg-transparent">
           <div className="flex flex-col divide-y divide-black/5 dark:divide-white/5">
+            {captures.length > 0 && (
+              <section className="px-10 py-8" aria-label="App captures">
+                <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-white">App captures</h2>
+                <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">Start with the opening, then watch the flow in motion.</p>
+                <div data-flow-captures className="mt-6 flex gap-8 overflow-x-auto pb-3">
+                  {captures.map((capture) => (
+                    <div key={capture.role} ref={getRef(`capture-${capture.role}`)} data-section-id={`capture-${capture.role}`} className="scroll-mt-6">
+                      <FlowCaptureCard capture={capture} appName={appName} />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             {sanitizedTaxonomy.map((rootNode) => {
               const combinedScreens =
                 rootCombinedScreens.get(rootNode.id) ?? [];

@@ -55,7 +55,9 @@ export function CompanyDashboardTabs({
   dataBucketId,
   activeSnapshotId,
   snapshots,
+  showWorkspaceNavigation = true,
 }: {
+  showWorkspaceNavigation?: boolean;
   titleClassName: string;
   productData: any;
   header: React.ReactNode;
@@ -350,11 +352,11 @@ export function CompanyDashboardTabs({
       className="flex flex-col w-full"
     >
       <div className="flex items-center justify-between pt-8 pl-10 pr-[84px] shrink-0 relative z-20">
-        <div className="flex-1">
+        {showWorkspaceNavigation && <div className="flex-1">
           <h1 className={titleClassName}>North Star</h1>
-        </div>
+        </div>}
 
-        <div className="flex-none bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 p-1 rounded-none shadow-none">
+        {showWorkspaceNavigation && <div className="flex-none bg-white/10 dark:bg-white/5 backdrop-blur-md border border-white/20 dark:border-white/10 p-1 rounded-none shadow-none">
           <TabsList className="!bg-transparent h-auto p-0 gap-1 !border-none !shadow-none flex items-center">
             {[
               { value: "product" as TopTab, label: "product" },
@@ -381,7 +383,7 @@ export function CompanyDashboardTabs({
               </TabsTrigger>
             ))}
           </TabsList>
-        </div>
+        </div>}
 
         <div className="flex-1 flex justify-end items-center gap-3">
           <SnapshotSelector snapshots={snapshots} currentSnapshot={activeSnapshotId} />

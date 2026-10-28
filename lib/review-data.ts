@@ -1,4 +1,5 @@
 // lib/review-data.ts
+import { resolveFlowCaptures } from '@/lib/app-data/flow-captures';
 import { createClient } from '@supabase/supabase-js';
 import {
   isAbsoluteReviewMediaUrl,
@@ -648,7 +649,7 @@ export async function getAppViewerData(
   return await fetchStorageViewerData(appName, sessionType, tenantId, platformPrefix);
 }
 
-export async function getAppFlowsData(
+async function getAppFlowsScreensData(
   appName: string,
   tenantId: string,
   platform: "mobile" | "web",
@@ -725,6 +726,34 @@ export async function getAppFlowsData(
   const platformPrefix = await getPlatformPrefix(appName, tenantId, platform, sessionType);
 
   return await fetchStorageFlowsData(appName, sessionType, tenantId, platformPrefix);
+}
+
+/** Capture media is optional and must not prevent the existing flow library from loading. */
+export async function getAppFlowsData(
+  appName: string,
+  tenantId: string,
+  platform: "mobile" | "web",
+  sessionType: "onboarding" | "browsing"
+) {
+  const result = await getAppFlowsScreensData(appName, tenantId, platform, sessionType);
+  const screenshot = result.flowsData?.screen_catalog?.find(
+    (screen: any) => typeof screen?.screenshot_file === "string" && screen.screenshot_file.includes("/screenshots/")
+  )?.screenshot_file as string | undefined;
+  if (!screenshot) return result;
+  const sessionBase = screenshot.slice(0, screenshot.indexOf("/screenshots/") + 1);
+  const tenantAppBase = `${supabaseUrl}/storage/v1/object/public/reviews/${encodeURIComponent(tenantId)}/${encodeURIComponent(appName)}/`;
+  if (!sessionBase.startsWith(tenantAppBase)) return result;
+  try {
+    const response = await fetch(`${sessionBase}media_manifest.json`, {
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!response.ok) return result;
+    const captures = resolveFlowCaptures(await response.json(), sessionBase);
+    return captures.length ? { ...result, flowsData: { ...result.flowsData, captures } } : result;
+  } catch {
+    return result;
+  }
 }
 
 export async function getAppSessionData(
