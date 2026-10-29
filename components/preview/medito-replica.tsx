@@ -30,10 +30,10 @@ function HeaderArtwork({ name, className = "" }: { name: string; className?: str
   return <img className={`${styles.headerArtwork} ${className}`} src={`${art}${name}.png`} alt="" draggable={false} />;
 }
 
-export function MeditoReplica({ screenshots, demoCode }: { screenshots: Record<number, string>; demoCode: string }) {
+export function MeditoReplica({ screenshots, demoCode, embedded = false }: { screenshots: Record<number, string>; demoCode: string; embedded?: boolean }) {
   const [state, dispatch] = useReducer(meditoSimulationReducer, undefined, initialMeditoSimulation);
   const [note, setNote] = useState("");
-  const [scale, setScale] = useState(280 / 360);
+  const [scale, setScale] = useState(embedded ? 1 : 280 / 360);
   const phoneRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { screen } = state;
@@ -59,6 +59,19 @@ export function MeditoReplica({ screenshots, demoCode }: { screenshots: Record<n
     const timeout = window.setTimeout(() => dispatch({ type: "loaded" }), 650);
     return () => window.clearTimeout(timeout);
   }, [screen]);
+  useEffect(() => {
+    if (!embedded || window.parent === window) return;
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.type !== "northstar:medito-preview-navigate") return;
+      const destination = meditoSimulationSections.find(section => section.screen === event.data.section);
+      if (destination) { setNote(""); dispatch({ type: "navigate", screen: destination.screen }); }
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [embedded]);
+  useEffect(() => {
+    if (embedded && window.parent !== window) window.parent.postMessage({ type: "northstar:medito-preview-section", section: meditoActiveSection(screen) }, window.location.origin);
+  }, [embedded, screen]);
   const nativeBack = <button type="button" className={styles.nativeBack} aria-label="Back" onClick={() => send({ type: "back" })}><Icon name="arrow-left" /></button>;
   const primary = (label: string, action: () => void, disabled = false) => <button type="button" className={styles.primary} disabled={disabled} onClick={action}>{label}</button>;
   const progress = (step: number) => <div className={styles.progress}><div><i style={{ width: `${step / 3 * 100}%` }} /></div><span>Step {step} of 3</span></div>;
@@ -127,14 +140,16 @@ export function MeditoReplica({ screenshots, demoCode }: { screenshots: Record<n
     </div>; break;
   }
 
-  return <main className={`${styles.stage} ${meditoFont.variable}`}>
+  return <main data-medito-embedded={embedded ? "" : undefined} data-northstar-simulation-root={embedded ? "" : undefined} className={`${styles.stage} ${embedded ? styles.embedded : ""} ${meditoFont.variable}`}>
     <link rel="preload" as="image" href={screenshots[16]} />
     <aside className={styles.intro}><p className={styles.eyebrow}>Interactive preview</p><h1>Medito</h1><p>Try the recorded onboarding journey and explore its Home screen.</p><p className={styles.scope}>Simulated account entry. No real emails, payments or reminders are sent.</p></aside>
     <div className={styles.deviceColumn}><div ref={phoneRef} className={styles.phone}>
-      <div className={styles.viewport} style={{ zoom: scale } as CSSProperties} data-medito-screen={screen}>
+      <div data-northstar-simulation-viewport="" className={styles.viewport} style={{ zoom: scale } as CSSProperties} data-medito-screen={screen}>
         <div className={`${styles.statusBar} ${screen === "home" ? styles.homeStatus : ""} ${screen === "donation" || screen === "loading" ? styles.statusDark : ""}`} aria-hidden="true"><span>{screen === "welcome" || screen === "email" ? "9:48" : screen === "verify" ? "9:49" : screen === "home" || screen === "donation" || screen === "loading" ? "9:53" : "9:52"}<TriangleAlert size={12} fill="currentColor" /><Bell size={11} fill="currentColor" /><Settings size={12} /></span><span><Wifi size={15} fill="currentColor" /><i /><BatteryFull size={13} fill="currentColor" /></span></div>
-        <div ref={scrollRef} className={styles.appScroll}>{body}</div>
+        <div data-medito-scroll="" ref={scrollRef} className={styles.appScroll}>{body}</div>
         {screen === "home" && <nav className={styles.bottomNav} aria-label="Medito navigation">{[["Home", "home-simple-door"], ["Explore", "open-book"], ["Search", "search"], ["Settings", "settings"]].map(([label, icon]) => <button key={label} aria-current={label === "Home" ? "page" : undefined} onClick={() => label === "Home" ? scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" }) : boundary(`${label} screens`)}><Icon name={icon} size={22} /><span>{label}</span></button>)}</nav>}
+        {embedded && screen === "verify" && <button className={styles.embeddedCode} onClick={() => send({ type: "code", value: demoCode })}>Fill demo code {demoCode}</button>}
+        {embedded && note && <div className={styles.embeddedNote} role="status">{note}<button aria-label="Dismiss preview note" onClick={() => setNote("")}>×</button></div>}
         <div className={`${styles.androidBar} ${screen === "donation" || screen === "loading" ? styles.androidDark : ""}`} aria-hidden="true" />
       </div>
     </div></div>

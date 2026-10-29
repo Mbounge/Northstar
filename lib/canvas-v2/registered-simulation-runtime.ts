@@ -5,7 +5,7 @@ import type { ScreenAction } from './interactive-screen-runtime';
 export async function inspectRegisteredSimulation(frame: HTMLIFrameElement, command: ScreenAction, signal: AbortSignal) {
   signal.throwIfAborted();
   const doc = frame.contentDocument;
-  if (!doc?.querySelector('[data-graet-embedded]')) throw new Error('The authorized simulation is unavailable.');
+  if (!doc?.querySelector('[data-graet-embedded], [data-medito-embedded]')) throw new Error('The authorized simulation is unavailable.');
   const win = doc.defaultView!;
   const visible = (el: Element) => { const r = el.getBoundingClientRect(), s = win.getComputedStyle(el); return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < win.innerHeight && r.left < win.innerWidth && s.display !== 'none' && s.visibility !== 'hidden'; };
   const selector = (el: Element): string => el.id ? `#${CSS.escape(el.id)}` : el.parentElement ? `${selector(el.parentElement)} > ${el.tagName.toLowerCase()}:nth-child(${[...el.parentElement.children].indexOf(el) + 1})` : el.tagName.toLowerCase();
@@ -23,7 +23,7 @@ export async function inspectRegisteredSimulation(frame: HTMLIFrameElement, comm
     field.dispatchEvent(new EventConstructor('input', { bubbles: true }));
     field.dispatchEvent(new EventConstructor('change', { bubbles: true }));
   } else if (command.action === 'scroll') {
-    const scroll = field ?? doc.querySelector('[data-graet-scroll]');
+    const scroll = field ?? doc.querySelector('[data-graet-scroll], [data-medito-scroll]');
     scroll?.scrollTo(Number(command.x) || 0, Number(command.y) || 0);
   } else if (!['inspect', 'snapshot'].includes(command.action)) throw new Error('Unknown simulation action.');
   await new Promise<void>(resolve => win.requestAnimationFrame(() => win.requestAnimationFrame(() => resolve())));

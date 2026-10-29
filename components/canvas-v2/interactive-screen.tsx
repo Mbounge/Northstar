@@ -13,7 +13,7 @@ import { readCanvasV2ScreenAssetPixels, readCanvasV2ScreenModelBytes } from '@/l
 import { toCooperativeJpeg, toPreparedCanvasPng } from '@/lib/canvas-v2/cooperative-capture';
 import { noteCanvasInputActivity, waitForCanvasInputQuiet } from '@/lib/canvas-v2/capture-input-scheduler';
 import { createScreenPresentationCache, recordScreenPresentationTiming, screenPresentationCommandChangesState, type ScreenPresentation } from '@/lib/canvas-v2/screen-presentation-cache';
-import { canvasSimulatorForApp as simulatorForApp } from '@/lib/preview/simulator-registry';
+import { canvasPreviewForApp as simulatorForApp, canvasSimulatorForApp } from '@/lib/preview/simulator-registry';
 import { GRAET_PREVIEW_NAVIGATE, GRAET_PREVIEW_SECTION } from '@/lib/preview/graet-navigation';
 import { unpackScreenCaptureImages, bindScreenCaptureImages, screenCaptureImageDataUrls } from '@/lib/canvas-v2/screen-capture-resources';
 import { readSimulationSource, type SimulationSource } from '@/lib/canvas-v2/simulation-source';
@@ -402,8 +402,18 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const presentationRef = useRef<ScreenPresentation | undefined>(undefined);
   const presentationLease = useRef<ReturnType<typeof presentationCache.register> | undefined>(undefined);
   const dismissPresentation = useRef<(reason?: string) => void>(() => {});
+  // Mount registered frames only after this canvas host is attached and the
+  // effect has selected their approved URL. An eager first frame can retain a
+  // discarded about:blank browsing context while the scene is being attached.
   const [simulationSource,setSimulationSource]=useState<string>();
-  const [simulationLoading,setSimulationLoading]=useState(Boolean(screen.simulation));
+  const [simulationActive,setSimulationActive]=useState(!screen.simulation?.startOnInteraction);
+  const simulationActiveRef=useRef(simulationActive);simulationActiveRef.current=simulationActive;
+  const activateSimulation = useRef<() => void>(() => {});
+  const posterStep = screen.simulation?.appName === 'Medito' ? ({welcome:0,email:1,experience:8,reminders:9,firstMeditation:10,support:11,home:15} as const)[screen.simulation.section] : screen.simulation?.section === 'onboarding' ? 0 : 19;
+  const simulationPoster = screen.simulation ? evidence.find(asset => asset.app?.toLowerCase() === screen.simulation!.appName.toLowerCase() && asset.sequenceIndex === posterStep && asset.source?.permission === 'authorized' && asset.mediaType === 'image') : undefined;
+  const [simulationLoading,setSimulationLoading]=useState(Boolean(screen.simulation)&&!screen.simulation?.startOnInteraction);
+  const simulationRecovery = useRef({ encoded, attempted: false });
+  if (simulationRecovery.current.encoded !== encoded) simulationRecovery.current = { encoded, attempted: false };
   const directActions=useRef<{openTextEditor?:(target:CanvasV2ScreenFeedbackTarget)=>Promise<void>}>({});
   const [reload, setReload] = useState(0), [scale, setScale] = useState(1);
   const [assetDrag, setAssetDrag] = useState(false), [assetTarget, setAssetTarget] = useState<ScreenAssetTarget>();
@@ -881,16 +891,23 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       const currentFrame=frame.current;
       try {
         const doc=currentFrame?.contentDocument;
+        host.current?.setAttribute('data-canvas-v2-simulation-startup', JSON.stringify({connected:Boolean(currentFrame?.isConnected),document:Boolean(doc),state:doc?.readyState,blank:doc?.URL==='about:blank',children:doc?.body?.childElementCount,text:Boolean(doc?.body?.textContent?.trim()),sourceMatches:currentFrame?.getAttribute('src')===expectedSimulationSource,recovered:simulationRecovery.current.attempted}));
         // Retry only an empty first-party document, once during startup. Never
         // reload a live app, an auth page or an inaccessible redirected frame.
         if(doc?.readyState==='complete'&&doc.body&&!doc.body.childElementCount&&!doc.body.textContent?.trim()&&currentFrame?.getAttribute('src')===expectedSimulationSource){
           const source=new URL(expectedSimulationSource,window.location.origin),actual=new URL(doc.URL);
-          if(source.origin===window.location.origin&&(doc.URL==='about:blank'||actual.origin===source.origin&&actual.pathname===source.pathname))currentFrame.src=expectedSimulationSource;
+          if(source.origin===window.location.origin&&(doc.URL==='about:blank'||actual.origin===source.origin&&actual.pathname===source.pathname)&&!simulationRecovery.current.attempted){
+            // Reassigning the same src can leave Chromium's discarded initial
+            // browsing context blank. Remount once, as the explicit Retry does.
+            simulationRecovery.current.attempted=true;
+            setReload(value=>value+1);
+            return;
+          }
         }
       } catch { /* Cross-origin/auth failures remain explicit; never bypass them. */ }
       simulationStartupTimer=window.setTimeout(failSimulationStartup,6000);
     };
-    setSimulationLoading(Boolean(simulation));
+    setSimulationLoading(Boolean(simulation)&&(!simulation?.startOnInteraction||simulationActiveRef.current));
     const pending = new Map<string, { resolve: (value: ScreenResult) => void; reject: (error: Error) => void }>();
     setError('');
     const retainRuntimeState = (value:unknown) => {
@@ -910,13 +927,13 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       }
       if (event.source === frame.current?.contentWindow && event.data?.protocol === SCREEN_PROTOCOL && event.data.token === token && event.data.assetDrag && !simulation) { setAssetDrag(true); return; }
       if (event.source !== frame.current?.contentWindow) return;
-      if (simulation && event.origin === window.location.origin && event.data?.type === GRAET_PREVIEW_SECTION) {
+      if (simulation && event.origin === window.location.origin && event.data?.type === (simulation.appName === 'GRAET' ? GRAET_PREVIEW_SECTION : 'northstar:medito-preview-section')) {
         if (!simulationDocument) { simulationDocument = frame.current?.contentDocument ?? null; simulationDocument?.addEventListener('keydown', simulationEscape); for (const type of ['pointerdown', 'wheel', 'keydown', 'input']) simulationDocument?.addEventListener(type, simulationInput, { capture: true, passive: true }); }
-        if (!navigated) { navigated = true; frame.current?.contentWindow?.postMessage({ type: GRAET_PREVIEW_NAVIGATE, section: simulation.section }, window.location.origin); }
+        if (!navigated) { navigated = true; frame.current?.contentWindow?.postMessage({ type: simulation.appName === 'GRAET' ? GRAET_PREVIEW_NAVIGATE : 'northstar:medito-preview-navigate', section: simulation.section }, window.location.origin); }
         // Initial onboarding readiness is not readiness for the requested home
         // section. Otherwise the agent can capture the dark splash while the
         // visible preview finishes navigating to its light Career home.
-        if(event.data.section===simulation.section){ready=true;stopSimulationStartup();setSimulationLoading(false);setError('');}
+        if(event.data.section===simulation.section){host.current?.setAttribute('data-canvas-v2-simulation-startup','ready');ready=true;stopSimulationStartup();setSimulationLoading(false);setError('');}
         return;
       }
       if (event.data?.protocol !== SCREEN_PROTOCOL || event.data.token !== token) return;
@@ -1028,6 +1045,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     };
     window.addEventListener('message', receive);
     const controller: ScreenController = { encoded: sourceToMount, run: async (command, signal) => {
+      if (simulation) activateSimulation.current();
       const started = Date.now();
       while (!ready && Date.now() - started < 15000) {
         signal.throwIfAborted(); aborter.signal.throwIfAborted();
@@ -1070,7 +1088,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
         if (changesPresentation) { presentationMutations--; lease?.invalidate(); presentationVisibility(); }
       }
     } };
-    if (simulation) controller.readSource = async signal => {
+    if (simulation && canvasSimulatorForApp(simulation.appName)) controller.readSource = async signal => {
       await controller.run({ action: 'inspect' }, signal);
       const doc = frame.current?.contentDocument;
       if (!doc) throw new Error('The simulation is unavailable.');
@@ -1091,10 +1109,16 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       try {
         if (simulation) {
           setRuntime('');
-          const fixture=process.env.NODE_ENV!=='production'&&window.location.pathname.startsWith('/canvas-v2-e2e/');
-          expectedSimulationSource=fixture?'/canvas-v2-e2e/graet-preview':`${simulatorForApp(simulation.appName)!.embedPath}&canvas=1`;
-          setSimulationSource(expectedSimulationSource);
-          simulationStartupTimer=window.setTimeout(recoverEmptySimulation,4000);
+          const start = () => {
+            if (expectedSimulationSource || aborter.signal.aborted) return;
+            setSimulationActive(true);setSimulationLoading(true);
+            const fixture=simulation.appName==='GRAET'&&process.env.NODE_ENV!=='production'&&window.location.pathname.startsWith('/canvas-v2-e2e/');
+            expectedSimulationSource=fixture?'/canvas-v2-e2e/graet-preview':new URL(`${simulatorForApp(simulation.appName)!.embedPath}&canvas=1`,window.location.origin).href;
+            setSimulationSource(expectedSimulationSource);
+            simulationStartupTimer=window.setTimeout(recoverEmptySimulation,4000);
+          };
+          activateSimulation.current = start;
+          if (!simulation.startOnInteraction || simulationActiveRef.current) start();
           return;
         }
         const retained = canvasV2ScreenBoundAssets(runtimeScreen).map(id => {
@@ -1144,7 +1168,11 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     {/* Keep live frame layout dimensions stable between visits. Offscreen
         graphics still use their explicit presentation gate. */}
     <div data-northstar-device-frame={device} className="absolute inset-0 overflow-hidden" onFocusCapture={() => {dismissPresentation.current('focus');if(editing.mode==='preview')editing.previewFocus?.(nodeId)}} style={{contentVisibility: 'visible', borderRadius:deviceMetrics.radius*scale,background:'transparent',boxShadow:device !== 'none' && !screen.simulation ? `0 0 0 ${deviceMetrics.bezel*scale}px #101117,0 0 0 ${(deviceMetrics.bezel+1)*scale}px #626777,0 ${12*scale}px ${32*scale}px #00000038` : undefined}}>
-      {(runtime || screen.simulation) && <iframe key={screen.simulation ? `${encoded}:${reload}` : undefined} ref={frame} title={screen.title} src={screen.simulation ? simulationSource : undefined} srcDoc={screen.simulation ? undefined : runtime} sandbox={screen.simulation ? "allow-scripts allow-same-origin" : "allow-scripts allow-forms"} {...(screen.simulation ? {} : { credentialless: "" })} referrerPolicy="no-referrer" style={{ width: screen.width, height: screen.height, border: 0, display: 'block', transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'auto' }} />}
+      {(runtime || screen.simulation && simulationActive && simulationSource) && <iframe loading="eager" key={screen.simulation ? `${encoded}:${reload}` : undefined} ref={frame} title={screen.title} src={screen.simulation ? simulationSource : undefined} srcDoc={screen.simulation ? undefined : runtime} sandbox={screen.simulation ? "allow-scripts allow-same-origin" : "allow-scripts allow-forms"} {...(screen.simulation ? {} : { credentialless: "" })} referrerPolicy="no-referrer" style={{ width: screen.width, height: screen.height, border: 0, display: 'block', transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'auto' }} />}
+      {screen.simulation&&!simulationActive&&<button type="button" aria-label={`Try ${screen.simulation.appName} live preview`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();activateSimulation.current()}} className="absolute inset-0 h-full w-full cursor-pointer overflow-hidden border-0 bg-[#191919] p-0" style={{borderRadius:deviceMetrics.radius*scale}}>
+        {simulationPoster&&<img src={simulationPoster.url} alt={`${screen.simulation.appName} captured entry screen`} draggable={false} className="h-full w-full object-cover"/>}
+        <span className="absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/80 to-transparent pb-5 pt-12"><span className="rounded-full border border-white/25 bg-black/65 px-4 py-2 text-xs font-medium text-white">Try {screen.simulation.appName} ↗</span></span>
+      </button>}
       {screen.simulation&&simulationLoading&&!error&&<div role="status" aria-label="Loading app preview" className="pointer-events-none absolute inset-0 grid place-content-center"><span className="rounded-lg bg-[#f6f4fb] px-3 py-2 text-xs text-[#625a73] shadow-sm dark:bg-[#231f2c] dark:text-[#c9c1db]">Loading app preview…</span></div>}
       {presentation?.version === presentationVersion && <img data-canvas-v2-presentation-preview data-presentation-active={returning} aria-hidden="true" alt="" draggable={false} src={presentation.url} className="pointer-events-none absolute left-0 top-0" style={{ width: screen.width, height: screen.height, maxWidth: 'none', maxHeight: 'none', transform: `scale(${scale})`, transformOrigin: 'top left', willChange: 'opacity', opacity: returning ? 1 : 0.001 }} />}
       {editing.mode==='design'&&!editingActive&&<div data-canvas-v2-design-surface className="absolute inset-0" onDoubleClick={event=>{if(screen.simulation)return;event.stopPropagation();editing.enter(nodeId)}}/>}

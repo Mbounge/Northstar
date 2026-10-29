@@ -1589,7 +1589,7 @@ test("marquee selection targets individual leaves instead of semantic group boun
 test("transparent semantic wrappers never return as implicit groups through Layers", () => {
   const compiler = readFileSync("lib/canvas-v2/native-scene.ts", "utf8");
   const workspace = readFileSync("components/canvas-v2/canvas-v2-workspace.tsx", "utf8");
-  assert.match(compiler, /!explicitGroup && !ownsVisibleSurface && hasStableDescendant\(node\)/);
+  assert.match(compiler, /!explicitGroup && node\.attributes\["data-canvas-v2-crop-frame"\] !== "true" && !ownsVisibleSurface && hasStableDescendant\(node\)/);
   assert.match(compiler, /node\.selectable = false/);
   assert.match(workspace, /selectableIds\.has\(node\.nodeId\)/);
   assert.match(workspace, /Explicit user-created groups are selectable scene elements/);

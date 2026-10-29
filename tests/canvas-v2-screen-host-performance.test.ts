@@ -134,9 +134,10 @@ test('parallel reference capture rejects changed live content, scroll attachment
 test('simulation startup retries only an empty approved document and never reloads live content or auth redirects',()=>{
  for(const kind of ['blank','empty-approved','live','loading','auth','cross-origin','changed-src','inaccessible','ready','aborted'] as const){
   let reloads=0,timers=0;const doc={URL:kind==='blank'?'about:blank':kind==='cross-origin'?'https://other.example/preview':kind==='auth'?'https://northstar.example/login':'https://northstar.example/preview',readyState:kind==='loading'?'loading':'complete',body:{childElementCount:kind==='live'?1:0,textContent:''}};
-  const element={get contentDocument(){if(kind==='inaccessible')throw Error('Cross origin');return doc;},getAttribute:()=>kind==='changed-src'?'/changed':'/preview',set src(value:string){assert.equal(value,'/preview');reloads++;}};
-  const recover=run(`(${declaration('recoverEmptySimulation').initializer!.getText(tree)})`,{ready:kind==='ready',aborter:{signal:{aborted:kind==='aborted'}},frame:{current:element},expectedSimulationSource:'/preview',URL,window:{location:{origin:'https://northstar.example'},setTimeout:(_callback:unknown,ms:number)=>{assert.equal(ms,6000);timers++;return timers;}},simulationStartupTimer:undefined,failSimulationStartup:()=>{}}) as ()=>void;
-  recover();assert.equal(reloads,kind==='blank'||kind==='empty-approved'?1:0,kind);assert.equal(timers,kind==='ready'||kind==='aborted'?0:1,kind);
+  const element={get contentDocument(){if(kind==='inaccessible')throw Error('Cross origin');return doc;},getAttribute:()=>kind==='changed-src'?'/changed':'/preview',set src(_value:string){assert.fail('Reassigning src cannot recover a discarded browsing context');}};
+  const recover=run(`(${declaration('recoverEmptySimulation').initializer!.getText(tree)})`,{host:{current:undefined},ready:kind==='ready',aborter:{signal:{aborted:kind==='aborted'}},frame:{current:element},expectedSimulationSource:'/preview',URL,window:{location:{origin:'https://northstar.example'},setTimeout:(_callback:unknown,ms:number)=>{assert.equal(ms,6000);timers++;return timers;}},simulationStartupTimer:undefined,simulationRecovery:{current:{attempted:false}},setReload:(update:(n:number)=>number)=>{assert.equal(update(0),1);reloads++;},failSimulationStartup:()=>{}}) as ()=>void;
+  recover();assert.equal(reloads,kind==='blank'||kind==='empty-approved'?1:0,kind);assert.equal(timers,['ready','aborted','blank','empty-approved'].includes(kind)?0:1,kind);
+  if(kind==='blank'||kind==='empty-approved'){recover();assert.equal(reloads,1,'Automatic reconnect is bounded to one remount');assert.equal(timers,1,'A second failure becomes an explicit error');}
  }
 });
 
@@ -150,4 +151,12 @@ test('a registered capture waits for its late controller and never rasterizes fi
  }
  const capture=run(`(${fn.getText(tree).replace('export ','')})`,{controllers:new Map([['preview',{encoded:'new version'}]]),parseCanvasV2Screen:()=>({simulation:{appName:'GRAET'}}),inspectCanvasV2Screen:async()=>({text:'Old inspection'}),rasterizeScreenSnapshot:()=>{throw Error('Unsafe fallback.');}}) as (nodeId:string,encoded:string,signal:AbortSignal)=>Promise<unknown>;
  await assert.rejects(capture('preview','exact',new AbortController().signal),/preview changed before capture/);
+});
+
+test('registered frames mount only once the connected host has selected their approved URL',()=>{
+ const condition=find((node):node is ts.BinaryExpression=>ts.isBinaryExpression(node)&&node.operatorToken.kind===ts.SyntaxKind.BarBarToken&&node.getText(tree)==='runtime || screen.simulation && simulationActive && simulationSource');
+ const mount=(runtime:string,simulationSource:string|undefined)=>run(condition.getText(tree),{runtime,screen:{simulation:{appName:'Medito'}},simulationActive:true,simulationSource});
+ assert.equal(Boolean(mount('',undefined)),false,'Do not create an eager about:blank frame during the initial scene commit');
+ assert.equal(Boolean(mount('','/preview-lab/replica/medito?embedded=1&canvas=1')),true);
+ assert.equal(Boolean(mount('<html>authored runtime</html>',undefined)),true,'Authored srcdoc apps retain their existing mount path');
 });

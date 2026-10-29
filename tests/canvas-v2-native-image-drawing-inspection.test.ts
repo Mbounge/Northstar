@@ -53,3 +53,18 @@ test('token-based drawing stroke resolves from the child and image fit reads dur
  const contained=applyCanvasV2NativeSceneMutation(crop,{kind:'style',nodeId:'photo',property:'object-fit',value:'contain'});
  assert.equal(inspect(contained.nodes[0],new Map(contained.nodes.map(node=>[node.id,node])),element).visualStyle?.objectFit,'contain');
 });
+
+test('a transparent crop remains selectable after compilation while its oversized source pixels stay excluded', () => {
+ const file='lib/canvas-v2/native-scene.ts',tree=ts.createSourceFile(file,readFileSync(file,'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+ let selectionLoop:ts.ForOfStatement|undefined;
+ const walk=(node:ts.Node)=>{if(ts.isForOfStatement(node)&&node.getText(tree).includes('const explicitGroup = node.attributes'))selectionLoop=node;ts.forEachChild(node,walk)};walk(tree);assert.ok(selectionLoop);
+ const frame=structuredClone(crop.nodes.find(node=>node.id==='photo')!),source=structuredClone(pixels(crop));
+ assert.equal(source.selectable,false);frame.selectable=true;
+ const ordinary={...structuredClone(frame),id:'layout-wrapper',attributes:{},selectable:true};
+ const context=vm.createContext({nodes:[frame,source,ordinary],canvasV2NativeSceneNodeOwnsVisibleSurface:()=>false,hasStableDescendant:()=>true});
+ vm.runInContext(ts.transpileModule(selectionLoop.getText(tree),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+ assert.equal(frame.selectable,true,'The crop frame is the visible selection, even when its pixels have stable IDs');
+ assert.equal(source.selectable,false,'The hidden source must never become a second large selection');
+ assert.equal(ordinary.selectable,false,'Ordinary structural wrappers still remain unselectable');
+ assert.equal(frame.geometry.width,320);assert.equal(frame.geometry.height,180);
+});

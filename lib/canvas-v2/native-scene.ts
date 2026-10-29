@@ -1376,7 +1376,7 @@ export function compileCanvasV2NativeScene(input: {
   for (const node of nodes) {
     const explicitGroup = node.attributes["data-canvas-v2-group"] === "true";
     const ownsVisibleSurface = canvasV2NativeSceneNodeOwnsVisibleSurface(node);
-    if (node.attributes["data-canvas-v2-layout-only"] === "true" || (!explicitGroup && !ownsVisibleSurface && hasStableDescendant(node))) node.selectable = false;
+    if (node.attributes["data-canvas-v2-layout-only"] === "true" || (!explicitGroup && node.attributes["data-canvas-v2-crop-frame"] !== "true" && !ownsVisibleSurface && hasStableDescendant(node))) node.selectable = false;
   }
 
   // Source documents from early V2 phases may place authored siblings directly

@@ -18,3 +18,12 @@
 .homeHero .homeHeading,.homeHero .homeProgress{opacity:0}
 .homeHero .playCourse{background:transparent;color:transparent;box-shadow:none}
 .homeStatus{visibility:hidden}
+
+/* A registered canvas preview presents the actual app at its captured viewport. */
+.stage.embedded{display:block;position:relative;width:360px;height:800px;min-height:0;padding:0;overflow:hidden;background:transparent}
+.embedded>.intro,.embedded>.navigation{display:none}
+.embedded>.deviceColumn{width:360px}
+.embedded .phone{border-radius:0;outline:none;box-shadow:none}
+.embeddedNote{position:absolute;z-index:30;inset:auto 12px 24px;padding:12px 30px 12px 12px;border:1px solid #666;border-radius:8px;background:#242126;color:#fff;font:12px/1.5 Arial,sans-serif}
+.embeddedNote button{position:absolute;right:8px;top:5px;background:none;border:0;color:inherit;font-size:20px}
+.embeddedCode{position:absolute;bottom:30px;left:90px;z-index:20;padding:8px 12px;border:1px solid #666;border-radius:6px;background:#242126;color:white;font-size:12px}

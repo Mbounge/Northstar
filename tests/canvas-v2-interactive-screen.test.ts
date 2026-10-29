@@ -725,3 +725,15 @@ test('repeated saved-source reads reuse validation without sharing mutable sourc
  const tampered=btoa(JSON.stringify({...second,css:'@import "https://invalid.example/style";'}));
  assert.throws(()=>parseCanvasV2Screen(tampered),/external stylesheets/);
 });
+
+test('Medito embeds the recorded native runtime with an Android viewport and bounded entry sections', () => {
+  const preview = { ...screen, title: 'Medito · personalization', device: 'android' as const, width: 360, height: 800, html: '<div></div>', css: '', javascript: '', referenceAssetIds: [], simulation: { appName: 'Medito' as const, section: 'experience' as const } };
+  assert.deepEqual(parseCanvasV2Screen(encodeCanvasV2Screen(preview)), preview);
+  for (const patch of [{ width: 383 }, { height: 820 }, { device: 'ios' }, { javascript: 'fetch("/api/private")' }, { simulation: { appName: 'Medito', section: 'sleep' } }]) assert.throws(() => validateCanvasV2Screen({ ...preview, ...patch }));
+});
+
+test('a research preview retains explicit interaction activation without accepting arbitrary activation code',()=>{
+ const preview={...screen,title:'Medito',device:'android' as const,width:360,height:800,html:'<div></div>',css:'',javascript:'',referenceAssetIds:[],simulation:{appName:'Medito' as const,section:'experience' as const,startOnInteraction:true}};
+ assert.deepEqual(parseCanvasV2Screen(encodeCanvasV2Screen(preview)),preview);
+ assert.throws(()=>validateCanvasV2Screen({...preview,simulation:{...preview.simulation,startOnInteraction:'eval()'}}),/activation mode/);
+});

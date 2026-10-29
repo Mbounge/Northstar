@@ -7,7 +7,8 @@ import { MeditoReplica } from "@/components/preview/medito-replica";
 
 export const dynamic = "force-dynamic";
 
-export default async function MeditoReplicaPage() {
+export default async function MeditoReplicaPage({ searchParams }: { searchParams: Promise<{ embedded?: string }> }) {
+  const embedded = (await searchParams).embedded === "1";
   const db = await createClient();
   const { data: { user } } = await db.auth.getUser();
   if (!user) redirect("/login");
@@ -39,5 +40,5 @@ export default async function MeditoReplicaPage() {
     screenshots[capture.step] = source;
   }
   // Local demo verification is independent of any real or expired email code.
-  return <MeditoReplica screenshots={screenshots} demoCode="123456" />;
+  return <MeditoReplica screenshots={screenshots} demoCode="123456" embedded={embedded} />;
 }

@@ -1,6 +1,6 @@
 import {validateScreenDesignSystem, type ScreenDesignSystem} from './screen-design-edit';
 import { isGraetPreviewSection, type GraetPreviewSection } from '../preview/graet-navigation';
-import { canvasSimulatorForApp as simulatorForApp } from '../preview/simulator-registry';
+import { canvasPreviewForApp as simulatorForApp, meditoPreviewSections, type MeditoPreviewSection } from '../preview/simulator-registry';
 import type { CanvasV2EvidenceAsset } from './types';
 import type { CanvasV2TrustedRuntimeLibrary } from './screen-trusted-runtime';
 import { validateCanvasV2WasmModules, type CanvasV2WasmModule } from './screen-wasm';
@@ -55,7 +55,7 @@ export interface CanvasV2InteractiveScreen {
   referenceAppearance?: 'light' | 'dark' | 'mixed';
   productIdentityId?: string;
   mockData?: Record<string, unknown>;
-  simulation?: { appName: 'GRAET'; section: GraetPreviewSection };
+  simulation?: { appName: 'GRAET'; section: GraetPreviewSection; startOnInteraction?: boolean } | { appName: 'Medito'; section: MeditoPreviewSection; startOnInteraction?: boolean };
   title: string;
   width: number;
   height: number;
@@ -124,9 +124,10 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
     || typeof screen.javascript !== 'string' || screen.javascript.length > 40_000
     || !Array.isArray(screen.referenceAssetIds) || screen.referenceAssetIds.length > 100
     || screen.referenceAssetIds.some(id => !isCanvasV2ScreenAssetId(id)) || screen.referenceAssetIds.reduce((size,id) => size + (typeof id === 'string' ? id.length : 0), 0) > 24000) throw new Error('Invalid interactive screen. Use finite viewport dimensions and bounded HTML/CSS/JavaScript.');
-  if (screen.simulation && (screen.simulation.appName !== 'GRAET' || !simulatorForApp(screen.simulation.appName) || !isGraetPreviewSection(screen.simulation.section) || screen.html !== '<div></div>' || screen.css || screen.javascript || screen.referenceAssetIds.length || screen.width !== 383 || screen.height !== 820)) throw new Error('Registered simulations use their approved runtime and fixed logical viewport; do not supply executable source or URLs.');
+  if (screen.simulation && (!simulatorForApp(screen.simulation.appName) || !(screen.simulation.appName === 'GRAET' ? isGraetPreviewSection(screen.simulation.section) : screen.simulation.appName === 'Medito' && meditoPreviewSections.some(section => section === screen.simulation!.section)) || screen.html !== '<div></div>' || screen.css || screen.javascript || screen.referenceAssetIds.length || screen.width !== (screen.simulation.appName === 'GRAET' ? 383 : 360) || screen.height !== (screen.simulation.appName === 'GRAET' ? 820 : 800))) throw new Error('Registered simulations use their approved runtime and fixed logical viewport; do not supply executable source or URLs.');
+  if (screen.simulation?.startOnInteraction !== undefined && typeof screen.simulation.startOnInteraction !== 'boolean') throw new Error('Choose a boolean preview activation mode.');
   if (screen.productIdentityId !== undefined && (typeof screen.productIdentityId !== 'string' || !/^[\w.-]{1,80}$/.test(screen.productIdentityId) || screen.simulation)) throw new Error('Use an existing product identity for authored screens.');
-  if (screen.device !== undefined && (!['ios','android','none'].includes(screen.device) || screen.simulation && screen.device !== 'ios')) throw new Error('Choose an iOS, Android or unframed web presentation.');
+  if (screen.device !== undefined && (!['ios','android','none'].includes(screen.device) || screen.simulation && screen.device !== (screen.simulation.appName === 'GRAET' ? 'ios' : 'android'))) throw new Error('Choose an iOS, Android or unframed web presentation.');
   if(screen.referenceNodeId!==undefined&&(typeof screen.referenceNodeId!=='string'||!/^[\w.:-]{1,240}$/.test(screen.referenceNodeId)||screen.simulation))throw new Error('Choose a current preview reference for an authored screen.');
   if(screen.referenceIntent!==undefined&&!['faithful','inspired','original'].includes(screen.referenceIntent))throw new Error('Choose faithful, inspired or original reference intent.');
   if (screen.trustedRuntimeLibraries !== undefined && (!Array.isArray(screen.trustedRuntimeLibraries) || screen.trustedRuntimeLibraries.length > 1 || new Set(screen.trustedRuntimeLibraries).size !== screen.trustedRuntimeLibraries.length || screen.trustedRuntimeLibraries.some(library => library !== 'three' && library !== 'three-webgpu') || screen.simulation)) throw new Error('Use only the pinned Three runtime for an explicitly 3D authored screen.');
@@ -149,7 +150,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   for (const match of (html + '\n' + css + '\n' + javascript).matchAll(SCREEN_ASSET_PATTERN)) {
     if (!tokens.has(match[1])) throw new Error('Declare and retain the exact asset handle before binding it in a screen.');
   }
-  return { version: 1, ...(screen.design?{design:validateScreenDesignSystem(screen.design)}:{}), ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), ...(screen.mockData ? {mockData:structuredClone(screen.mockData)} : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.trustedRuntimeLibraries?.length ? { trustedRuntimeLibraries: [...screen.trustedRuntimeLibraries] } : {}), ...(wasmModules?.length ? {wasmModules} : {}), ...(screen.simulation ? { simulation: { appName: screen.simulation.appName, section: screen.simulation.section } } : {}) };
+  return { version: 1, ...(screen.design?{design:validateScreenDesignSystem(screen.design)}:{}), ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), ...(screen.mockData ? {mockData:structuredClone(screen.mockData)} : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.trustedRuntimeLibraries?.length ? { trustedRuntimeLibraries: [...screen.trustedRuntimeLibraries] } : {}), ...(wasmModules?.length ? {wasmModules} : {}), ...(screen.simulation ? { simulation: { ...screen.simulation } } : {}) };
 }
 export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
   return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {

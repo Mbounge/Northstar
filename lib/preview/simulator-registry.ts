@@ -23,3 +23,9 @@ export function canvasSimulatorForApp(appName: string): Simulator | null {
   const simulator = simulatorForApp(appName);
   return simulator?.assetRoot ? simulator : null;
 }
+
+/** View-only registered previews do not grant source extraction capabilities. */
+export const canvasPreviewForApp = simulatorForApp;
+
+export const meditoPreviewSections = ["welcome", "email", "experience", "reminders", "firstMeditation", "support", "home"] as const;
+export type MeditoPreviewSection = (typeof meditoPreviewSections)[number];
