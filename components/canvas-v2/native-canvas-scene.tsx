@@ -1,4 +1,5 @@
 "use client";
+import { CANVAS_V2_NATIVE_FONT_CSS } from "@/lib/canvas-v2/screen-fonts";
 
 import { CANVAS_V2_THEME_TOKENS } from "@/lib/canvas-v2/theme-context";
 import { PRIVATE_RENDER_SURFACE_STYLE } from "./private-render-surface";
@@ -1596,6 +1597,7 @@ export const CanvasV2NativeCanvasScene = forwardRef<CanvasV2NativeCanvasSceneHan
           onSelectionRefresh?.(allInspectable());
         }}
       >
+        <style data-canvas-v2-native-fonts>{CANVAS_V2_NATIVE_FONT_CSS}</style>
         <style data-canvas-v2-artifact-styles="scoped">{publicSceneCss}</style>
         <style>{nativeLayoutGuard}</style>
         <CanvasV2ScreenTheme.Provider value={theme}><CanvasV2ScreenAssets.Provider value={revision.evidence}>{renderedRootNodes}</CanvasV2ScreenAssets.Provider></CanvasV2ScreenTheme.Provider>

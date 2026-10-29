@@ -71,3 +71,13 @@ export async function inspectCanvasV2FontPixels(pixels:string,signal:AbortSignal
     signal.throwIfAborted();return {pixels:canvas.toDataURL('image/png'),loaded:face.status==='loaded',note:'Actual glyph specimen from the retained font bytes. This is typeface inspection, not proof of a matching reference, source font weight, or app layout.'};
   }finally{document.fonts.delete(face);}
 }
+
+/** Fixed local faces shared by the measured compiler and visible native scene.
+ * Authored canvas CSS still cannot introduce URL loads. These resources load
+ * only when a native text object explicitly chooses their family. */
+export const CANVAS_V2_NATIVE_FONT_CSS = [
+  ...faces.map(([weight,style,name])=>`@font-face{font-family:"Mona Sans";src:url("/graet-replica/fonts/MonaSans-${name}.ttf") format("truetype");font-weight:${weight};font-style:${style};font-display:block}`),
+  '@font-face{font-family:"Instrument Serif";src:url("/northstar/design-studies/fonts/InstrumentSerif-Regular.ttf") format("truetype");font-weight:400;font-style:normal;font-display:block}',
+  '@font-face{font-family:"Instrument Serif";src:url("/northstar/design-studies/fonts/InstrumentSerif-Italic.ttf") format("truetype");font-weight:400;font-style:italic;font-display:block}',
+  '@font-face{font-family:"DM Sans";src:url("/northstar/design-studies/fonts/DMSans-Variable.ttf") format("truetype");font-weight:100 900;font-style:normal;font-display:block}',
+].join('\n');

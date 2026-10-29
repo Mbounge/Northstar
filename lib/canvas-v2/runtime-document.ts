@@ -1,3 +1,4 @@
+import { CANVAS_V2_NATIVE_FONT_CSS } from "./screen-fonts";
 import { canvasV2ThemeTokenCss } from "./theme-context";
 import type { CanvasV2ArtifactRevision } from "@/lib/canvas-v2/types";
 import { assertCanvasV2ArtifactDocument } from "@/lib/canvas-v2/artifact-safety";
@@ -16,6 +17,7 @@ export function buildCanvasV2RuntimeDocument(revision: CanvasV2ArtifactRevision)
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    ${CANVAS_V2_NATIVE_FONT_CSS}
     /* The hidden compiler and the public native editor must begin from the
        same neutral element baseline. The public app already receives this
        baseline from Tailwind preflight; without it here, browser UA rules

@@ -2,6 +2,7 @@
 import {rememberScreenRuntimeLayers,screenRuntimeAppearanceCanEdit} from '@/lib/canvas-v2/screen-runtime-design';
 import {VISUAL_FEEDBACK_START} from '@/lib/canvas-v2/visual-feedback';
 import { ScreenDesignStudio } from './screen-design-studio';
+import { PreviewChrome } from './preview-chrome';
 import { buildScreenDesignExport, downloadScreenDesign } from '@/lib/canvas-v2/screen-design-export';
 import type { ScreenDesignOperation, ScreenDesignOrigin } from '@/lib/canvas-v2/screen-design-edit';
 import { canvasV2ScreenRuntimeIdentity, clearCanvasV2ScreenRuntimeState, rememberCanvasV2ScreenRuntimeState, restoreCanvasV2ScreenRuntimeState, screenMockDataEqual, type CanvasV2ScreenRuntimeState } from '@/lib/canvas-v2/screen-mock-state';
@@ -412,6 +413,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const posterStep = screen.simulation?.appName === 'Medito' ? ({welcome:0,email:1,experience:8,reminders:9,firstMeditation:10,support:11,home:15} as const)[screen.simulation.section] : screen.simulation?.section === 'onboarding' ? 0 : 19;
   const simulationPoster = screen.simulation ? evidence.find(asset => asset.app?.toLowerCase() === screen.simulation!.appName.toLowerCase() && asset.sequenceIndex === posterStep && asset.source?.permission === 'authorized' && asset.mediaType === 'image') : undefined;
   const [simulationLoading,setSimulationLoading]=useState(Boolean(screen.simulation)&&!screen.simulation?.startOnInteraction);
+  const simulationResetEntry = useRef<{ encoded: string; section: string } | undefined>(undefined);
   const simulationRecovery = useRef({ encoded, attempted: false });
   if (simulationRecovery.current.encoded !== encoded) simulationRecovery.current = { encoded, attempted: false };
   const directActions=useRef<{openTextEditor?:(target:CanvasV2ScreenFeedbackTarget)=>Promise<void>}>({});
@@ -740,6 +742,27 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   const lastHumanInput = useRef(0);
   const feedbackPicking = useRef(false);
   const restarting = useRef(false);
+  const resetPreview = useCallback(() => {
+    restarting.current=true;
+    retainedState.current=undefined;
+    clearCanvasV2ScreenRuntimeState(nodeId);
+    pendingLiveEdit.current=undefined;
+    runtimeSource.current=encoded;
+    runtimeGeneration.current++;
+    presentationLease.current?.invalidate();
+    presentationRef.current=undefined;setPresentation(undefined);setReturning(false);
+    dismissPresentation.current('reset');
+    closeTextEditor();setElementSelection(undefined);setDirectMenu(undefined);setDirectError('');setError('');
+    if (screen.simulation) {
+      // A research excerpt can open mid-onboarding. Factory reset must return
+      // to the app's real beginning, rather than to that excerpt's entry point.
+      simulationResetEntry.current={encoded,section:screen.simulation.appName==='Medito'?'welcome':'onboarding'};
+      simulationRecovery.current={encoded,attempted:false};
+      simulationActiveRef.current=true;setSimulationActive(true);
+    }
+    setReload(value=>value+1);
+  }, [nodeId,encoded,screen.simulation,closeTextEditor]);
+
   useEffect(() => {
     const pick = (active: boolean) => {
       if (screen.simulation) return;
@@ -750,14 +773,14 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const command = (event: Event) => {
       const action = (event as CustomEvent).detail;
       if (action === 'feedback') setCanvasV2FeedbackPicking(true);
-      if (action === 'restart') { restarting.current=true; retainedState.current=undefined; clearCanvasV2ScreenRuntimeState(nodeId); runtimeSource.current = encoded; setReload(value => value + 1); }
+      if (action === 'restart') resetPreview();
     };
     window.addEventListener(CANVAS_V2_FEEDBACK_PICKING, receive);
     host.current?.addEventListener(CANVAS_V2_SCREEN_COMMAND, command);
     if (document.documentElement.dataset.canvasV2FeedbackPicking === 'true') pick(true);
     const node = host.current;
     return () => { window.removeEventListener(CANVAS_V2_FEEDBACK_PICKING, receive); node?.removeEventListener(CANVAS_V2_SCREEN_COMMAND, command); };
-  }, [nodeId, encoded, screen.simulation]);
+  }, [nodeId, encoded, screen.simulation,resetPreview]);
   // Unrelated canvas revisions must not reset a running screen's mock state.
   const runtimeAssetIds=useMemo(()=>canvasV2ScreenBoundAssets(parseCanvasV2Screen(runtimeEncoded)),[runtimeEncoded]);
   const sources=useMemo(()=>{const byId=new Map(evidence.map(asset=>[asset.id,asset]));return JSON.stringify(runtimeAssetIds.map(id=>{const asset=byId.get(id);return{id,mediaType:asset?.mediaType,url:asset?.mediaType==='gif'||asset?.mediaType==='video'?asset.originalUrl||asset.url:asset?.url}}))},[runtimeAssetIds,evidence]);
@@ -878,6 +901,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
     const simulationInput = (event: Event) => { if (event.isTrusted) { lastHumanInput.current = Date.now(); noteCanvasInputActivity(event.type); } };
     const simulationEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setDirectMenu(undefined); closeTextEditor(); setDirectError(''); frame.current?.blur(); host.current?.focus({ preventScroll: true }); } };
     const simulation = screen.simulation;
+    const simulationEntry = simulationResetEntry.current?.encoded === sourceToMount ? simulationResetEntry.current.section : simulation?.section;
     let simulationStartupTimer:number|undefined;
     let expectedSimulationSource='';
     const stopSimulationStartup=()=>{if(simulationStartupTimer!==undefined)window.clearTimeout(simulationStartupTimer);simulationStartupTimer=undefined;};
@@ -929,11 +953,11 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       if (event.source !== frame.current?.contentWindow) return;
       if (simulation && event.origin === window.location.origin && event.data?.type === (simulation.appName === 'GRAET' ? GRAET_PREVIEW_SECTION : 'northstar:medito-preview-section')) {
         if (!simulationDocument) { simulationDocument = frame.current?.contentDocument ?? null; simulationDocument?.addEventListener('keydown', simulationEscape); for (const type of ['pointerdown', 'wheel', 'keydown', 'input']) simulationDocument?.addEventListener(type, simulationInput, { capture: true, passive: true }); }
-        if (!navigated) { navigated = true; frame.current?.contentWindow?.postMessage({ type: simulation.appName === 'GRAET' ? GRAET_PREVIEW_NAVIGATE : 'northstar:medito-preview-navigate', section: simulation.section }, window.location.origin); }
+        if (!navigated) { navigated = true; frame.current?.contentWindow?.postMessage({ type: simulation.appName === 'GRAET' ? GRAET_PREVIEW_NAVIGATE : 'northstar:medito-preview-navigate', section: simulationEntry }, window.location.origin); }
         // Initial onboarding readiness is not readiness for the requested home
         // section. Otherwise the agent can capture the dark splash while the
         // visible preview finishes navigating to its light Career home.
-        if(event.data.section===simulation.section){host.current?.setAttribute('data-canvas-v2-simulation-startup','ready');ready=true;stopSimulationStartup();setSimulationLoading(false);setError('');}
+        if(event.data.section===simulationEntry){restarting.current=false;host.current?.setAttribute('data-canvas-v2-simulation-startup','ready');ready=true;stopSimulationStartup();setSimulationLoading(false);setError('');}
         return;
       }
       if (event.data?.protocol !== SCREEN_PROTOCOL || event.data.token !== token) return;
@@ -1164,11 +1188,11 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   return <div ref={host} data-canvas-v2-interactive-screen={nodeId} tabIndex={-1} className="group relative h-full w-full" style={{ overflow: 'visible' }} onDragEnter={event => {
     if (editing.mode !== 'preview' && !screen.simulation && [...event.dataTransfer.types].some(type => type === 'Files' || type === SCREEN_ASSET_DRAG_TYPE)) { event.preventDefault(); setAssetDrag(true); }
   }}>
-    {showCaption && <div aria-hidden="true" title="Drag to move · double-click or right-click to edit design" className="absolute -top-9 left-0 w-full cursor-grab truncate text-lg font-medium active:cursor-grabbing" style={{ color: "var(--northstar-ink)", lineHeight: "24px" }}>{screen.title}</div>}
+    {showCaption && <PreviewChrome title={screen.title} appName={screen.simulation?.appName} onReset={resetPreview} />}
     {/* Keep live frame layout dimensions stable between visits. Offscreen
         graphics still use their explicit presentation gate. */}
     <div data-northstar-device-frame={device} className="absolute inset-0 overflow-hidden" onFocusCapture={() => {dismissPresentation.current('focus');if(editing.mode==='preview')editing.previewFocus?.(nodeId)}} style={{contentVisibility: 'visible', borderRadius:deviceMetrics.radius*scale,background:'transparent',boxShadow:device !== 'none' && !screen.simulation ? `0 0 0 ${deviceMetrics.bezel*scale}px #101117,0 0 0 ${(deviceMetrics.bezel+1)*scale}px #626777,0 ${12*scale}px ${32*scale}px #00000038` : undefined}}>
-      {(runtime || screen.simulation && simulationActive && simulationSource) && <iframe loading="eager" key={screen.simulation ? `${encoded}:${reload}` : undefined} ref={frame} title={screen.title} src={screen.simulation ? simulationSource : undefined} srcDoc={screen.simulation ? undefined : runtime} sandbox={screen.simulation ? "allow-scripts allow-same-origin" : "allow-scripts allow-forms"} {...(screen.simulation ? {} : { credentialless: "" })} referrerPolicy="no-referrer" style={{ width: screen.width, height: screen.height, border: 0, display: 'block', transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'auto' }} />}
+      {(runtime || screen.simulation && simulationActive && simulationSource) && <iframe loading="eager" key={screen.simulation ? `${encoded}:${reload}` : undefined} ref={frame} title={screen.title} src={screen.simulation ? simulationSource : undefined} srcDoc={screen.simulation ? undefined : runtime} sandbox={screen.simulation ? "allow-scripts allow-same-origin allow-forms" : "allow-scripts allow-forms"} {...(screen.simulation ? {} : { credentialless: "" })} referrerPolicy="no-referrer" style={{ width: screen.width, height: screen.height, border: 0, display: 'block', transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'auto' }} />}
       {screen.simulation&&!simulationActive&&<button type="button" aria-label={`Try ${screen.simulation.appName} live preview`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();activateSimulation.current()}} className="absolute inset-0 h-full w-full cursor-pointer overflow-hidden border-0 bg-[#191919] p-0" style={{borderRadius:deviceMetrics.radius*scale}}>
         {simulationPoster&&<img src={simulationPoster.url} alt={`${screen.simulation.appName} captured entry screen`} draggable={false} className="h-full w-full object-cover"/>}
         <span className="absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/80 to-transparent pb-5 pt-12"><span className="rounded-full border border-white/25 bg-black/65 px-4 py-2 text-xs font-medium text-white">Try {screen.simulation.appName} ↗</span></span>
