@@ -54,6 +54,35 @@ const canonical = document(`
   <img data-canvas-v2-node-id="flow-awin-screen-2" data-canvas-v2-evidence-id="screen:awin-2" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="1" src="https://evidence.test/awin/2.png">
 `);
 
+test('saved unlinked excerpts cannot block unrelated deletion, text and colour edits', () => {
+  const excerpt = '<img data-canvas-v2-node-id="saved-excerpt" data-canvas-v2-evidence-id="screen:awin-1" data-canvas-v2-evidence-role="excerpt" src="https://evidence.test/awin/1.png" style="width:168px">';
+  const previous = { ...canonical, html: canonical.html.replace('</main>', `${excerpt}<p data-canvas-v2-node-id="note">Old note</p><div data-canvas-v2-node-id="arrow"></div></main>`) };
+  for (const html of [
+    previous.html.replace('<div data-canvas-v2-node-id="arrow"></div>', ''),
+    previous.html.replace('Old note', 'A better note'),
+    previous.html.replace('width:168px', 'width:168px;opacity:.8'),
+    previous.html.replace(excerpt, ''),
+  ]) assert.deepEqual(validateCanvasV2EvidenceContinuity(previous, { ...previous, html }, evidence, { allowUserEvidenceRemoval: true }), []);
+  const repaired = { ...previous, html: previous.html.replace('data-canvas-v2-evidence-role="excerpt"', 'data-canvas-v2-evidence-role="analysis-copy" data-canvas-v2-source-node-id="flow-awin-screen-1"') };
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(previous, repaired, evidence), []);
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(repaired, repaired, evidence), []);
+  assert.match(validateCanvasV2EvidenceContinuity(repaired, previous, evidence).join(' '), /must declare its canonical source node/, 'a repaired source link cannot regress');
+});
+
+test('saved excerpt compatibility never authorizes new copies, changed sources or forged provenance', () => {
+  const excerpt = '<img data-canvas-v2-node-id="saved-excerpt" data-canvas-v2-evidence-id="screen:awin-1" data-canvas-v2-evidence-role="excerpt" src="https://evidence.test/awin/1.png">';
+  const previous = { ...canonical, html: canonical.html.replace('</main>', `${excerpt}</main>`) };
+  for (const replacement of [
+    excerpt.replace('saved-excerpt', 'new-copy'),
+    excerpt.replace('screen:awin-1', 'screen:awin-2').replace('/awin/1.png', '/awin/2.png'),
+    excerpt.replace('role="excerpt"', 'role="canonical"'),
+    excerpt.replace('role="excerpt"', 'role="analysis-copy" data-canvas-v2-source-node-id="made-up"'),
+    excerpt + excerpt,
+    excerpt + excerpt.replace('saved-excerpt', 'new-copy'),
+  ]) assert.ok(validateCanvasV2EvidenceContinuity(previous, { ...previous, html: previous.html.replace(excerpt, replacement) }, evidence).length, replacement);
+  assert.match(validateCanvasV2EvidenceContinuity(canonical, previous, evidence).join(' '), /must declare its canonical source node/);
+});
+
 test("saved detached canonical references permit unrelated additions without blessing new orphan evidence", () => {
   const orphan = '<img data-canvas-v2-node-id="detached" data-canvas-v2-evidence-id="screen:awin-1" data-canvas-v2-evidence-role="canonical" data-canvas-v2-flow-index="0" src="https://evidence.test/awin/1.png">';
   const previous = { html: orphan, css: "" };

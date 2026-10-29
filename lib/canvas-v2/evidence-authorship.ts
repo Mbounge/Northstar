@@ -118,6 +118,32 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
   const retainedDetached = images(previous.html).filter(image => image.role === "canonical"
     && image.nodeId && image.evidenceId && !previousLaneNodes.has(image.nodeId));
   const nextImages = images(next.html);
+  // Some saved boards predate analytical source-link metadata (or were
+  // imported with an excerpt role). An unrelated edit must not reclassify an
+  // unchanged, approved image as a newly authored, untraceable copy. Preserve
+  // only those exact committed bindings; new copies and altered provenance
+  // still have to declare a valid canonical source below.
+  const previousImages = images(previous.html);
+  const previousSources = new Map<string, Set<string>>();
+  for (const item of previousFlows.flatMap(flow => flow.items)) {
+    const nodes = previousSources.get(item.evidenceId) ?? new Set<string>();
+    nodes.add(item.nodeId); previousSources.set(item.evidenceId, nodes);
+  }
+  const counts = (items: readonly ParsedImage[]) => {
+    const result = new Map<string, number>();
+    for (const image of items) result.set(image.nodeId, (result.get(image.nodeId) ?? 0) + 1);
+    return result;
+  };
+  const previousCounts = counts(previousImages), nextCounts = counts(nextImages);
+  const retainedUnlinkedCopies = new Map(previousImages.filter(image => {
+    const sources = previousSources.get(image.evidenceId);
+    return image.nodeId && image.evidenceId && sources?.size
+      && !sources.has(image.nodeId)
+      && image.role !== 'canonical'
+      && !(image.role === 'analysis-copy' && image.sourceNodeId && sources.has(image.sourceNodeId))
+      && previousCounts.get(image.nodeId) === 1 && nextCounts.get(image.nodeId) === 1
+      && approved.get(image.evidenceId) === image.url;
+  }).map(image => [image.nodeId, image]));
   const sameDetached = (prior: ParsedImage, image: ParsedImage) => prior.nodeId === image.nodeId
     && prior.evidenceId === image.evidenceId && prior.url === image.url
     && prior.flowIndex === image.flowIndex && image.role === "canonical"
@@ -180,6 +206,11 @@ export function validateCanvasV2EvidenceAuthorshipTransition(
       continue;
     }
     if (image.role !== "analysis-copy" || !image.sourceNodeId || !sources.has(image.sourceNodeId)) {
+      const prior = retainedUnlinkedCopies.get(image.nodeId);
+      const unchangedCommittedCopy = prior && prior.evidenceId === image.evidenceId && prior.url === image.url
+        && prior.role === image.role && prior.sourceNodeId === image.sourceNodeId
+        && prior.flowIndex === image.flowIndex;
+      if (unchangedCommittedCopy) continue;
       failures.push(`Analytical evidence copy ${image.nodeId || image.evidenceId} must declare its canonical source node.`);
     }
   }
