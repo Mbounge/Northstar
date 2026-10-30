@@ -22,23 +22,38 @@ export async function runCanvasV2ScreenCommandWithControllerRetry<Result, Comman
   signal: AbortSignal,
   options: RetryOptions = {},
 ): Promise<Result> {
+  return withCanvasV2ScreenControllerRetry(lookup, encoded, signal, controller => controller.run(command, signal), options);
+}
+
+/** Read/capture adapters must follow the same startup turnover as inspection. */
+export async function withCanvasV2ScreenControllerRetry<Controller extends { encoded: string }, Result>(
+  lookup: () => Controller | undefined,
+  encoded: string,
+  signal: AbortSignal,
+  read: (controller: Controller) => Promise<Result>,
+  options: RetryOptions = {},
+): Promise<Result> {
   const timeoutMs = Math.max(0, Math.min(1000, options.timeoutMs ?? 500));
   const waitMs = Math.max(1, Math.min(50, options.waitMs ?? 10));
-  const deadline = Date.now() + timeoutMs;
+  let deadline: number | undefined;
   let controller = lookup();
   if (!controller || controller.encoded !== encoded) throw new Error('This screen is not ready or was revised/deleted.');
   for (;;) {
     signal.throwIfAborted();
     try {
-      return await controller.run(command, signal);
+      return await read(controller);
     } catch (error) {
       if (!isAbortError(error)) throw error;
       if (signal.aborted) {
         signal.throwIfAborted();
         throw error;
       }
-      let replacement: CanvasV2ScreenCommandController<Result, Command> | undefined;
-      while (Date.now() < deadline) {
+      // Startup can take seconds. The short turnover window begins when the
+      // cleanup occurs, rather than expiring while the original frame loads.
+      deadline ??= Date.now() + timeoutMs;
+      const retryDeadline = deadline;
+      let replacement: Controller | undefined;
+      while (Date.now() < retryDeadline) {
         signal.throwIfAborted();
         const candidate = lookup();
         if (candidate && candidate !== controller) {
@@ -46,7 +61,7 @@ export async function runCanvasV2ScreenCommandWithControllerRetry<Result, Comman
           replacement = candidate;
           break;
         }
-        await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, Math.max(1, deadline - Date.now()))));
+        await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, Math.max(1, retryDeadline - Date.now()))));
       }
       if (!replacement || replacement.encoded !== encoded || lookup() !== replacement) throw error;
       controller = replacement;

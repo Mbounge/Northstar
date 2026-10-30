@@ -10,7 +10,7 @@ import { applyCanvasV2SourcePatch, findCanvasV2SourceNodeRange } from '../lib/ca
 import { applyCanvasV2NativeSceneMutation, copyCanvasV2NativeSelection, pasteCanvasV2NativeClipboard, serializeCanvasV2NativeScene, patchCanvasV2NativeDocument, type CanvasV2NativeSceneDocument } from '../lib/canvas-v2/native-scene';
 import { compileCanvasV2SceneTransaction } from '../lib/canvas-v2/scene-transaction';
 import { NORTHSTAR_THREE_HELPER_SOURCE } from '../lib/canvas-v2/screen-trusted-runtime';
-import { runCanvasV2ScreenCommandWithControllerRetry } from '../lib/canvas-v2/screen-controller-retry';
+import { runCanvasV2ScreenCommandWithControllerRetry, withCanvasV2ScreenControllerRetry } from '../lib/canvas-v2/screen-controller-retry';
 
 const screen = { version: 1 as const, title: 'A player’s next team 🏒', width: 390, height: 844, html: '<main><h1>Your next team</h1><button id="save">Save</button></main>', css: 'h1{font-size:28px}', javascript: 'document.querySelector("#save").addEventListener("click",e=>e.target.textContent="Saved")', referenceAssetIds: [] };
 const root = { html: '<main data-canvas-v2-node-id="canvas" data-canvas-v2-workspace-root="true"></main>', css: '' };
@@ -736,4 +736,20 @@ test('a research preview retains explicit interaction activation without accepti
  const preview={...screen,title:'Medito',device:'android' as const,width:360,height:800,html:'<div></div>',css:'',javascript:'',referenceAssetIds:[],simulation:{appName:'Medito' as const,section:'experience' as const,startOnInteraction:true}};
  assert.deepEqual(parseCanvasV2Screen(encodeCanvasV2Screen(preview)),preview);
  assert.throws(()=>validateCanvasV2Screen({...preview,simulation:{...preview.simulation,startOnInteraction:'eval()'}}),/activation mode/);
+});
+
+
+test('slow simulation startup begins its bounded read/capture turnover window at cleanup', async () => {
+  type Controller = { encoded: string; capture: () => Promise<string> };
+  const replacement: Controller = { encoded: 'same-source', capture: async () => 'current pixels' };
+  let current: Controller = { encoded: 'same-source', capture: async () => {
+    await new Promise(resolve => setTimeout(resolve, 40));
+    current = replacement;
+    throw new DOMException('Startup recovered an empty frame', 'AbortError');
+  } };
+  assert.equal(await withCanvasV2ScreenControllerRetry(() => current, 'same-source', new AbortController().signal,
+    controller => controller.capture(), { timeoutMs: 20 }), 'current pixels');
+  const stopped = new AbortController(); stopped.abort(new Error('caller stopped'));
+  await assert.rejects(withCanvasV2ScreenControllerRetry(() => current, 'same-source', stopped.signal,
+    controller => controller.capture()), /caller stopped/);
 });

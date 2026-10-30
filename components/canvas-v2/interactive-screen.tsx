@@ -32,7 +32,7 @@ import { screenEditableLayers, updateScreenLayerSelection, type ScreenEditableLa
 import { ScreenDirectMenu, ScreenTextEditor, ScreenAppearanceEditor, ScreenLayerActions, ScreenLayerRail, ScreenInspectorEmpty, ScreenSelectionInspector } from './screen-direct-tools';
 import { type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
 import { SCREEN_ASSET_DRAG_EVENT, SCREEN_ASSET_DRAG_TYPE, SCREEN_ASSET_DROP_EVENT, screenAssetLivePatches, type ScreenAssetDrop, type ScreenAssetTarget } from '@/lib/canvas-v2/screen-asset-edit';
-import { runCanvasV2ScreenCommandWithControllerRetry } from '@/lib/canvas-v2/screen-controller-retry';
+import { runCanvasV2ScreenCommandWithControllerRetry, withCanvasV2ScreenControllerRetry } from '@/lib/canvas-v2/screen-controller-retry';
 
 export const CANVAS_V2_SCREEN_COMMAND = 'northstar-screen-command';
 export const CanvasV2ScreenTheme = createContext<CanvasV2ArtifactTheme>('light');
@@ -167,11 +167,13 @@ export async function inspectCanvasV2Screen(nodeId: string, encoded: string, com
 /** Only registered, tenant-protected first-party frames expose their implementation.
  * Generated screens never gain same-origin access through this adapter. */
 export async function readCanvasV2SimulationSource(nodeId: string, encoded: string, signal: AbortSignal) {
-  const controller = controllers.get(nodeId);
-  if (!parseCanvasV2Screen(encoded).simulation || controller?.encoded !== encoded || !controller.readSource) throw new Error('Read a current registered simulation to reuse its implementation.');
-  const source = await controller.readSource(signal);
-  if (controllers.get(nodeId) !== controller || controller.encoded !== encoded) throw new Error('The reference changed while its source was being read.');
-  return source;
+  if (!parseCanvasV2Screen(encoded).simulation) throw new Error('Read a current registered simulation to reuse its implementation.');
+  return withCanvasV2ScreenControllerRetry(() => controllers.get(nodeId), encoded, signal, async controller => {
+    if (!controller.readSource) throw new Error('Read a current registered simulation to reuse its implementation.');
+    const source = await controller.readSource(signal);
+    if (controllers.get(nodeId) !== controller || controller.encoded !== encoded) throw new Error('The reference changed while its source was being read.');
+    return source;
+  });
 }
 
 /** Rasterize live DOM/state returned by the opaque frame in a script-disabled
@@ -188,7 +190,10 @@ export async function captureCanvasV2Screen(nodeId: string, encoded: string, sig
       registered = controllers.get(nodeId);
     }
     if (registered?.encoded !== encoded || !registered.capture) throw new Error('The registered preview changed before capture. Read the current screen again.');
-    return { ...await registered.capture(signal), details: [] };
+    return withCanvasV2ScreenControllerRetry(() => controllers.get(nodeId), encoded, signal, async controller => {
+      if (!controller.capture) throw new Error('The registered preview changed before capture. Read the current screen again.');
+      return { ...await controller.capture(signal), details: [] };
+    });
   }
   const snapshot = await inspectCanvasV2Screen(nodeId, encoded, command, signal);
   return rasterizeScreenSnapshot(nodeId,encoded,signal,snapshot,!overview && command.action==='snapshot',overview ? 640 : undefined);

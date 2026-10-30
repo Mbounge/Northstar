@@ -15,6 +15,7 @@ const appearance = (image: Locator) => image.evaluate(element => {
 
 test('a colour request uses the actual local pixel worker, retains downloadable source-sized PNGs and edits only its authorized copy', async ({ page, request }) => {
   test.setTimeout(90_000); page.setDefaultTimeout(15_000);
+  await page.routeWebSocket('**/_next/webpack-hmr*', socket => { const server = socket.connectToServer(); server.onMessage(() => {}); });
   await request.post('/canvas-v2-e2e/codex/agent', { data: { op: 'reset-fixture' } });
   await page.setViewportSize({ width: 1512, height: 900 }); await page.goto('/canvas-v2-e2e/codex');
   const imageInput = page.getByLabel('Choose images for the canvas', { exact: true });
@@ -23,7 +24,11 @@ test('a colour request uses the actual local pixel worker, retains downloadable 
   await expect(images).toHaveCount(2); await expect.poll(() => images.first().evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 16)).toBe(true);
   const before = await pixels(images.first()), beforeUrl = await images.first().getAttribute('src'), protectedUrl = await images.nth(1).getAttribute('src'), nodeId = await images.first().getAttribute('data-canvas-v2-node-id'), geometry = await appearance(images.first());
   await page.getByRole('button', { name: 'Design view', exact: true }).click();
-  await images.first().click(); await page.getByRole('button', { name: 'Open North Star panel', exact: true }).click();
+  const selectedImage = await images.first().boundingBox();
+  await page.mouse.click(selectedImage!.x + selectedImage!.width / 2, selectedImage!.y + selectedImage!.height / 2);
+  await expect(page.getByTestId('canvas-v2-aggregate-drag-surface')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: `Resize ${nodeId} from north-west`, exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Open North Star panel', exact: true }).click();
   let hostedCreativeCalls = 0;
   page.on('request', incoming => { if (incoming.url().includes('/codex/agent') && incoming.method() === 'POST' && ['creative', 'creative-poll'].includes(incoming.postDataJSON()?.op)) hostedCreativeCalls++; });
   await page.getByRole('textbox', { name: 'Message North Star', exact: true }).fill('raster adjustment fixture'); await page.getByRole('button', { name: 'Send message', exact: true }).click();

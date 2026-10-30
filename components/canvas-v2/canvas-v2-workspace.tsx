@@ -2461,9 +2461,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     const selectedNodeIds = selectedElements.map((item) => item.nodeId);
     const currentNativeScene = engine.readNativeScene();
     const owningSelectionIds = selectedNodeIds.filter(id => currentNativeScene?.nodes.find(node => node.sourceNodeId === id)?.attributes["data-canvas-v2-section"] !== "true");
-    const selectionOwnsTarget = !additive
-      && canvasV2NativeSceneSelectionContainsTarget(currentNativeScene, owningSelectionIds, event.element.nodeId);
     const alreadySelected = selectedElements.some((item) => item.nodeId === event.element.nodeId);
+    const selectionOwnsTarget = !additive && !alreadySelected
+      && canvasV2NativeSceneSelectionContainsTarget(currentNativeScene, owningSelectionIds, event.element.nodeId);
     const nextSelection = selectionOwnsTarget
       ? selectedElements
       : additive
@@ -2487,6 +2487,21 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
     // direct selection. A later double-click explicitly returns focus to the
     // authored text node for inline editing.
     workspaceRef.current?.focus({ preventScroll: true });
+  };
+
+  const beginAggregateGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    // The transparent group drag surface must not swallow an ordinary click on
+    // one of its objects (or an unrelated object between them). Resolve the
+    // painted native object underneath and keep the same click-vs-drag rules.
+    const ids = document.elementsFromPoint(event.clientX, event.clientY).map(element =>
+      element.closest('[data-canvas-v2-native-runtime-node][data-canvas-v2-node-id]')?.getAttribute('data-canvas-v2-node-id'));
+    const hit = ids.map(id => sceneElementsRef.current.find(element => element.nodeId === id)).find(Boolean);
+    if (!hit) { beginDirectGesture("move", event); return; }
+    event.preventDefault(); event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    forwardedElementPointer({ phase: "down", pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY,
+      button: event.button, shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey, element: hit });
   };
 
   const restoreDeletionPreview = () => {
@@ -4659,7 +4674,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
                 aria-label={`Move ${selectedElements.length} selected objects`}
                 title="Drag the selection"
                 data-testid="canvas-v2-aggregate-drag-surface"
-                onPointerDown={(event) => { if (event.button === 0) beginDirectGesture("move", event); }}
+                onPointerDown={beginAggregateGesture}
                 onContextMenu={openSelectedObjectsMenu}
                 className="pointer-events-auto absolute inset-0 z-[5] cursor-move bg-transparent"
               />}

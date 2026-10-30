@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { canvasV2ScreenNeedsViewportActivity } from '../lib/canvas-v2/interactive-screen-runtime';
+import { withCanvasV2ScreenControllerRetry } from '../lib/canvas-v2/screen-controller-retry';
 import { screenMockDataEqual } from '../lib/canvas-v2/screen-mock-state';
 
 // Execute the actual host boundaries with small hook/bridge substitutes. This
@@ -146,10 +147,10 @@ test('a registered capture waits for its late controller and never rasterizes fi
  for(const late of [false,true]){
   let inspections=0,captures=0;const registry=new Map(),controller={encoded:'exact',capture:async()=>{captures++;return{image:'real registered pixels',state:{text:'Career'}};}};
   if(!late)registry.set('preview',controller);
-  const capture=run(`(${fn.getText(tree).replace('export ','')})`,{controllers:registry,parseCanvasV2Screen:()=>({simulation:{appName:'GRAET'}}),inspectCanvasV2Screen:async()=>{inspections++;registry.set('preview',controller);return{text:'Career'};},rasterizeScreenSnapshot:()=>{throw Error('Registered data must never reach authored rasterization.');}}) as (nodeId:string,encoded:string,signal:AbortSignal)=>Promise<{image:string}>;
+  const capture=run(`(${fn.getText(tree).replace('export ','')})`,{withCanvasV2ScreenControllerRetry,controllers:registry,parseCanvasV2Screen:()=>({simulation:{appName:'GRAET'}}),inspectCanvasV2Screen:async()=>{inspections++;registry.set('preview',controller);return{text:'Career'};},rasterizeScreenSnapshot:()=>{throw Error('Registered data must never reach authored rasterization.');}}) as (nodeId:string,encoded:string,signal:AbortSignal)=>Promise<{image:string}>;
   assert.equal((await capture('preview','exact',new AbortController().signal)).image,'real registered pixels');assert.equal(inspections,late?1:0);assert.equal(captures,1);
  }
- const capture=run(`(${fn.getText(tree).replace('export ','')})`,{controllers:new Map([['preview',{encoded:'new version'}]]),parseCanvasV2Screen:()=>({simulation:{appName:'GRAET'}}),inspectCanvasV2Screen:async()=>({text:'Old inspection'}),rasterizeScreenSnapshot:()=>{throw Error('Unsafe fallback.');}}) as (nodeId:string,encoded:string,signal:AbortSignal)=>Promise<unknown>;
+ const capture=run(`(${fn.getText(tree).replace('export ','')})`,{withCanvasV2ScreenControllerRetry,controllers:new Map([['preview',{encoded:'new version'}]]),parseCanvasV2Screen:()=>({simulation:{appName:'GRAET'}}),inspectCanvasV2Screen:async()=>({text:'Old inspection'}),rasterizeScreenSnapshot:()=>{throw Error('Unsafe fallback.');}}) as (nodeId:string,encoded:string,signal:AbortSignal)=>Promise<unknown>;
  await assert.rejects(capture('preview','exact',new AbortController().signal),/preview changed before capture/);
 });
 

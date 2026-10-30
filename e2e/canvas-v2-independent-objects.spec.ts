@@ -21,6 +21,7 @@ test('AI backgrounds, content, rules and connectors retain independent native ow
     const paint = stack.findIndex(node => node.getAttribute('data-canvas-v2-node-id') === 'fixture-card-surface');
     return content >= 0 && (paint < 0 || content < paint);
   })).toBe(true);
+  await page.getByRole('button', { name: 'Design view', exact: true }).click();
   const before = await Promise.all([left.boundingBox(), right.boundingBox()]);
   const assertContentPreserved = async () => {
     await expect(left).toHaveText('35%'); await expect(right).toHaveText('8 of 20');
