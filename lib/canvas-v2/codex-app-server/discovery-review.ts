@@ -1078,7 +1078,7 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
             try { settle(JSON.stringify(parseDiscoveryFeedback(finalText))); }
             catch (error) { fail(error instanceof Error ? error : new Error('Discovery review returned unusable feedback.')); }
           }
-          else fail(new Error('Discovery review did not produce feedback.'));
+          else fail(new DiscoveryReviewExecutionError('feedback', string(object(turn.error).message) || (turn.status === 'interrupted' ? 'Discovery reviewer stopped.' : 'Discovery review did not produce feedback.')));
         }
         if (message.method === 'error' && !p.willRetry) fail(new DiscoveryReviewExecutionError('feedback', string(object(p.error).message)||string(p.message)));
       });
@@ -1101,7 +1101,7 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
         const imageNumber=index+1, record=imageDirectory.find(entry=>Number(entry.imageNumber)===imageNumber);
         const roles=[string(record?.role),...(Array.isArray(record?.aliases)?record.aliases.map(string):[])].filter((role,i,all)=>role&&all.indexOf(role)===i);
         images.push({type:'text',text:`Evidence image ${imageNumber} of ${packet.images.length}; imageDirectory number ${imageNumber}. The image immediately following this caption is the only image described here. Role${roles.length===1?'':'s'}: ${roles.length?roles.join(' | '):'unspecified'}. Source version: ${string(record?.sourceVersion)||'unspecified'}. Capture role: ${string(record?.captureRole)||'unspecified'}.${record?.assetInspection ? ` Asset inspection: ${JSON.stringify(record.assetInspection)}.` : ''} Treat render, default, baseline and detail captures as distinct evidence; do not transfer a description from another image.`,text_elements:[]});
-        if (part.type === 'localImage') { const path = join(peer.cwd, basename(part.path)); await copyFile(part.path, path); images.push({ ...part, path }); }
+        if (part.type === 'localImage') { const path = join(peer.cwd, `review-${imageNumber}-${basename(part.path)}`); await copyFile(part.path, path); images.push({ ...part, path }); }
         else images.push(part);
       }
       signal.throwIfAborted();
@@ -1110,8 +1110,15 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
       stage='feedback';
       return await completed;
     } catch(error) {
-      if(error instanceof DiscoveryReviewFormatError||error instanceof DiscoveryReviewExecutionError)throw error;
-      throw new DiscoveryReviewExecutionError(stage,error);
+      const failure = error instanceof DiscoveryReviewFormatError || error instanceof DiscoveryReviewExecutionError ? error : new DiscoveryReviewExecutionError(stage, error);
+      // Operational diagnostics contain only bounded categories and sizes. Never
+      // log provider messages, prompts, pixels, identifiers or credentials.
+      if (process.env.NODE_ENV === 'production') console.warn('[northstar-quality-review]', JSON.stringify({
+        stage: failure instanceof DiscoveryReviewExecutionError ? failure.stage : 'feedback',
+        category: failure instanceof DiscoveryReviewExecutionError ? failure.category : 'response_format',
+        imageCount: packet.images.length, textCharacters: packet.text.length,
+      }));
+      throw failure;
     } finally { clearTimeout(timer); signal.removeEventListener('abort', stop); rpc?.close(); }
   };
   return (packet,options)=>reviewProductBatches(review,packet,options);

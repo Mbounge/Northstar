@@ -1860,3 +1860,53 @@ test('provider failure diagnostics retain only safe categories and never publish
     assert.match(answer,/can’t confirm completion yet/);assert.match(answer,/current version/);
   }finally{t.close();}
 });
+
+
+test('terminal reviewer failures keep their safe cause even without a separate error notification', async () => {
+  for (const [message, category] of [
+    ['Maximum context length exceeded; private provider detail', 'context_limit'],
+    ['Invalid image input; private provider detail', 'image_input'],
+    ['429 rate limit exceeded; private provider detail', 'rate_limit'],
+  ] as const) {
+    const peer = await fixtureCodex();
+    peer.finish = () => peer.emit('turn/completed', { turn: { id: peer.turn, status: 'failed', error: { message } } });
+    await assert.rejects(codexDiscoveryReviewer(async () => peer)({ text: 'Assess the current page', images: [] },
+      { key: 'fake', model: 'gpt-5.6-sol', signal: new AbortController().signal }), error => {
+        assert.ok(error instanceof DiscoveryReviewExecutionError);
+        assert.equal(error.stage, 'feedback');
+        assert.equal(error.category, category);
+        assert.doesNotMatch(error.message, /private provider detail/);
+        return true;
+      });
+    assert.equal(peer.closed, true);
+  }
+});
+
+test('separate local review captures with the same filename retain distinct pixels', async () => {
+  const { mkdtemp, mkdir, writeFile, readFile, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const root = await mkdtemp(join(tmpdir(), 'northstar-review-images-'));
+  const peer = await fixtureCodex();
+  try {
+    const paths = ['before', 'after'].map(name => join(root, name, 'capture.png'));
+    for (const [i, path] of paths.entries()) {
+      await mkdir(join(root, i ? 'after' : 'before'));
+      await writeFile(path, i ? 'current captured pixels' : 'original captured pixels');
+    }
+    const request = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      if (method === 'turn/start') {
+        const images = (object(params).input as JsonObject[]).filter(part => part.type === 'localImage');
+        assert.notEqual(images[0].path, images[1].path);
+        assert.deepEqual(await Promise.all(images.map(part => readFile(String(part.path), 'utf8'))), ['original captured pixels', 'current captured pixels']);
+      }
+      return request(method, params);
+    };
+    const finish = peer.finish.bind(peer);
+    peer.finish = () => finish(feedbackFor());
+    await codexDiscoveryReviewer(async () => peer)({ text: 'Compare before and after', images: paths.map(path => ({ type: 'localImage', path })) },
+      { key: 'fake', model: 'gpt-5.6-sol', signal: new AbortController().signal });
+    assert.equal(peer.closed, true);
+  } finally { peer.close(); await rm(root, { recursive: true, force: true }); }
+});
