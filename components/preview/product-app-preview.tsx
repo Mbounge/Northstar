@@ -117,9 +117,9 @@ export function ProductAppPreview({ appName, active }: { appName: string; active
       {frameLoading}
       {opened && (presentation?.rawViewport ? <div ref={deviceHostRef} data-app-preview-device="" className="flex h-[660px] items-center justify-center">
         <AppPhoneFrame variant="interactive" width={presentation.rawViewport.width * deviceScale + 6} height={presentation.rawViewport.height * deviceScale + 6}>
-          <iframe key={frameVersion} ref={iframeRef} onLoad={onFrameLoad} title={`${appName} interactive simulator`} src={frameStarted ? simulator.embedPath : undefined} style={{ width: presentation.rawViewport.width, height: presentation.rawViewport.height, transform: `scale(${deviceScale})`, transformOrigin: "top left" }} className="block border-0 bg-transparent" />
+          {frameStarted && <iframe key={frameVersion} ref={iframeRef} onLoad={onFrameLoad} title={`${appName} interactive simulator`} src={simulator.embedPath} style={{ width: presentation.rawViewport.width, height: presentation.rawViewport.height, transform: `scale(${deviceScale})`, transformOrigin: "top left" }} className="block border-0 bg-transparent" />}
         </AppPhoneFrame>
-      </div> : <iframe key={frameVersion} ref={iframeRef} onLoad={onFrameLoad} title={`${appName} interactive simulator`} src={frameStarted ? simulator.embedPath : undefined} className="block h-[660px] w-full border-0 bg-transparent" />)}
+      </div> : frameStarted ? <iframe key={frameVersion} ref={iframeRef} onLoad={onFrameLoad} title={`${appName} interactive simulator`} src={simulator.embedPath} className="block h-[660px] w-full border-0 bg-transparent" /> : <div aria-hidden="true" className="h-[660px]" />)}
     </div> : <div className="flex min-h-64 flex-col justify-center px-7 py-14 sm:px-10">
       <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[#8666df] dark:text-[#af9af5]">App preview</p>
       <h3 className="m-0 text-2xl font-semibold tracking-[-0.04em]">Interactive simulator in preparation</h3>

@@ -13,7 +13,7 @@ test('both registered apps use the same company preview introduction and section
     assert.match(html, /data-app-preview-layout=""/);
     assert.match(html, /Take a closer look\./);
     assert.match(html, new RegExp(`aria-label="${appName} preview sections"`));
-    assert.match(html, new RegExp(`title="${appName} interactive simulator"`));
+    assert.doesNotMatch(html, /<iframe/, 'The server render reserves the layout; the app frame mounts with its real URL after the active tab is laid out.');
     assert.match(html, new RegExp(`aria-label="Restart ${appName} preview"`));
     const presentation = previewPresentationForApp(appName)!;
     for (const section of presentation.sections) assert.ok(html.includes(section.label), section.label);
@@ -25,7 +25,7 @@ test('the raw Medito viewport has proportionate centered phone chrome rather tha
   const html = renderToStaticMarkup(createElement(ProductAppPreview, { appName: 'Medito', active: true }));
   assert.match(html, /data-app-phone-frame="interactive"/);
   assert.match(html, /width:276px;height:606px/);
-  assert.match(html, /width:360px;height:800px;transform:scale\(0\.75\);transform-origin:top left/);
+  assert.deepEqual(previewPresentationForApp('Medito')!.rawViewport, { width: 360, height: 800, scale: 0.75 });
   assert.match(html, /flex h-\[660px\] items-center justify-center/);
   assert.doesNotMatch(html, /h-\[760px\]|h-\[1120px\]/);
   const graet = renderToStaticMarkup(createElement(ProductAppPreview, { appName: 'GRAET', active: true }));

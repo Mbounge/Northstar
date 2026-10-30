@@ -6,6 +6,17 @@ for (const appName of ['Medito', 'GRAET']) test(`${appName} uses the shared comp
     const response = await route.fetch({ url: `http://127.0.0.1:3100/canvas-v2-e2e/product-preview?app=${appName}&surface=simulation` });
     await route.fulfill({ response });
   });
+  await page.addInitScript(() => {
+    const empty: string[] = [];
+    Object.defineProperty(window, '__previewEmptyFrames', { value: empty });
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        const frames = [...(node instanceof HTMLIFrameElement ? [node] : []), ...node.querySelectorAll('iframe')];
+        for (const frame of frames) if (!frame.getAttribute('src') && !frame.hasAttribute('srcdoc')) empty.push(frame.title);
+      }
+    }).observe(document, { subtree: true, childList: true });
+  });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`/canvas-v2-e2e/product-preview?app=${appName}`);
   const title = page.getByRole('heading', { name: 'Take a closer look.', exact: true });
@@ -14,6 +25,7 @@ for (const appName of ['Medito', 'GRAET']) test(`${appName} uses the shared comp
   const app = page.frameLocator(`iframe[title="${appName} interactive simulator"]`);
   await expect(title).toBeVisible(); await expect(navigation).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: `Loading ${appName} preview` })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as Window & { __previewEmptyFrames: string[] }).__previewEmptyFrames)).toEqual([]);
   if (appName === 'Medito') {
     await expect(app.getByRole('button', { name: 'Get started', exact: true })).toBeVisible();
     const shell = await page.locator('[data-app-phone-frame="interactive"]').boundingBox();
