@@ -95,6 +95,17 @@ export class DiscoveryReviewFormatError extends Error {
   constructor(readonly issues: string[]) { super(`Discovery review returned unusable feedback in the supported format: ${issues.join('; ')}`); }
 }
 
+/** Persist only bounded diagnostic categories, never provider messages or keys. */
+export class DiscoveryReviewExecutionError extends Error {
+  readonly category: 'context_limit'|'image_input'|'response_format'|'rate_limit'|'quota'|'authorization'|'availability'|'timeout'|'process_stopped'|'provider_or_transport';
+  constructor(readonly stage: 'spawn'|'initialize'|'login'|'thread'|'evidence'|'turn'|'feedback', error: unknown) {
+    const detail=error instanceof Error?error.message:typeof error==='string'?error:'';
+    const category=/context.*(?:length|limit)|too many tokens|maximum.*tokens/i.test(detail)?'context_limit':/image|vision/i.test(detail)?'image_input':/schema|response_format|output.*format/i.test(detail)?'response_format':/quota|billing|credits/i.test(detail)?'quota':/rate.limit|429/i.test(detail)?'rate_limit':/unauthori[sz]ed|authentication|401|403/i.test(detail)?'authorization':/timed out|timeout|cancelled/i.test(detail)?'timeout':/stopped|exited|closed/i.test(detail)?'process_stopped':/unavailable|overloaded|502|503/i.test(detail)?'availability':'provider_or_transport';
+    super(category==='timeout'?'Discovery review cancelled or timed out.':category==='process_stopped'?'Discovery reviewer stopped.':'Discovery review failed.');
+    this.category=category;
+  }
+}
+
 function feedbackFormatIssues(text: string): string[] {
   let value: unknown;
   try { value = JSON.parse(text); } catch { return ['Response must be one JSON object.']; }
@@ -1038,6 +1049,7 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
     const signal = AbortSignal.any([options.signal, deadline.signal]);
     let rpc: CodexTransport | undefined;
     let stop = () => {};
+    let stage: DiscoveryReviewExecutionError['stage']='spawn';
     try {
       signal.throwIfAborted();
       // Even a late spawn is cleaned up after cancellation.
@@ -1068,18 +1080,22 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
           }
           else fail(new Error('Discovery review did not produce feedback.'));
         }
-        if (message.method === 'error' && !p.willRetry) fail(new Error('Discovery review failed.'));
+        if (message.method === 'error' && !p.willRetry) fail(new DiscoveryReviewExecutionError('feedback', string(object(p.error).message)||string(p.message)));
       });
+      stage='initialize';
       await peer.request('initialize', { clientInfo: { name: 'northstar-discovery-review', version: '1.0.0' }, capabilities: { experimentalApi: true } });
       peer.notify('initialized', {});
+      stage='login';
       await peer.request('account/login/start', { type: 'apiKey', apiKey: options.key });
       let isProductReview=false,initialAppearance=false;
       let imageDirectory: JsonObject[] = [];
       try{const value=object(JSON.parse(packet.text)),productWork=value.productWork;initialAppearance=value.reviewStage==='initial_appearance';imageDirectory=Array.isArray(value.imageDirectory)?value.imageDirectory.map(object):[];isProductReview=Array.isArray(productWork)&&productWork.some(raw=>object(raw).qualityReviewRequired);}catch{/* Non-product review packets may be plain text. */}
+      stage='thread';
       const thread = await peer.request('thread/start', { model: options.model, allowProviderModelFallback: false, cwd: peer.cwd, approvalPolicy: 'never', sandbox: 'read-only', ephemeral: true,
         developerInstructions: initialAppearance ? INITIAL_APPEARANCE_REVIEW_INSTRUCTIONS : (isProductReview?`Your first task is to compare the actual product pixels with the reference under the user brief. Establish reference fidelity BEFORE judging polish or interactions. For a requested copy, begin by listing the visible reference content/sections in order and checking the authored clear default view against that order. Missing or replaced content, different typography, icons, navigation or geometry requires revision even if the result is attractive. Explicitly compare recurring grids: column count, tile proportions and whether labels belong inside or below tiles. Compare hero text/progress overlays with their original placement; moving them into separate cards is a layout change, even when the original artwork remains. Compare glyph silhouettes, fill/stroke, optical size and active states individually. Do not let the author's success claims, code, a working dialog or a matching light background substitute for the visual comparison. Only requested deliberate changes may differ. Treat missing or obscured reference evidence as unverified.\n\n`:'')+DISCOVERY_REVIEW_INSTRUCTIONS, dynamicTools: [], config: { 'features.shell_tool': false, 'features.multi_agent': false, 'features.code_mode': false, web_search: 'disabled' } });
       threadId = string(object(thread.thread).id);
       if (!threadId) throw new Error('Discovery reviewer did not create a thread.');
+      stage='evidence';
       const images: UserInput[] = [];
       for (const [index, part] of packet.images.entries()) {
         const imageNumber=index+1, record=imageDirectory.find(entry=>Number(entry.imageNumber)===imageNumber);
@@ -1089,8 +1105,13 @@ export function codexDiscoveryReviewer(factory: () => Promise<CodexTransport>, t
         else images.push(part);
       }
       signal.throwIfAborted();
+      stage='turn';
       await peer.request('turn/start', { threadId, model: options.model, effort: options.effort ?? 'high', outputSchema: DISCOVERY_REVIEW_SCHEMA, input: [{ type: 'text', text: packet.text, text_elements: [] }, ...images] });
+      stage='feedback';
       return await completed;
+    } catch(error) {
+      if(error instanceof DiscoveryReviewFormatError||error instanceof DiscoveryReviewExecutionError)throw error;
+      throw new DiscoveryReviewExecutionError(stage,error);
     } finally { clearTimeout(timer); signal.removeEventListener('abort', stop); rpc?.close(); }
   };
   return (packet,options)=>reviewProductBatches(review,packet,options);

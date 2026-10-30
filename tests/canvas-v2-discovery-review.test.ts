@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexSessionHost } from '../lib/canvas-v2/codex-app-server/server';
-import { codexDiscoveryReviewer, initialAppearanceReviewPacket, initialAppearanceReviewTargets, DiscoveryReviewContext, DISCOVERY_REVIEW_SCHEMA, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from '../lib/canvas-v2/codex-app-server/discovery-review';
+import { codexDiscoveryReviewer, DiscoveryReviewExecutionError, initialAppearanceReviewPacket, initialAppearanceReviewTargets, DiscoveryReviewContext, DISCOVERY_REVIEW_SCHEMA, parseDiscoveryFeedback, reviewContinuation, type DiscoveryReviewer } from '../lib/canvas-v2/codex-app-server/discovery-review';
 import { fixtureCodex } from '../app/canvas-v2-e2e/codex/fixture';
 import { ManagedAgentClient } from '../lib/canvas-v2/managed-agent/client';
 import { object, string, type JsonObject } from '../lib/canvas-v2/managed-agent/protocol';
@@ -932,7 +932,8 @@ test('unfinished product review keeps failure diagnostics and unverified approva
     t.peer.finish('All visual checks passed.'); await tick();
     assert.equal((await t.snapshot()).review.status, 'unavailable');
     assert.equal((await t.snapshot()).review.failureKind, 'timeout');
-    assert.equal(t.client.view.texts.at(-1)?.text, 'This screen is still a draft. I haven’t completed its reference and interaction checks.');
+    assert.match(t.client.view.texts.at(-1)?.text||'', /independent quality check couldn’t finish/);
+    assert.match(t.client.view.texts.at(-1)?.text||'', /retry the check from the current version/);
     assert.ok(!t.client.view.texts.some(item => /timed out|all visual checks passed|review.*unfinished/i.test(item.text)));
     assert.equal(t.client.view.status, 'completed');
   } finally { t.close(); }
@@ -946,8 +947,9 @@ test('a read-only product assessment survives incomplete review instead of becom
     t.peer.tool('canvas_read',{}); await tick();
     t.peer.finish('The header, icons and section order differ from the reference.'); await tick();
     const answer=t.client.view.texts.at(-1)?.text||'';
-    assert.match(answer,/header, icons and section order differ/);
-    assert.match(answer,/haven’t completed this review/);
+    assert.equal((await t.snapshot()).review.proposedAnswer,'The header, icons and section order differ from the reference.');
+    assert.match(answer,/independent quality check couldn’t finish/);
+    assert.match(answer,/retry the check from the current version/);
     assert.doesNotMatch(answer,/latest version is on your canvas|screen is still a draft|timed out/);
   } finally {t.close();}
 });
@@ -1842,4 +1844,19 @@ test('review diagnostics expose simultaneous measured gaps without approving the
   const early=checks(true);assert.ok(early.includes('runtime, font, image and overflow health'));
   assert.equal(early.includes('interaction assessment and successful behavior probes'),false);
   assert.equal(early.includes('motion frames, craft and reduced-motion behavior'),false);
+});
+
+test('provider failure diagnostics retain only safe categories and never publish an unverified completion',async()=>{
+  const t=await setup(async()=>{throw new DiscoveryReviewExecutionError('feedback',new Error('429 rate limit with provider credential secret'));},6,[{type:'inputText',text:JSON.stringify({screens:[{nodeId:'screen',sourceVersion:'one'}]})}]);
+  try{
+    t.peer.reply=(id,result)=>{t.peer.replies.push({id,result:object(result)});};
+    await t.client.send('Check the current page',[],'gpt-5.6-luna','review-failure');
+    t.peer.tool('canvas_read',{});await tick();t.peer.finish('Completed. All checks passed and the product is ready.');await tick();
+    const snapshot=await t.snapshot();
+    assert.equal(snapshot.review.failureStage,'feedback');assert.equal(snapshot.review.failureCategory,'rate_limit');
+    assert.ok(!JSON.stringify(snapshot).includes('credential secret'));
+    const answer=t.client.view.texts.at(-1)?.text||'';
+    assert.doesNotMatch(answer,/Completed\.|All checks passed|product is ready|429|credential/);
+    assert.match(answer,/can’t confirm completion yet/);assert.match(answer,/current version/);
+  }finally{t.close();}
 });

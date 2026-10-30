@@ -11,7 +11,7 @@ import { codexDisplayEvents } from './events';
 import { spawnCodex, type CodexTransport } from './rpc.server';
 import type { DynamicToolSpec } from './generated/v2/DynamicToolSpec';
 import type { DynamicToolCallResponse } from './generated/v2/DynamicToolCallResponse';
-import { codexDiscoveryReviewer, DiscoveryReviewContext, DiscoveryReviewRun, DiscoveryReviewFormatError, parseDiscoveryFeedback, initialAppearanceReviewPacket, initialAppearanceReviewTargets, reviewContinuation, type DiscoveryReviewer } from './discovery-review';
+import { codexDiscoveryReviewer, DiscoveryReviewContext, DiscoveryReviewRun, DiscoveryReviewFormatError, DiscoveryReviewExecutionError, parseDiscoveryFeedback, initialAppearanceReviewPacket, initialAppearanceReviewTargets, reviewContinuation, type DiscoveryReviewer } from './discovery-review';
 import type { TurnSteerParams } from './generated/v2/TurnSteerParams';
 
 type PendingTool = { rpcId: string | number; action: JsonObject };
@@ -21,7 +21,7 @@ type Session = {
   listeners: Set<(e: JsonObject) => void>; receipts: Map<string, { fingerprint: string; work: Promise<unknown> }>;
   model: string; effort: NorthstarEffort; capabilities: NorthstarModelCapability[];
   nativeTurnId: string; nativeActive: boolean; reviewRun?: DiscoveryReviewRun; reviewContext: DiscoveryReviewContext; appearanceReviews:Set<AbortController>;
-  reviewReport?: { failureKind?: 'timeout'|'invalid_feedback'|'process_stopped'|'provider_or_transport'; formatIssues?: string[]; status: string; durationMs?: number; proposedAnswer?: string; feedback?: string; continuedAnswer?: string;
+  reviewReport?: { failureKind?: 'timeout'|'invalid_feedback'|'process_stopped'|'provider_or_transport'; formatIssues?: string[]; failureStage?: DiscoveryReviewExecutionError['stage']; failureCategory?: DiscoveryReviewExecutionError['category']; status: string; durationMs?: number; proposedAnswer?: string; feedback?: string; continuedAnswer?: string;
     rounds?: Array<{ draft: string; feedback: string; rawFeedback?: string; durationMs: number; activity: ReturnType<DiscoveryReviewContext['activity']> }>;
     initialActivity?: ReturnType<DiscoveryReviewContext['activity']>; completedActivity?: ReturnType<DiscoveryReviewContext['activity']> };
   creative: NorthstarCreativeRuntime; commands: Promise<unknown>; lastUse: number; disconnectedAt?: number; closed: boolean;
@@ -263,7 +263,7 @@ export class CodexSessionHost {
       if (s.closed || s.reviewRun !== run || run.phase !== 'reviewing') return;
       const message=error instanceof Error?error.message:'';
       const failureKind=/timed out/i.test(message)?'timeout':/unusable feedback|supported format|actionable feedback/i.test(message)?'invalid_feedback':/stopped/i.test(message)?'process_stopped':'provider_or_transport';
-      s.reviewReport = { ...s.reviewReport, failureKind, status: 'unavailable', durationMs: Date.now() - started };
+      s.reviewReport = { ...s.reviewReport, failureKind, ...(error instanceof DiscoveryReviewExecutionError?{failureStage:error.stage,failureCategory:error.category}:{}), status: 'unavailable', durationMs: Date.now() - started };
       this.finishReviewedDraft(s, run, true); return;
     }
     const work = s.commands.then(async () => {
@@ -287,7 +287,7 @@ export class CodexSessionHost {
   }
   private finishReviewedDraft(s: Session, run: DiscoveryReviewRun, unfinished = false) {
     run.stop();
-    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: unfinished ? (s.reviewContext.hasProductWork() ? (s.reviewContext.hasProductEdits() ? 'This screen is still a draft. I haven’t completed its reference and interaction checks.' : `Here’s my assessment so far:\n\n${item.text}\n\nI haven’t completed this review.`) : `Here’s what I found so far.\n\n${item.text}`) : item.text }] } });
+    for (const item of run.fallbackItems()) this.emit(s, { type: 'agent.session.turn.item.done', turn_id: run.publicTurnId, item: { ...item, type: 'message', role: 'assistant', content: [{ type: 'output_text', text: unfinished ? (s.reviewContext.hasProductWork() ? (s.reviewReport?.status==='unavailable' ? 'The current version remains on your canvas. The independent quality check couldn’t finish, so I can’t confirm completion yet. Ask me to retry the check from the current version.' : s.reviewContext.hasProductEdits() ? 'This screen is still a draft. I haven’t completed its reference and interaction checks.' : `Here’s my assessment so far:\n\n${item.text}\n\nI haven’t completed this review.`) : `Here’s what I found so far.\n\n${item.text}`) : item.text }] } });
     this.emit(s, { type: 'agent.session.turn.completed', turn_id: run.publicTurnId });
   }
   private stream(s: Session, identity: boolean, signal: AbortSignal) {
