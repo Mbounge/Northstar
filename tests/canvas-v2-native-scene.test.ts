@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { validateCanvasV2EvidenceContinuity } from '../lib/canvas-v2/artifact-safety';
 
 import {
   CANVAS_V2_NATIVE_SCENE_SCHEMA,
@@ -8,6 +9,7 @@ import {
   copyCanvasV2NativeSelection,
   pasteCanvasV2NativeClipboard,
   canvasV2NativeSceneLeafNeedsIdentity,
+  canvasV2NativeEvidenceFromAttributes,
   canvasV2NativeSceneNodeHasRenderableNamespace,
   canvasV2NativeSceneNodeLooksWritable,
   canvasV2NativeSceneNodeIsWritable,
@@ -1655,6 +1657,26 @@ test("copied canonical evidence remains a source-linked analysis witness", () =>
   assert.equal(copy.canonicalEvidence, false);
 });
 
+for (const role of ['canonical', 'analysis-copy'] as const) test(`duplicating ${role} evidence preserves valid canonical lineage in saved HTML`, () => {
+  const original = scene(), node = original.nodes[0], url = 'https://evidence.test/exact.png';
+  const sourceId = role === 'canonical' ? 'note' : 'original-capture';
+  Object.assign(node, { tagName: 'img', kind: 'image', canonicalEvidence: role === 'canonical', evidence: { id: 'screen:1', role, ...(role === 'analysis-copy' ? { sourceNodeId: sourceId } : {}) } });
+  Object.assign(node.attributes, { src: url, 'data-canvas-v2-evidence-id': 'screen:1', 'data-canvas-v2-evidence-role': role, ...(role === 'analysis-copy' ? { 'data-canvas-v2-source-node-id': sourceId } : {}) });
+  const image = serializeCanvasV2NativeScene(original).html.match(/<img\b[^>]*>/)![0];
+  const before = { html: `<article data-canvas-v2-node-id="source-rail" data-canvas-v2-canonical-flow="observed-flow">${role === 'canonical' ? image : `<img data-canvas-v2-node-id="${sourceId}" data-canvas-v2-evidence-id="screen:1" data-canvas-v2-evidence-role="canonical" src="${url}">`}</article>${role === 'analysis-copy' ? image : ''}`, css: '' };
+  const snapshot = JSON.stringify(original);
+  const duplicate = applyCanvasV2NativeSceneMutation(original, { kind: 'duplicate', nodeId: 'note', newNodeId: 'copy' });
+  const copy = duplicate.nodes.find(item => item.sourceNodeId === 'copy')!;
+  const markup = serializeCanvasV2NativeScene(duplicate).html.match(/<img\b[^>]*data-canvas-v2-node-id="copy"[^>]*>/)![0];
+  assert.deepEqual(validateCanvasV2EvidenceContinuity(before, { ...before, html: before.html + markup }, [{ id: 'screen:1', url, label: 'Observed screen' }]), []);
+  assert.equal(copy.evidence?.role, 'analysis-copy');
+  assert.equal(copy.evidence?.sourceNodeId, sourceId);
+  assert.equal(copy.attributes['data-canvas-v2-source-node-id'], sourceId);
+  const savedAttributes=Object.fromEntries([...markup.matchAll(/([\w-]+)="([^"]*)"/g)].map(match=>[match[1],match[2]]));
+  assert.deepEqual(canvasV2NativeEvidenceFromAttributes(savedAttributes),copy.evidence,'saved source recompiles with the original canonical lineage');
+  assert.equal(JSON.stringify(original), snapshot);
+});
+
 test("rich text remains editable and serializes range styles, links and lists", () => {
   const original = scene();
   const next = applyCanvasV2NativeSceneMutation(original, { kind: "text", nodeId: "note", text: "EvidenceDecision", nativeContent: [
@@ -2327,4 +2349,28 @@ test('wrapper cleanup preserves real content, hidden content, painted surfaces a
     assert.ok(source.nodes.some(node=>node.id==='lane'),state);
     assert.ok(source.nodes.some(node=>node.id==='label'),state);
   }
+});
+
+test('anonymous layout wrappers never make ordinary children resize as background surfaces', () => {
+  const source=scene(), child=source.nodes[0];
+  const wrapper=structuredClone(child);
+  wrapper.id='anonymous-grid-cell';delete wrapper.sourceNodeId;
+  wrapper.kind='object';wrapper.tagName='div';wrapper.selectable=false;
+  wrapper.attributes={};wrapper.inlineStyle={};wrapper.resolvedStyle={};
+  wrapper.geometry={x:500,y:100,width:407,height:226,rotation:0,zIndex:0};
+  wrapper.childIds=[child.id];wrapper.content=[{kind:'node',id:child.id}];
+  child.parentId=wrapper.id;child.layoutMode='flow';
+  child.geometry={x:0,y:0,width:407,height:42,rotation:0,zIndex:0};
+  source.nodes.push(wrapper);source.rootIds=[wrapper.id];
+  const original=structuredClone(child.geometry);
+  const compiled=materializeCanvasV2NativeSceneSurfaces(source);
+  assert.deepEqual(compiled.nodes.find(node=>node.id===child.id)!.geometry,original);
+  assert.deepEqual(child.geometry,original,'compilation preserves the prior snapshot too');
+});
+
+test('saved reference lineage reads legacy metadata while preferring the current source field',()=>{
+  const base={'data-canvas-v2-evidence-id':'screen:one','data-canvas-v2-evidence-role':'analysis-copy','data-canvas-v2-evidence-copy-of':'legacy'};
+  assert.equal(canvasV2NativeEvidenceFromAttributes(base)?.sourceNodeId,'legacy');
+  assert.equal(canvasV2NativeEvidenceFromAttributes({...base,'data-canvas-v2-source-node-id':'original'})?.sourceNodeId,'original');
+  assert.equal(canvasV2NativeEvidenceFromAttributes({}),undefined);
 });

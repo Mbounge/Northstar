@@ -727,18 +727,27 @@ test('app element actions keep a stable screen anchor while the canvas pans and 
   test.setTimeout(120000);await page.setViewportSize({width:1700,height:1000});
   await createScreen(page);await enterEdit(page);await clickScreen(page,'h1');
   const actions=page.getByRole('toolbar',{name:'Selected element tools',exact:true});await expect(actions).toBeVisible();
+  await expect.poll(()=>actions.boundingBox()).not.toBeNull();
   const original=(await actions.boundingBox())!;
   const camera=page.getByTestId('canvas-v2-workspace-surface');const before=await camera.getAttribute('style');
   await page.mouse.move(1250,700);
   for(const [x,y] of [[-20,-10],[-20,-10],[10,5]]){
     await page.mouse.wheel(x,y);
     await expect.poll(()=>page.getByRole('region',{name:'Canvas workspace',exact:true}).getAttribute('data-canvas-v2-camera-preview')).toBeNull();
-    const next=(await actions.boundingBox())!;expect(next.x).toBeCloseTo(original.x,0);expect(next.y).toBeCloseTo(original.y,0);
+    await expect.poll(async()=>{const box=await actions.boundingBox();return box?{x:Math.round(box.x),y:Math.round(box.y)}:null}).toEqual({x:Math.round(original.x),y:Math.round(original.y)});
   }
   expect(await camera.getAttribute('style')).not.toBe(before);
   await page.keyboard.down('Control');await page.mouse.wheel(0,10);await page.keyboard.up('Control');
   await expect.poll(()=>page.getByRole('region',{name:'Canvas workspace',exact:true}).getAttribute('data-canvas-v2-camera-preview')).toBeNull();
-  const next=(await actions.boundingBox())!;expect(next.x).toBeCloseTo(original.x,0);expect(next.y).toBeCloseTo(original.y,0);
+  // Zoom can move the selected heading underneath the old anchor. A toolbar
+  // must then relocate to keep the content and preview chrome reachable.
+  await expect.poll(()=>actions.boundingBox()).not.toBeNull();
+  const placed=(await actions.boundingBox())!;
+  const heading=(await page.frameLocator('iframe[title="Fieldnotes · studio editing"]').locator('h1').boundingBox())!;
+  const header=(await page.locator('[data-canvas-v2-preview-chrome]').boundingBox())!;
+  for(const obstacle of [heading,header]) expect(placed.x+placed.width<=obstacle.x||placed.x>=obstacle.x+obstacle.width||placed.y+placed.height<=obstacle.y||placed.y>=obstacle.y+obstacle.height).toBe(true);
+  await page.mouse.wheel(5,3);
+  await expect.poll(async()=>{const box=await actions.boundingBox();return box?{x:Math.round(box.x),y:Math.round(box.y)}:null}).toEqual({x:Math.round(placed.x),y:Math.round(placed.y)});
   await actions.getByRole('button',{name:'Give feedback on selected element',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Comment for marked area',exact:true})).toBeVisible();
 });

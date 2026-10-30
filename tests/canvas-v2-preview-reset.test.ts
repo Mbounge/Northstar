@@ -25,6 +25,7 @@ test('every shared preview header labels its type and exposes an accessible alwa
  for(const appName of ['Medito','GRAET',undefined]){
   const html=renderToStaticMarkup(createElement(PreviewChrome,{title:'Current design',appName,onReset:()=>{}}));
   assert.ok(html.includes(appName?'Simulated app':'Preview'));assert.ok(html.includes(`aria-label="Reset ${appName??'Current design'} ${appName?'simulated app':'preview'}"`));assert.ok(html.includes('>Reset</button>'));assert.ok(!html.includes('aria-hidden="true" class="absolute'));
+  assert.ok(html.includes('title="Drag to move · double-click or right-click to edit design"'), 'the shared header retains its discoverable move/edit handle');
  }
 });
 

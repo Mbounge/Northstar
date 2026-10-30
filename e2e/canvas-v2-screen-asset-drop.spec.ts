@@ -42,7 +42,7 @@ for (const background of [false,true]) {
       await page.getByRole('button',{name:'chat',exact:true}).click();
     }
     const nativeImageCount = background ? 1 : 0;
-    await expect(page.getByTestId('canvas-v2-native-scene').locator('img')).toHaveCount(nativeImageCount);
+    await expect(page.getByTestId('canvas-v2-native-scene').locator('img[data-canvas-v2-native-runtime-node]')).toHaveCount(nativeImageCount);
     await page.getByRole('textbox',{name:'Message North Star'}).fill(`screen direct asset ${background?'background':''}`);
     await page.getByRole('button',{name:'Send message',exact:true}).click();
     await expect(page.getByText('The studio screen is ready for direct editing.',{exact:true})).toBeVisible();
@@ -76,7 +76,7 @@ for (const background of [false,true]) {
     expect(await frame.locator('#mark').getAttribute('src')).toBe(mark);
     expect(await object.getAttribute('style')).toBe(geometry);
     expect(await scene.evaluate(el=>el.parentElement?.style.transform)).toBe(camera);
-    await expect(scene.locator('img')).toHaveCount(nativeImageCount);
+    await expect(scene.locator('img[data-canvas-v2-native-runtime-node]')).toHaveCount(nativeImageCount);
     const sourceAfter=await object.getAttribute('data-canvas-v2-screen');
     expect(sourceAfter).not.toBe(sourceBefore);
     const readSource=(encoded:string)=>JSON.parse(Buffer.from(encoded,'base64').toString('utf8'));

@@ -254,9 +254,11 @@ export function materializeCanvasV2NativeSceneSurfaces(source: CanvasV2NativeSce
   const used = new Set(scene.nodes.flatMap(node => [node.id, node.sourceNodeId ?? node.id]));
   // A generated card fill follows reflow until somebody edits it independently.
   // Otherwise a later text edit grows the owner but leaves its old painted box behind.
+  // Both identities must exist: undefined === undefined also matches ordinary
+  // content beneath anonymous layout wrappers and corrupts its measured bounds.
   for (const surface of scene.nodes) {
     const owner = surface.parentId ? byId.get(surface.parentId) : undefined;
-    if (!owner || surface.attributes["data-canvas-v2-surface-owner"] !== owner.sourceNodeId
+    if (!owner?.sourceNodeId || !surface.attributes["data-canvas-v2-surface-owner"] || surface.attributes["data-canvas-v2-surface-owner"] !== owner.sourceNodeId
       || surface.userEdited || surface.locked || surface.detachedFromParentId) continue;
     surface.geometry = { ...surface.geometry, x: 0, y: 0, width: owner.geometry.width, height: owner.geometry.height };
   }
@@ -996,6 +998,15 @@ function safeAttributes(element: Element): Record<string, string> {
   return attributes;
 }
 
+/** Preserve canonical lineage when a saved reference is measured again. */
+export function canvasV2NativeEvidenceFromAttributes(attributes: Record<string,string>): CanvasV2NativeSceneNode['evidence'] {
+  const id=attributes['data-canvas-v2-evidence-id'];
+  if(!id)return undefined;
+  const role=attributes['data-canvas-v2-evidence-role'];
+  const sourceNodeId=attributes['data-canvas-v2-source-node-id']||attributes['data-canvas-v2-evidence-copy-of'];
+  return {id,...(role?{role}:{}),...(sourceNodeId?{sourceNodeId}:{})};
+}
+
 function directText(element: Element): string | undefined {
   const value = Array.from(element.childNodes)
     .filter((node) => node.nodeType === node.TEXT_NODE)
@@ -1273,7 +1284,6 @@ export function compileCanvasV2NativeScene(input: {
       const value = Number.parseFloat(html.style.getPropertyValue(property));
       return Number.isFinite(value) ? value : round(fallback);
     };
-    const evidenceId = html.dataset?.canvasV2EvidenceId;
     const attributes = safeAttributes(element);
     attributes["data-canvas-v2-native-runtime-node"] = "true";
     attributes["data-canvas-v2-native-scene-id"] = id;
@@ -1332,13 +1342,7 @@ export function compileCanvasV2NativeScene(input: {
         }
         return content;
       }, []),
-      ...(evidenceId ? {
-        evidence: {
-          id: evidenceId,
-          ...(html.dataset?.canvasV2EvidenceRole ? { role: html.dataset.canvasV2EvidenceRole } : {}),
-          ...(html.dataset?.canvasV2EvidenceCopyOf ? { sourceNodeId: html.dataset.canvasV2EvidenceCopyOf } : {}),
-        },
-      } : {}),
+      ...(attributes['data-canvas-v2-evidence-id'] ? { evidence: canvasV2NativeEvidenceFromAttributes(attributes) } : {}),
     };
   });
 
@@ -3514,8 +3518,17 @@ function applyAtomicNativeMutation(
         inlineStyle: { ...source.inlineStyle },
         ...(source.resolvedStyle ? { resolvedStyle: { ...source.resolvedStyle } } : {}),
         canonicalEvidence: false,
-        evidence: source.evidence ? { ...source.evidence, role: "analysis-copy", sourceNodeId: source.sourceNodeId } : undefined,
+        evidence: source.evidence ? { ...source.evidence, role: "analysis-copy", sourceNodeId: source.evidence.sourceNodeId ?? source.sourceNodeId } : undefined,
       } satisfies CanvasV2NativeSceneNode;
+      // Duplicating a reference has the same evidence semantics as copy/paste:
+      // it is an analytical reuse of the original capture, never a second
+      // canonical lane. Keep the serialized attributes and native inventory in
+      // agreement so saving/reloading cannot reject an otherwise valid copy.
+      delete copy.attributes["data-canvas-v2-canonical-flow"];
+      if (copy.evidence) {
+        copy.attributes["data-canvas-v2-evidence-role"] = "analysis-copy";
+        if (copy.evidence.sourceNodeId) copy.attributes["data-canvas-v2-source-node-id"] = copy.evidence.sourceNodeId;
+      }
       if (copy.kind === "connector") {
         delete copy.attributes["data-canvas-v2-connector-from"];
         delete copy.attributes["data-canvas-v2-connector-to"];

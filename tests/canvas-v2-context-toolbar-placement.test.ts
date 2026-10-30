@@ -94,6 +94,29 @@ function gapBetween(a: { left: number; top: number; right: number; bottom: numbe
   return Math.hypot(Math.max(0, a.left - b.right, b.left - a.right), Math.max(0, a.top - b.bottom, b.top - a.bottom));
 }
 
+test('a selected app layer leaves its preview move handle and reset header clickable', () => {
+  const selection = { left: 520, right: 870, top: 230, bottom: 275 };
+  const header = { left: 500, right: 900, top: 170, bottom: 219 };
+  const input = { selection, toolbar: { width: 290, height: 36 }, viewport: { left: 256, right: 1200, top: 96, bottom: 808 }, obstacles: [], chrome: [header], gap: 28 };
+  const old = { center: 695, top: 166, placement: 'above' as const };
+  const position = resolveCanvasV2ContextToolbarPosition({ ...input, previous: old });
+  assert.equal(overlap(toolbarRect(position, 290, 36), header), 0);
+  assert.equal(overlap(toolbarRect(position, 290, 36), selection), 0);
+  assert.deepEqual(resolveCanvasV2ContextToolbarPosition({ ...input, previous: position }), position);
+});
+
+test('clearance around the app header avoids a toolbar flip on a small camera pan', () => {
+  const selection = { left: 520, right: 870, top: 290, bottom: 345 };
+  const header = { left: 488, right: 912, top: 142, bottom: 247 };
+  const input = { selection, toolbar: { width: 290, height: 36 }, viewport: { left: 256, right: 1200, top: 96, bottom: 808 }, obstacles: [], chrome: [header], gap: 28 };
+  const previous = resolveCanvasV2ContextToolbarPosition(input);
+  assert.equal(previous.placement, 'below');
+  for (const delta of [5, 10, 20]) {
+    const shift = (rect: typeof header) => ({ left: rect.left + delta, right: rect.right + delta, top: rect.top + delta, bottom: rect.bottom + delta });
+    assert.deepEqual(resolveCanvasV2ContextToolbarPosition({ ...input, selection: shift(selection), chrome: [shift(header)], previous }), previous);
+  }
+});
+
 test("a partially clipped poster keeps its toolbar beside the visible selection", () => {
   const selection = { left: 620, top: -260, right: 920, bottom: 220 };
   const viewport = { left: 16, top: 92, right: 1_424, bottom: 808 };

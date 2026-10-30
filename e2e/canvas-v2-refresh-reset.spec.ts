@@ -34,6 +34,9 @@ test("refresh discards committed canvas, chat, and undo history", async ({ page 
   await expect(frame.locator('[data-canvas-v2-node-id^="manual-text-"]')).toHaveCount(1);
   await expect(canvasApp(page).getByRole("button", { name: "Undo" })).toBeEnabled();
 
+  // Creating a native text object enters Design and collapses chat. Open it
+  // through the real control before testing the conversation/reset boundary.
+  await page.getByRole('button', { name: 'Chat with Northstar', exact: true }).click();
   await page.getByLabel("Message North Star").fill("What can you help me with?");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByText("I can answer questions, inspect the visible canvas, research account evidence, or design and transform the canvas with each revision shown as it happens.")).toBeVisible();
@@ -42,7 +45,7 @@ test("refresh discards committed canvas, chat, and undo history", async ({ page 
   await expect(committedRevision(page)).toContainText("canvas-v2-initial-");
   await expect(frame).toHaveCount(1);
   await expect(frame.locator('[data-canvas-v2-node-id^="manual-text-"]')).toHaveCount(0);
-  await expect(canvasApp(page).getByRole("complementary").getByRole("heading", { name: "Ask, inspect, or create." })).toBeVisible();
+  await expect(canvasApp(page).getByRole("complementary").getByRole("heading", { name: "What would you like to explore?" })).toBeVisible();
   await expect(page.getByText("What can you help me with?", { exact: true })).toHaveCount(0);
   await expect(canvasApp(page).getByRole("button", { name: "Undo" })).toBeDisabled();
   await expect(canvasApp(page).getByRole("button", { name: "Redo" })).toBeDisabled();

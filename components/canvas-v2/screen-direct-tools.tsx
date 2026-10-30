@@ -176,7 +176,14 @@ export function ScreenLayerActions({frame,screenWidth,selectionRect,target,onEdi
         const width=element.offsetWidth,height=element.offsetHeight;
         const minX=innerWidth>900?256:16, maxRight=Math.max(minX+width,innerWidth-312);
         const visible=right>Math.max(left,minX)&&left<maxRight&&bottom>top&&bottom>96&&top<innerHeight-92;
-        const position=resolveCanvasV2ContextToolbarPosition({selection:{left,right,top,bottom},toolbar:{width,height},viewport:{left:minX,right:maxRight,top:96,bottom:innerHeight-92},obstacles:[],chrome:[],gap:28,previous:anchor.current.position});
+        // The app's move handle and Reset control are real interactive chrome.
+        // A selection near the top of an app must not place its layer toolbar
+        // over that header, including when retaining a screen-space anchor.
+        const header=frame.current?.closest('[data-canvas-v2-interactive-screen]')?.querySelector('[data-canvas-v2-preview-chrome]')?.getBoundingClientRect();
+        // Keep a small clearance too, rather than parking against the header
+        // and immediately flipping sides on the next few pixels of panning.
+        const headerClearance=header?{left:header.left-12,right:header.right+12,top:header.top-28,bottom:header.bottom+28}:undefined;
+        const position=resolveCanvasV2ContextToolbarPosition({selection:{left,right,top,bottom},toolbar:{width,height},viewport:{left:minX,right:maxRight,top:96,bottom:innerHeight-92},obstacles:[],chrome:headerClearance?[headerClearance]:[],gap:28,previous:anchor.current.position});
         if(visible)anchor.current.position=position;
         const x=position.center-width/2,y=position.top;
         const signature=[x,y,visible].join('|');

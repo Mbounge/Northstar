@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import {fitAllCanvas} from "./canvas-v2-authoring-helpers";
 
 function app(page: Page) {
   return page.getByRole("main");
@@ -42,6 +43,9 @@ async function routeProductionRequestsToDeterministicModel(page: Page) {
 }
 
 async function openCleanCanvas(page: Page, path: "/canvas-v2-e2e" | "/canvas") {
+  // Compile development-only fixture routes before mounting the client; their
+  // first build can otherwise Fast Refresh away a temporary in-flight canvas.
+  await Promise.all(["/canvas-v2-e2e/route","/canvas-v2-e2e/design"].map(url=>page.request.get(url)));
   if (path === "/canvas") await routeProductionRequestsToDeterministicModel(page);
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto(path);
@@ -49,6 +53,7 @@ async function openCleanCanvas(page: Page, path: "/canvas-v2-e2e" | "/canvas") {
 }
 
 async function send(page: Page, message: string) {
+  if(!await page.getByLabel("Message North Star").isVisible()) await page.getByRole("button",{name:"Chat with Northstar",exact:true}).click();
   await page.getByLabel("Message North Star").fill(message);
   await page.getByRole("button", { name: "Send message" }).click();
 }
@@ -61,6 +66,8 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
     await send(page, "Exercise writable surface closure");
     await expect(page.getByText("Created a focused workshop with three real writing areas for priorities, evidence, and the next decision.")).toBeVisible({ timeout: 60_000 });
 
+    await fitAllCanvas(page);
+    await page.getByRole("button",{name:"Design view",exact:true}).click();
     const authoredCopy = scene(page).locator(".e2e-editable-copy");
     await expect(authoredCopy).toBeVisible();
     await expect(authoredCopy).toHaveAttribute("data-canvas-v2-node-id", /^primitive-/);
@@ -131,13 +138,16 @@ for (const path of ["/canvas-v2-e2e", "/canvas"] as const) {
         childOffsets: Array.from(element.children).map((child) => child.getBoundingClientRect().x - rect.x),
       };
     });
-    const cardBefore = await layoutCard.boundingBox();
+    // The painted background is independently movable; the structural grid
+    // wrapper deliberately stays out of selection until explicitly grouped.
+    const background=scene(page).locator('[data-canvas-v2-node-id="editable-layout-surface-surface"]');
+    const cardBefore = await background.boundingBox();
     expect(cardBefore).not.toBeNull();
     await page.mouse.move(cardBefore!.x + 8, cardBefore!.y + cardBefore!.height / 2);
     await page.mouse.down();
     await page.mouse.move(cardBefore!.x + 128, cardBefore!.y + cardBefore!.height / 2 + 90, { steps: 8 });
     await page.mouse.up();
-    await expect.poll(async () => (await layoutCard.boundingBox())?.x ?? cardBefore!.x).toBeGreaterThan(cardBefore!.x + 80);
+    await expect.poll(async () => (await background.boundingBox())?.x ?? cardBefore!.x).toBeGreaterThan(cardBefore!.x + 80);
     const layoutAfter = await layoutRail.evaluate((element) => {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
