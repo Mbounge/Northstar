@@ -2490,7 +2490,9 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   };
 
   const beginAggregateGesture = (event: ReactPointerEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
+    // Pan must reach the workspace before this transparent selection surface
+    // consumes the pointer. Space temporarily overrides the Select tool too.
+    if (event.button !== 0 || tool === "pan" || spacePan) return;
     // The transparent group drag surface must not swallow an ordinary click on
     // one of its objects (or an unrelated object between them). Resolve the
     // painted native object underneath and keep the same click-vs-drag rules.

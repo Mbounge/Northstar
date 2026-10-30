@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Pause, Play, Sparkles } from "lucide-react";
 import { captureAspectRatio } from "@/lib/app-data/flow-captures";
+import { AppPhoneFrame } from "@/components/preview/app-phone-frame";
 import { ExecutiveReport } from "@/components/executive-report";
 
 type VideoAsset = {
@@ -97,12 +98,12 @@ export function VideoOverview({
         <div className="flex items-center justify-center py-3">
           <div className="relative w-[230px] sm:w-[258px] xl:w-[280px]">
             <div aria-hidden="true" className="pointer-events-none absolute -inset-9 rounded-[5rem] bg-[radial-gradient(ellipse_at_center,rgba(139,112,229,0.15),transparent_70%)] dark:bg-[radial-gradient(ellipse_at_center,rgba(135,95,234,0.28),transparent_70%)]" />
-            <div className="group relative overflow-hidden rounded-[2.9rem] border-[7px] border-[#1b1a28] bg-[#11121d] ring-1 ring-[#5a526d]/45 dark:border-[#080812] dark:ring-white/25 dark:shadow-[0_28px_75px_rgba(34,18,80,0.28)]">
+            <AppPhoneFrame>
               <video key={activeAsset?.url} ref={videoRef} src={activeAsset?.url} aria-label={`${appName} onboarding film`} className="w-full bg-black object-cover" style={{ aspectRatio: captureAspectRatio(activeAsset) }} autoPlay muted loop={Boolean(reel || !splash)} playsInline preload="auto" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onEnded={handleEnded} />
               <button type="button" onClick={togglePlayback} aria-label={isPlaying ? "Pause onboarding film" : "Play onboarding film"} className={`absolute bottom-3 right-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-black/35 text-white backdrop-blur-md transition-opacity hover:bg-black/55 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white [@media(hover:none)]:opacity-100 ${isPlaying ? "opacity-0 group-hover:opacity-100 focus-visible:opacity-100" : "opacity-100"}`}>
                 {isPlaying ? <Pause aria-hidden="true" className="h-3.5 w-3.5 fill-current" /> : <Play aria-hidden="true" className="ml-0.5 h-3.5 w-3.5 fill-current" />}
               </button>
-            </div>
+            </AppPhoneFrame>
           </div>
         </div>
       </section>

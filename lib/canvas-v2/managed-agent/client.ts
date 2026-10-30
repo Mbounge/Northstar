@@ -16,20 +16,25 @@ export class ManagedAgentClient {
 
   private recoveries = 0;
   private pendingInputs = 0;
-  private buffered?: JsonObject[];
+  private sessionGeneration = 0;
+  private buffered?: { generation: number; events: JsonObject[] };
   private actions = new AbortController();
   private accountApps = new Map<string, { name: string; iconUrl?: string }>();
   constructor(private options: { endpoint: string; supportedClientTools?: readonly string[]; closeOnDispose?: boolean; keepAliveMs?: number; resultTimeoutMs?: number; fetcher?: typeof fetch; onView: (view: AgentView) => void; execute: (action: JsonObject, signal: AbortSignal) => Promise<unknown> }) {}
-  async request(body: JsonObject, signal?: AbortSignal) {
+  async request(body: JsonObject, signal?: AbortSignal, token = this.token) {
     const timeout = new AbortController();
     // Tool acknowledgements may include the bounded 45-second appearance review.
     // Keep normal commands short and cancellation immediate; do not abort the
     // review before the server can return its findings.
     const timer = setTimeout(() => timeout.abort(new Error('The agent connection timed out.')), body.op === 'result' ? (this.options.resultTimeoutMs ?? 60_000) : 30_000);
     let response: Response;
-    try { response = await (this.options.fetcher ?? fetch)(this.options.endpoint, { method: 'POST', keepalive: body.op === 'cancel' || body.op === 'close', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, token: this.token }), signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal }); }
+    try { response = await (this.options.fetcher ?? fetch)(this.options.endpoint, { method: 'POST', keepalive: body.op === 'cancel' || body.op === 'close', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, token }), signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal }); }
     finally { clearTimeout(timer); }
-    if (!response.ok) { const error = object(await response.json()); throw new Error(string(error.error) || 'The agent connection failed.'); }
+    if (!response.ok) {
+      let error: JsonObject = {};
+      try { error = object(await response.json()); } catch { /* Proxies can return an empty or HTML failure. Never expose it as a parser error. */ }
+      throw new Error(string(error.error) || 'Northstar couldn’t complete the connection. Your canvas is still available; try again.');
+    }
     return response;
   }
   private startHeartbeat() {
@@ -46,7 +51,21 @@ export class ManagedAgentClient {
     this.heartbeat.unref?.();
   }
   private publish(view: AgentView) { this.view = view; if (!this.disposed) this.options.onView(this.pendingInputs && view.status === 'completed' ? { ...view, status: 'running' } : view); }
-  private fail(error: unknown) { this.stream?.abort(); this.stream = undefined; this.publish({ ...this.view, status: 'failed', error: error instanceof Error ? error.message : 'The agent connection failed.' }); }
+  private fail(error: unknown) {
+    this.sessionGeneration++; this.buffered = undefined; this.actions.abort();
+    this.stream?.abort(); this.stream = undefined;
+    const unavailable = error instanceof Error && error.message === 'This Codex session is unavailable. Start a new conversation.';
+    if (unavailable) {
+      // A worker restart can discard its process-local session. Do not replay
+      // this failed input, but let the next explicit user message create a new
+      // authenticated session with the retained canvas/conversation context.
+      this.token = undefined; this.sessionId = undefined;
+      this.actions.abort(); this.tools.clear(); this.results.clear(); this.recoveries = 0;
+    }
+    this.publish({ ...this.view, status: 'failed', error: unavailable
+      ? 'The previous AI session ended. Your canvas is safe. Send a follow-up to continue in a fresh session.'
+      : error instanceof Error ? error.message : 'The agent connection failed.' });
+  }
   send(message: string, attachments: unknown[], model: string, requestId: string, effort = 'high', restoredHistory?: string, canvasTheme?: 'light' | 'dark') {
     this.pendingInputs++;
     const work = this.commands.then(async () => {
@@ -77,6 +96,7 @@ export class ManagedAgentClient {
     return work.catch(error => { this.fail(error); throw error; }).finally(() => { this.pendingInputs--; this.publish(this.view); this.closeSettledStream(); });
   }
   private async create(message: string, attachments: unknown[], model: string, requestId: string, effort: string, restoredHistory?: string, canvasTheme?: 'light' | 'dark') {
+    const generation = ++this.sessionGeneration; this.buffered = undefined;
     const controller = new AbortController(); this.stream = controller;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -92,27 +112,42 @@ export class ManagedAgentClient {
           this.startHeartbeat();
           if (this.disposed) void this.request({ op: this.options.closeOnDispose ? 'close' : 'cancel', requestId: crypto.randomUUID() }).catch(() => undefined);
           resolve();
-        }, error => reject(error));
+        }, error => reject(error), generation);
       });
     } catch (error) { controller.abort(); if (this.stream === controller) this.stream = undefined; throw error; }
     finally { clearTimeout(timer); }
   }
-  private async listen() {
+  private async listen(generation = this.sessionGeneration) {
     const controller = new AbortController(); this.stream = controller;
-    try { this.consume(await this.request({ op: 'stream' }, controller.signal), controller); }
+    try {
+      const response = await this.request({ op: 'stream' }, controller.signal);
+      if (generation !== this.sessionGeneration || this.stream !== controller || controller.signal.aborted) {
+        void response.body?.cancel().catch(() => undefined); return;
+      }
+      this.consume(response, controller, undefined, undefined, generation);
+    }
     catch (error) { if (this.stream === controller) this.stream = undefined; throw error; }
   }
-  private consume(response: Response, controller: AbortController, identity?: (event: JsonObject) => void, creationFailure?: (error: Error) => void) {
+  private consume(response: Response, controller: AbortController, identity?: (event: JsonObject) => void, creationFailure?: (error: Error) => void, generation = this.sessionGeneration) {
     if (!response.body) throw new Error('The agent stream is unavailable.');
     const disconnected = (error?: unknown) => {
       if (identity && !this.token) { creationFailure?.(error instanceof Error ? error : new Error('Creation ended without a session identity.')); return; }
-      if (!controller.signal.aborted && !this.disposed) void this.recover(controller).catch(failure => this.fail(failure));
+      if (!controller.signal.aborted && !this.disposed && generation === this.sessionGeneration) void this.recover(controller, generation).catch(failure => { if (generation === this.sessionGeneration) this.fail(failure); });
     };
     void readAgentEvents(response.body, event => {
       const e = object(event);
-      if (e.type === 'northstar.session') { identity?.(e); return; }
-      if (this.disposed || controller.signal.aborted) return;
-      if (this.buffered) this.buffered.push(e); else this.handle(e);
+      if (e.type === 'northstar.session') {
+        if (generation !== this.sessionGeneration && !this.disposed && !this.cancelling) {
+          // A timed-out creation may deliver its identity after a fresh explicit
+          // request. Retire that orphan using its own token, never the live one.
+          const orphan = string(e.token);
+          if (orphan && orphan !== this.token) void this.request({ op: this.options.closeOnDispose ? 'close' : 'cancel', requestId: crypto.randomUUID() }, undefined, orphan).catch(() => undefined);
+          return;
+        }
+        identity?.(e); return;
+      }
+      if (this.disposed || controller.signal.aborted || generation !== this.sessionGeneration) return;
+      if (this.buffered?.generation === generation) this.buffered.events.push(e); else this.handle(e);
     }, controller.signal).then(() => disconnected()).catch(disconnected);
   }
   private handle(e: JsonObject) {
@@ -128,18 +163,27 @@ export class ManagedAgentClient {
       this.stream?.abort(); this.stream = undefined;
     }
   }
-  private async recover(previous: AbortController) {
-    if (this.stream !== previous || this.disposed || this.cancelling) return;
+  private async recover(previous: AbortController, generation: number) {
+    if (generation !== this.sessionGeneration || this.stream !== previous || this.disposed || this.cancelling) return;
     this.stream = undefined;
     if (++this.recoveries > 3) throw new Error('The connection repeatedly closed. Your session is retained; send a follow-up to continue.');
     await new Promise(resolve => setTimeout(resolve, 250 * this.recoveries));
-    if (this.disposed || this.cancelling) return;
-    // Subscribe first; otherwise output generated during snapshot retrieval is lost.
-    this.buffered = [];
+    if (generation !== this.sessionGeneration || this.disposed || this.cancelling || this.stream) return;
+    // A retired recovery must not consume, fail or replay actions into a fresh
+    // session. Keep its event buffer and every asynchronous boundary scoped to
+    // the session that requested the reconnect.
+    const buffered = { generation, events: [] as JsonObject[] };
+    this.buffered = buffered;
+    const isCurrent = () => generation === this.sessionGeneration && !this.disposed && !this.cancelling;
     try {
-      await this.listen();
+      await this.listen(generation);
+      if (!isCurrent()) return;
       await this.commands; // An idle snapshot before input acknowledgement is not completion.
-      const snapshot = object(await (await this.request({ op: 'snapshot', turnId: this.view.turnId })).json());
+      if (!isCurrent()) return;
+      const response = await this.request({ op: 'snapshot', turnId: this.view.turnId });
+      if (!isCurrent()) return;
+      const snapshot = object(await response.json());
+      if (!isCurrent()) return;
       const turn = object(snapshot.turn);
       if (!this.view.turnId && turn.id) this.publish({ ...this.view, turnId: string(turn.id) });
       const settledItems = new Set<string>();
@@ -152,16 +196,18 @@ export class ManagedAgentClient {
       if (turn.id === this.view.turnId && ['completed', 'failed', 'cancelled'].includes(string(turn.status))) {
         this.publish(reduceAgentEvent(this.view, { type: `agent.session.turn.${turn.status}`, turn }));
       }
-      const queued = this.buffered; this.buffered = undefined;
+      const queued = buffered.events;
+      if (this.buffered === buffered) this.buffered = undefined;
       for (const event of queued) {
+        if (!isCurrent()) return;
         if (event.type === 'agent.session.turn.output_text.delta' && settledItems.has(string(event.item_id))) continue;
         this.handle(event);
       }
       const session = object(snapshot.session);
-      if (this.view.status === 'running' && Array.isArray(session.required_actions)) for (const action of session.required_actions) this.executeOnce(object(action), this.actions.signal);
+      if (isCurrent() && turn.id === this.view.turnId && this.view.status === 'running' && Array.isArray(session.required_actions)) for (const action of session.required_actions) this.executeOnce(object(action), this.actions.signal);
       // Never infer success from idle or a closed stream.
       this.closeSettledStream();
-    } finally { this.buffered = undefined; }
+    } finally { if (this.buffered === buffered) this.buffered = undefined; }
   }
   private toolActivity(action: JsonObject, status: 'started' | 'completed' | 'failed', output?: unknown) {
     const id = `tool:${action.turn_id}:${action.call_id}`;
@@ -189,6 +235,7 @@ export class ManagedAgentClient {
     this.publish({ ...this.view, activity: previous ? this.view.activity.map(a => a.id === id ? activity : a) : [...this.view.activity, activity] });
   }
   private executeOnce(action: JsonObject, signal: AbortSignal) {
+    const generation = this.sessionGeneration;
     const key = `${string(action.turn_id)}:${string(action.call_id)}`;
     if (!action.call_id || !action.turn_id || this.tools.has(key)) return;
     const work = (async () => {
@@ -204,19 +251,21 @@ export class ManagedAgentClient {
             : { success: true, output };
         }
         catch (error) { result = { success: false, error: error instanceof Error ? error.message : 'Tool failed.' }; }
+        if (generation !== this.sessionGeneration || signal.aborted) return;
         this.results.set(key, result);
         if (!signal.aborted) this.toolActivity(action, result.success ? 'completed' : 'failed', result.output);
       }
-      if (signal.aborted || this.cancelling || this.disposed) return;
+      if (generation !== this.sessionGeneration || signal.aborted || this.cancelling || this.disposed) return;
       const receipt = { op: 'result', requestId: `result:${key}`, callId: action.call_id, turnId: action.turn_id, ...result };
       // Retry delivery, never the side effect. Server also checks whether the call is still pending.
       try { await this.request(receipt, signal); }
-      catch (error) { if (signal.aborted) return; await this.request(receipt, signal).catch(() => { throw error; }); }
+      catch (error) { if (generation !== this.sessionGeneration || signal.aborted) return; await this.request(receipt, signal).catch(() => { throw error; }); }
     })();
     this.tools.set(key, work);
-    void work.catch(error => this.fail(error)).finally(() => this.tools.delete(key));
+    void work.catch(error => { if (generation === this.sessionGeneration) this.fail(error); }).finally(() => { if (this.tools.get(key) === work) this.tools.delete(key); });
   }
   async cancel() {
+    this.sessionGeneration++; this.buffered = undefined;
     this.cancelling = true; this.actions.abort();
     await this.commands;
     try {
@@ -227,6 +276,7 @@ export class ManagedAgentClient {
     finally { this.cancelling = false; }
   }
   dispose() {
+    this.sessionGeneration++; this.buffered = undefined;
     this.disposed = true; clearInterval(this.heartbeat); this.heartbeat = undefined; this.actions.abort(); this.stream?.abort(); this.stream = undefined;
     // Saved work restores separately; browser-owned tool execution stops on unmount.
     if (this.token && (this.options.closeOnDispose || this.view.status === 'running')) void this.request({ op: this.options.closeOnDispose ? 'close' : 'cancel', requestId: crypto.randomUUID() }).catch(() => undefined);

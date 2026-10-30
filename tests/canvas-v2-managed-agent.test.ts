@@ -318,3 +318,129 @@ test('review context keeps the exact current brief separate from restored routin
   const packet = JSON.parse(context.packet('').text);
   assert.equal(packet.latestUserRequest, 'Build the current satellite brief.');
 });
+
+
+test('an explicit follow-up replaces an unavailable session without replaying the failed input', async () => {
+  const calls: Record<string, unknown>[] = [];
+  const client = new ManagedAgentClient({ endpoint: '/codex', onView: () => undefined, execute: async () => null, fetcher: async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); calls.push(body);
+    if (body.op === 'create') return creation(() => undefined);
+    return Response.json({ error: 'This Codex session is unavailable. Start a new conversation.' }, { status: 400 });
+  } });
+  try {
+    client.token = 'expired'; client.sessionId = 'old'; client.view.status = 'completed';
+    await assert.rejects(client.send('First input must not be replayed', [], 'gpt-5.6-luna', 'first'));
+    assert.deepEqual(calls.map(call => call.op), ['stream']);
+    assert.equal(client.token, undefined);
+    await client.send('Please continue from the current canvas', [], 'gpt-5.6-luna', 'explicit-followup', 'high', 'Retained conversation context');
+    assert.deepEqual(calls.map(call => call.op), ['stream', 'create']);
+    assert.equal(calls[1].message, 'Please continue from the current canvas');
+    assert.equal(calls[1].token, undefined);
+    assert.equal(calls[1].restoredHistory, 'Retained conversation context');
+    assert.equal(client.sessionId, 's1');
+  } finally { client.dispose(); }
+});
+
+
+for (const boundary of ['stream', 'snapshot'] as const) test(`a retired recovery ${boundary} cannot fail or execute stale actions in a fresh session`, async () => {
+  let initialStream!: ReadableStreamDefaultController<Uint8Array>;
+  let releaseOld!: (response: Response) => void;
+  let markOldStarted!: () => void;
+  const oldStarted = new Promise<void>(resolve => { markOldStarted = resolve; });
+  const oldResponse = new Promise<Response>(resolve => { releaseOld = resolve; });
+  const calls: Record<string, unknown>[] = [];
+  const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+  let creations = 0, edits = 0;
+  const client = new ManagedAgentClient({ endpoint: '/fixture', onView: () => undefined, execute: async () => { edits++; return { committed: true }; }, fetcher: async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); calls.push(body);
+    if (body.op === 'create') return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      const number = ++creations;
+      if (number === 1) initialStream = controller;
+      controller.enqueue(encode({ type: 'northstar.session', sessionId: `session-${number}`, token: `token-${number}` }));
+      controller.enqueue(encode(event('turn.created', { turn: { id: `turn-${number}` } })));
+    } }));
+    if (body.op === boundary) { markOldStarted(); return oldResponse; }
+    if (body.op === 'stream') return new Response(new ReadableStream<Uint8Array>({ start() {} }));
+    if (body.op === 'send') return Response.json({ error: 'This Codex session is unavailable. Start a new conversation.' }, { status: 400 });
+    return Response.json({ accepted: true });
+  } });
+  try {
+    await client.send('Initial request', [], 'gpt-5.6-luna', 'initial');
+    initialStream.close(); await oldStarted;
+    await assert.rejects(client.send('Failed input must not replay', [], 'gpt-5.6-luna', 'failed'));
+    await client.send('Explicit fresh follow-up', [], 'gpt-5.6-luna', 'fresh', 'high', 'Retained current conversation');
+    assert.equal(client.token, 'token-2');
+    releaseOld(boundary === 'stream'
+      ? Response.json({ error: 'This Codex session is unavailable. Start a new conversation.' }, { status: 400 })
+      : Response.json({ turn: { id: 'turn-1', status: 'in_progress' }, items: [], session: { required_actions: [{ name: 'canvas_edit', call_id: 'old-call', turn_id: 'turn-1', arguments: {} }] } }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(client.token, 'token-2'); assert.equal(client.sessionId, 'session-2'); assert.equal(client.view.status, 'running');
+    assert.equal(edits, 0, 'An old snapshot must not mutate the retained canvas.');
+    assert.equal(calls.filter(call => call.op === 'result').length, 0, 'Never acknowledge old work with the fresh token.');
+    assert.equal(calls.filter(call => call.op === 'create').length, 2, 'Only the explicit follow-up creates another session.');
+  } finally { client.dispose(); }
+});
+
+
+test('a late retired startup identity cannot replace a fresh session or close its token', async t => {
+  const originalTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', ((callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) => originalTimeout(callback, milliseconds === 30_000 ? 10 : milliseconds, ...args)) as typeof setTimeout);
+  let oldStream!: ReadableStreamDefaultController<Uint8Array>, creates = 0;
+  const calls: Record<string, unknown>[] = [];
+  const bytes = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+  const client = new ManagedAgentClient({ endpoint: '/codex', closeOnDispose: true, onView: () => undefined, execute: async () => null, fetcher: async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); calls.push(body);
+    if (body.op === 'create') return new Response(new ReadableStream<Uint8Array>({ start(stream) {
+      if (++creates === 1) oldStream = stream;
+      else {
+        stream.enqueue(bytes({ type: 'northstar.session', sessionId: 'fresh-session', token: 'fresh-token' }));
+        stream.enqueue(bytes(event('turn.created', { turn: { id: 'fresh-turn' } })));
+      }
+    } }));
+    return Response.json({ accepted: true });
+  } });
+  try {
+    await assert.rejects(client.send('Do not replay the uncertain input', [], 'gpt-5.6-luna', 'old'), /identity was not received/);
+    await client.send('Explicit new request', [], 'gpt-5.6-luna', 'fresh');
+    oldStream.enqueue(bytes({ type: 'northstar.session', sessionId: 'retired-session', token: 'retired-token' }));
+    await new Promise(resolve => originalTimeout(resolve, 20));
+    assert.equal(client.token, 'fresh-token'); assert.equal(client.sessionId, 'fresh-session');
+    assert.equal(client.view.status, 'running');
+    assert.ok(calls.some(call => call.op === 'close' && call.token === 'retired-token'), 'close the orphan with its own identity');
+    assert.equal(calls.some(call => call.op === 'close' && call.token === 'fresh-token'), false);
+  } finally { client.dispose(); }
+});
+
+test('a failed connection aborts pending tool execution before its late mutation', async () => {
+  let release!: () => void, began!: () => void, executionSignal!: AbortSignal, edits = 0;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { began = resolve; });
+  const client = new ManagedAgentClient({ endpoint: '/codex', onView: () => undefined, execute: async (_action, signal) => {
+    executionSignal = signal; began(); await pending; signal.throwIfAborted(); edits++; return { committed: true };
+  }, fetcher: async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.op === 'create') return creation(stream => {
+      for (const value of [event('turn.created', { turn: { id: 'turn' } }), event('requires_action', { session: { required_actions: [{ name: 'canvas_edit', call_id: 'old-call', turn_id: 'turn', arguments: {} }] } })])
+        stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`));
+    });
+    if (body.op === 'send') throw new Error('The agent connection timed out.');
+    return Response.json({ accepted: true });
+  } });
+  try {
+    await client.send('Start', [], 'gpt-5.6-luna', 'one'); await started;
+    await assert.rejects(client.send('Follow-up', [], 'gpt-5.6-luna', 'two'), /timed out/);
+    assert.equal(executionSignal.aborted, true);
+    release(); await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(edits, 0); assert.equal(client.view.status, 'failed');
+  } finally { release(); client.dispose(); }
+});
+
+
+test('empty and HTML gateway failures remain clear connection errors rather than parser details', async () => {
+  for (const body of ['', '<html>Private gateway diagnostic</html>']) {
+    const client = new ManagedAgentClient({ endpoint: '/codex', onView: () => undefined, execute: async () => null,
+      fetcher: async () => new Response(body, { status: 503 }) });
+    try { await assert.rejects(client.request({ op: 'models' }), { message: 'Northstar couldn’t complete the connection. Your canvas is still available; try again.' }); }
+    finally { client.dispose(); }
+  }
+});

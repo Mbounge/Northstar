@@ -1,3 +1,4 @@
+import { sameNorthstarOrigin } from '@/lib/canvas-v2/request-origin';
 import { CodexSessionHost } from '@/lib/canvas-v2/codex-app-server/server';
 import { codexDiscoveryReviewer } from '@/lib/canvas-v2/codex-app-server/discovery-review';
 import { NORTHSTAR_AGENT_INSTRUCTIONS, NORTHSTAR_AGENT_TOOLS } from '@/lib/canvas-v2/managed-agent/config';
@@ -13,7 +14,7 @@ const state = globalThis as typeof globalThis & { northstarSubagentHost?: CodexS
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === 'production' || process.env.NORTHSTAR_E2E !== '1') return new Response(null, { status: 404 });
   const url = new URL(request.url);
-  if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || request.headers.get('origin') !== url.origin) return new Response(null, { status: 403 });
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !sameNorthstarOrigin(request)) return new Response(null, { status: 403 });
   const ownerSuffix = url.searchParams.get('owner') || '';
   if (ownerSuffix && !/^[A-Za-z0-9_-]{16,80}$/.test(ownerSuffix)) return Response.json({ error: 'Invalid local test owner.' }, { status: 400 });
   const owner = `local-subagent-evaluation${ownerSuffix ? `:${ownerSuffix}` : ''}`;
