@@ -25,7 +25,7 @@ for (const appName of ['Medito', 'GRAET']) test(`${appName} uses the shared comp
   const app = page.frameLocator(`iframe[title="${appName} interactive simulator"]`);
   await expect(title).toBeVisible(); await expect(navigation).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: `Loading ${appName} preview` })).toHaveCount(0);
-  expect(await page.evaluate(() => (window as Window & { __previewEmptyFrames: string[] }).__previewEmptyFrames)).toEqual([]);
+  expect(await page.evaluate(() => (window as Window & { __previewEmptyFrames?: string[] }).__previewEmptyFrames)).toEqual([]);
   if (appName === 'Medito') {
     await expect(app.getByRole('button', { name: 'Get started', exact: true })).toBeVisible();
     const shell = await page.locator('[data-app-phone-frame="interactive"]').boundingBox();

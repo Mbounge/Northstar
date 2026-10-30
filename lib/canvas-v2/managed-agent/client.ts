@@ -17,6 +17,8 @@ export class ManagedAgentClient {
   private recoveries = 0;
   private pendingInputs = 0;
   private sessionGeneration = 0;
+  private inputGeneration = 0;
+  private inputs = new AbortController();
   private buffered?: { generation: number; events: JsonObject[] };
   private actions = new AbortController();
   private accountApps = new Map<string, { name: string; iconUrl?: string }>();
@@ -52,7 +54,8 @@ export class ManagedAgentClient {
   }
   private publish(view: AgentView) { this.view = view; if (!this.disposed) this.options.onView(this.pendingInputs && view.status === 'completed' ? { ...view, status: 'running' } : view); }
   private fail(error: unknown) {
-    this.sessionGeneration++; this.buffered = undefined; this.actions.abort();
+    this.sessionGeneration++; this.inputGeneration++; this.pendingInputs = 0; this.buffered = undefined; this.actions.abort();
+    this.inputs.abort(); this.inputs = new AbortController();
     this.stream?.abort(); this.stream = undefined;
     const unavailable = error instanceof Error && error.message === 'This Codex session is unavailable. Start a new conversation.';
     if (unavailable) {
@@ -68,22 +71,31 @@ export class ManagedAgentClient {
   }
   send(message: string, attachments: unknown[], model: string, requestId: string, effort = 'high', restoredHistory?: string, canvasTheme?: 'light' | 'dark') {
     this.pendingInputs++;
+    const inputGeneration = this.inputGeneration, inputSignal = this.inputs.signal;
     const work = this.commands.then(async () => {
-      if (this.disposed || this.cancelling) throw new Error('The agent is stopping.');
+      if (this.disposed || this.cancelling || inputGeneration !== this.inputGeneration) throw new Error('The agent is stopping.');
       if (!this.token) {
         this.actions = new AbortController();
         this.publish({ ...emptyAgentView(), status: 'running' });
         await this.create(message, attachments, model, requestId, effort, restoredHistory, canvasTheme);
         return; // Initial input was submitted with creation; never send it twice.
       }
-      if (this.view.status !== 'running') { this.recoveries = 0; this.actions = new AbortController(); this.publish({ ...emptyAgentView(), sessionId: this.sessionId, status: 'running' }); }
+      if (this.view.status !== 'running') {
+        // A settled turn can precede its tool-result HTTP acknowledgement.
+        // Retire that turn's actions and reconnect work before its follow-up;
+        // active steering deliberately keeps the current generation alive.
+        this.sessionGeneration++; this.buffered = undefined;
+        this.stream?.abort(); this.stream = undefined; this.actions.abort();
+        this.recoveries = 0; this.actions = new AbortController();
+        this.publish({ ...emptyAgentView(), sessionId: this.sessionId, status: 'running' });
+      }
       try {
         if (!this.stream) await this.listen(); // Subscribe before submitting input; do not lose early events.
-        await this.request({ op: 'send', message, attachments, requestId, model, effort, canvasTheme });
+        await this.request({ op: 'send', message, attachments, requestId, model, effort, canvasTheme }, inputSignal);
       } catch (error) {
         // This exact owner-bound server receipt means input was not dispatched.
         // Never replay a timed-out request or an unknown/wrong-owner session.
-        if (!(error instanceof Error) || error.message !== IDLE_SESSION_RELEASED || this.disposed || this.cancelling) throw error;
+        if (!(error instanceof Error) || error.message !== IDLE_SESSION_RELEASED || this.disposed || this.cancelling || inputGeneration !== this.inputGeneration) throw error;
         this.stream?.abort(); this.stream = undefined;
         this.token = undefined; this.sessionId = undefined;
         this.actions.abort(); this.actions = new AbortController();
@@ -93,7 +105,7 @@ export class ManagedAgentClient {
       }
     });
     this.commands = work.catch(() => undefined);
-    return work.catch(error => { this.fail(error); throw error; }).finally(() => { this.pendingInputs--; this.publish(this.view); this.closeSettledStream(); });
+    return work.catch(error => { if (inputGeneration === this.inputGeneration && !this.disposed && !this.cancelling) this.fail(error); throw error; }).finally(() => { if (inputGeneration === this.inputGeneration) this.pendingInputs--; this.publish(this.view); this.closeSettledStream(); });
   }
   private async create(message: string, attachments: unknown[], model: string, requestId: string, effort: string, restoredHistory?: string, canvasTheme?: 'light' | 'dark') {
     const generation = ++this.sessionGeneration; this.buffered = undefined;
@@ -151,8 +163,12 @@ export class ManagedAgentClient {
     }, controller.signal).then(() => disconnected()).catch(disconnected);
   }
   private handle(e: JsonObject) {
-    this.publish(reduceAgentEvent(this.view, e));
-    if (e.type === 'agent.session.requires_action' && !this.cancelling) {
+    const next = reduceAgentEvent(this.view, e);
+    // Reducer rejection applies to actions too: foreign sessions, retired
+    // turns, subagents and duplicate event IDs cannot schedule canvas writes.
+    if (next === this.view) return;
+    this.publish(next);
+    if (e.type === 'agent.session.requires_action' && this.view.status === 'running' && !this.cancelling) {
       const actions = object(e.session).required_actions;
       if (Array.isArray(actions)) for (const action of actions) this.executeOnce(object(action), this.actions.signal);
     }
@@ -237,7 +253,7 @@ export class ManagedAgentClient {
   private executeOnce(action: JsonObject, signal: AbortSignal) {
     const generation = this.sessionGeneration;
     const key = `${string(action.turn_id)}:${string(action.call_id)}`;
-    if (!action.call_id || !action.turn_id || this.tools.has(key)) return;
+    if (!action.call_id || !action.turn_id || this.tools.has(key) || this.view.turnId && action.turn_id !== this.view.turnId) return;
     const work = (async () => {
       let result = this.results.get(key);
       if (!result) {
@@ -265,9 +281,19 @@ export class ManagedAgentClient {
     void work.catch(error => { if (generation === this.sessionGeneration) this.fail(error); }).finally(() => { if (this.tools.get(key) === work) this.tools.delete(key); });
   }
   async cancel() {
-    this.sessionGeneration++; this.buffered = undefined;
+    this.sessionGeneration++; this.inputGeneration++; this.pendingInputs = 0; this.buffered = undefined;
     this.cancelling = true; this.actions.abort();
-    await this.commands;
+    this.inputs.abort(); this.inputs = new AbortController();
+    if (this.token) {
+      // Input acknowledgement is independent of cancellation. Do not strand
+      // Stop (or a later explicit input) behind a lost send/steer response.
+      this.stream?.abort(); this.stream = undefined;
+      this.commands = Promise.resolve();
+    } else {
+      // Startup has no cancellable remote identity yet. Keep its creation
+      // stream only until the identity arrives, then cancel that exact session.
+      await this.commands;
+    }
     try {
       if (this.token) await this.request({ op: 'cancel', requestId: crypto.randomUUID() });
       this.stream?.abort(); this.stream = undefined;
@@ -276,7 +302,8 @@ export class ManagedAgentClient {
     finally { this.cancelling = false; }
   }
   dispose() {
-    this.sessionGeneration++; this.buffered = undefined;
+    this.sessionGeneration++; this.inputGeneration++; this.pendingInputs = 0; this.buffered = undefined;
+    this.inputs.abort();
     this.disposed = true; clearInterval(this.heartbeat); this.heartbeat = undefined; this.actions.abort(); this.stream?.abort(); this.stream = undefined;
     // Saved work restores separately; browser-owned tool execution stops on unmount.
     if (this.token && (this.options.closeOnDispose || this.view.status === 'running')) void this.request({ op: this.options.closeOnDispose ? 'close' : 'cancel', requestId: crypto.randomUUID() }).catch(() => undefined);

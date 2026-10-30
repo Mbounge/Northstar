@@ -444,3 +444,195 @@ test('empty and HTML gateway failures remain clear connection errors rather than
     finally { client.dispose(); }
   }
 });
+
+
+test('a delayed failed tool acknowledgement from a completed turn cannot fail its explicit follow-up', { timeout: 3000 }, async () => {
+  const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+  const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let rejectReceipt!: (error: Error) => void;
+  let receiptStarted!: () => void;
+  const atReceipt = new Promise<void>(resolve => { receiptStarted = resolve; });
+  let receipts = 0;
+  let executions = 0;
+  const client = new ManagedAgentClient({
+    endpoint: '/deterministic-fixture-only',
+    onView: () => undefined,
+    execute: async () => { executions++; return { committed: true }; },
+    fetcher: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.op === 'create') return new Response(new ReadableStream({ start(controller) {
+        stream = controller;
+        controller.enqueue(encode({ type: 'northstar.session', sessionId: 's1', token: 'fixture-token' }));
+        controller.enqueue(encode(event('turn.created', { turn: { id: 'first-turn' } })));
+      } }));
+      if (body.op === 'stream') return new Response(new ReadableStream({ start(controller) { stream = controller; } }));
+      if (body.op === 'result') {
+        receipts++;
+        if (receipts === 1) {
+          receiptStarted();
+          return new Promise<Response>((_resolve, reject) => { rejectReceipt = reject; });
+        }
+        throw new Error('The previous acknowledgement connection was lost.');
+      }
+      if (body.op === 'send') {
+        stream.enqueue(encode(event('turn.created', { turn: { id: 'followup-turn' } })));
+        return Response.json({ accepted: true });
+      }
+      return Response.json({ accepted: true });
+    },
+  });
+  try {
+    await client.send('First task', [], 'fixture', 'first-input');
+    stream.enqueue(encode(event('requires_action', { session: { required_actions: [
+      { name: 'canvas_read', call_id: 'first-read', turn_id: 'first-turn', arguments: {} },
+    ] } })));
+    await atReceipt;
+    // The server consumed the tool result and finished the turn, but that
+    // result's independent HTTP acknowledgement has not reached the browser.
+    stream.enqueue(encode(event('turn.completed', { turn: { id: 'first-turn' } })));
+    await tick();
+    assert.equal(client.view.status, 'completed');
+    await client.send('Explicit next task', [], 'fixture', 'next-input');
+    await tick();
+    assert.equal(client.view.turnId, 'followup-turn');
+    assert.equal(client.view.status, 'running');
+    rejectReceipt(new Error('The previous acknowledgement connection was lost.'));
+    await tick();
+    assert.equal(executions, 1, 'The completed side effect must never be replayed.');
+    assert.equal(client.view.turnId, 'followup-turn');
+    assert.equal(client.view.status, 'running', 'An old receipt failure must not cancel the new turn.');
+    assert.equal(client.view.error, undefined);
+  } finally { client.dispose(); }
+});
+
+
+test('steering an active turn preserves its pending tool and receipt delivery', async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let release!: () => void, began!: () => void, executionSignal!: AbortSignal;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { began = resolve; });
+  const calls: Record<string, unknown>[] = [];
+  const client = new ManagedAgentClient({ endpoint: '/fixture', onView: () => undefined,
+    execute: async (_action, signal) => { executionSignal = signal; began(); await pending; signal.throwIfAborted(); return { committed: true }; },
+    fetcher: async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); calls.push(body);
+      if (body.op === 'create') return creation(controller => {
+        stream = controller;
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event('turn.created', { turn: { id: 'active-turn' } }))}\n\n`));
+      });
+      return Response.json({ accepted: true });
+    },
+  });
+  try {
+    await client.send('Begin work', [], 'gpt-5.6-luna', 'first');
+    stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event('requires_action', { session: { required_actions: [
+      { name: 'canvas_edit', turn_id: 'active-turn', call_id: 'active-edit', arguments: {} },
+    ] } }))}\n\n`));
+    await started;
+    await client.send('Steer the same active work', [], 'gpt-5.6-luna', 'steer');
+    assert.equal(executionSignal.aborted, false, 'Active steering must not retire a pending tool.');
+    release(); await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(calls.filter(call => call.op === 'create').length, 1);
+    assert.equal(calls.filter(call => call.op === 'send').length, 1);
+    assert.equal(calls.filter(call => call.op === 'result').length, 1);
+    assert.equal(client.view.status, 'running');
+  } finally { release(); client.dispose(); }
+});
+
+for (const lateOutcome of ['accepted', 'rejected'] as const) test(`Stop bypasses a held input acknowledgement and isolates its late ${lateOutcome} response`, { timeout: 3000 }, async () => {
+  const bytes = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let release!: (response: Response) => void, reject!: (error: Error) => void, markStarted!: () => void;
+  const held = new Promise<Response>((resolve, failure) => { release = resolve; reject = failure; });
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  let markCancelled!: () => void;
+  const cancelled = new Promise<void>(resolve => { markCancelled = resolve; });
+  let inputSignal!: AbortSignal;
+  const calls: Record<string, unknown>[] = [];
+  const published: string[] = [];
+  const client = new ManagedAgentClient({ endpoint: '/fixture', onView: view => { published.push(view.status); }, execute: async () => null,
+    fetcher: async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); calls.push(body);
+      if (body.op === 'create') return new Response(new ReadableStream({ start(controller) {
+        stream = controller;
+        controller.enqueue(bytes({ type: 'northstar.session', sessionId: 's1', token: 'fixture-token' }));
+        controller.enqueue(bytes(event('turn.created', { turn: { id: 'before-stop' } })));
+      } }));
+      if (body.op === 'stream') return new Response(new ReadableStream({ start(controller) { stream = controller; } }));
+      if (body.op === 'send' && body.message === 'Held steering input') {
+        inputSignal = init!.signal!; markStarted();
+        // Ignore abort to model an acknowledgement already in transit. The
+        // retired promise must be harmless even after the next turn starts.
+        return held;
+      }
+      if (body.op === 'cancel') { markCancelled(); return Response.json({ accepted: true }); }
+      if (body.op === 'send') stream.enqueue(bytes(event('turn.created', { turn: { id: 'after-stop' } })));
+      return Response.json({ accepted: true });
+    },
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stop: Promise<void> | undefined;
+  try {
+    await client.send('Begin work', [], 'gpt-5.6-luna', 'first');
+    const pending = client.send('Held steering input', [], 'gpt-5.6-luna', 'held').catch(() => undefined);
+    await started;
+    const queued = client.send('Queued before Stop must not run', [], 'gpt-5.6-luna', 'queued').catch(error => error);
+    stop = client.cancel();
+    await Promise.race([cancelled, new Promise<never>((_resolve, fail) => { timer = setTimeout(() => fail(new Error('Stop waited for the held input acknowledgement.')), 100); })]);
+    clearTimeout(timer);
+    await stop;
+    assert.equal(inputSignal.aborted, true);
+    assert.equal(client.view.status, 'stopped');
+    await client.send('Explicit follow-up after Stop', [], 'gpt-5.6-luna', 'followup');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(client.view.turnId, 'after-stop'); assert.equal(client.view.status, 'running');
+    stream.enqueue(bytes(event('turn.completed', { turn: { id: 'after-stop' } })));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(client.view.status, 'completed');
+    assert.equal(published.at(-1), 'completed', 'A retired pending input must not keep the current UI busy.');
+    if (lateOutcome === 'accepted') release(Response.json({ accepted: true }));
+    else reject(new Error('Late retired input failure'));
+    await pending; assert.ok(await queued instanceof Error);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(calls.filter(call => call.op === 'cancel').length, 1);
+    assert.equal(calls.some(call => call.message === 'Queued before Stop must not run'), false);
+    assert.equal(client.view.status, 'completed'); assert.equal(client.view.turnId, 'after-stop');
+    assert.equal(published.at(-1), 'completed');
+    assert.equal(client.view.error, undefined);
+  } finally { clearTimeout(timer); release(Response.json({ accepted: true })); await stop?.catch(() => undefined); client.dispose(); }
+});
+
+test('foreign session, stale turn and subagent action envelopes cannot execute canvas tools', async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let executions = 0, receipts = 0;
+  const bytes = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+  const client = new ManagedAgentClient({ endpoint: '/fixture', onView: () => undefined,
+    execute: async () => { executions++; return { committed: true }; },
+    fetcher: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.op === 'create') return creation(controller => {
+        stream = controller;
+        controller.enqueue(bytes(event('turn.created', { turn: { id: 'current-turn' } })));
+      });
+      if (body.op === 'result') receipts++;
+      return Response.json({ accepted: true });
+    },
+  });
+  const action = (id: string, turnId = 'current-turn') => ({ name: 'canvas_edit', turn_id: turnId, call_id: id, arguments: {} });
+  try {
+    await client.send('Current work', [], 'gpt-5.6-luna', 'current');
+    stream.enqueue(bytes(event('requires_action', { session_id: 'foreign-session', session: { required_actions: [action('foreign')] } })));
+    stream.enqueue(bytes(event('requires_action', { turn_id: 'retired-turn', session: { required_actions: [action('stale-envelope')] } })));
+    stream.enqueue(bytes(event('requires_action', { session: { required_actions: [action('stale-action', 'retired-turn')] } })));
+    stream.enqueue(bytes(event('requires_action', { subagent_id: 'separate-agent', session: { required_actions: [action('subagent')] } })));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(executions, 0, 'Rejected event data must not mutate the canvas even when its text was ignored.');
+    assert.equal(receipts, 0);
+    const valid = event('requires_action', { event_id: 'valid-action-event', turn_id: 'current-turn', session: { required_actions: [action('valid')] } });
+    stream.enqueue(bytes(valid)); stream.enqueue(bytes(valid));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(executions, 1); assert.equal(receipts, 1);
+    assert.equal(client.view.turnId, 'current-turn'); assert.equal(client.view.status, 'running');
+  } finally { client.dispose(); }
+});
