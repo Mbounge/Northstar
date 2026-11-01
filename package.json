@@ -3,6 +3,7 @@
   "version": "0.7.9",
   "private": true,
   "scripts": {
+    "agent:simulation": "node --import tsx scripts/northstar-simulation-agent.ts",
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
@@ -21,7 +22,8 @@
     "check": "npm run typecheck && npm run test && npm run lint && npm run test:e2e",
     "check:release": "npm run check && npm run build",
     "eval:discovery": "node evals/discovery/runner/cli.mjs",
-    "test:discovery-evals": "node --test evals/discovery/tests/*.test.mjs"
+    "test:discovery-evals": "node --test evals/discovery/tests/*.test.mjs",
+    "test:simulation": "node --import tsx --test tests/canvas-v2-simulation-agent.test.ts tests/simulation-agent-browser.test.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -48,6 +50,7 @@
     "react-zoom-pan-pinch": "^3.7.0",
     "reactflow": "^11.11.4",
     "recharts": "^3.6.0",
+    "sharp": "0.34.5",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {

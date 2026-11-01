@@ -1,5 +1,11 @@
 # Northstar capture host
 
+Functional app preview generation is available through
+[`simulation_agent.py`](simulation_agent.py); see the
+[simulation agent workflow](../docs/app-simulation-agent.md). It consumes the
+existing onboarding/browsing manifests and APK assets, defaults to a subscription
+agent file exchange, and keeps unverified drafts out of publication.
+
 For the current Hetzner host address, SSH command, service names, and read-only
 checks, see [capture host operations](../docs/capture-host-operations.md).
 

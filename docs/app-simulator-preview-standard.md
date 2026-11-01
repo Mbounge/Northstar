@@ -2,6 +2,11 @@
 
 Use this process for every app preview. The agent's current app captures are the visual authority. A build that runs is not a completed preview.
 
+The reusable [capture-grounded simulation agent](app-simulation-agent.md) connects
+the capture manifests and APK assets to native generation, browser journey
+checks, independent pixel review and bounded repair. Its release covers only
+the reviewed captured scope; generation alone does not publish an app preview.
+
 Set up the app template before building families: app identity and target viewport; capture inventory; an asset kit with source/generated provenance, fonts, icons, and design tokens; the app's status/navigation shell; record schemas and mock-data rules; navigation/state handling; and a review sheet. This is part of building the template, not cleanup after the pages are coded. Start each family from the [page-family build sheet](app-simulator-family-template.md). Keep the simulator's record data separate from its components, mark inferred fields, and make one shared component render each repeated page type. The visual shell belongs to the app being copied; different apps must not be forced into GRAET's styling.
 
 1. Inventory one page family at a time: the first view, every captured tab and scroll position, repeated entities, actions, overlays, and destinations. Record what is captured and what requires mock data.

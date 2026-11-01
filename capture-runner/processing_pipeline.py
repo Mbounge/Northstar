@@ -295,8 +295,16 @@ def main() -> int:
     parser.add_argument("--session", type=Path, required=True)
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--simulation-prepare", action="store_true",
+                        help="Prepare the connected functional-preview agent from these same captures; no model calls")
     args = parser.parse_args()
     try:
+        if args.simulation_prepare:
+            # Separate from enrichment/publication: a prepared or generated
+            # simulation is never silently counted as a verified app preview.
+            return subprocess.run([sys.executable, str(Path(__file__).with_name("simulation_agent.py")),
+                                   "prepare", "--session", str(args.session.resolve())],
+                                  check=False).returncode
         result = run(args.session) if args.run else prepare(args.session) if args.prepare else {
             key: value for key, value in inspect(args.session).items()
             if key not in ("session", "manifest", "flows", "canonical_files")}
