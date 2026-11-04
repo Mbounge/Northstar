@@ -23,7 +23,7 @@ export interface AccessibilityScan {
 }
 export interface AccessibilityVisualCapture {
   html:string; css:string; width:number; height:number;
-  language?:string; direction?:string; rootClass?:string; rootStyle?:string;
+  language?:string; direction?:string; rootClass?:string; rootStyle?:string; captureImages?:Record<string,string>;
 }
 export interface ScreenAccessibilityReport {
   schemaVersion: 1;
@@ -93,4 +93,19 @@ export function accessibilityEvidenceForModel(report:ScreenAccessibilityReport|u
   if(!report)return undefined;
   const {visual,...evidence}=report;
   return {...evidence,visualCaptureAvailable:!!visual};
+}
+
+/** Inline retained fonts/media are resources, not markup complexity. Bound
+ * both structural markup and the fully expanded document before allocating it. */
+export function validateAccessibilityCaptureSize(html:string,css:string,images:ReadonlyMap<string,string>=new Map()){
+  const resource=/data:(?:image\/(?:png|jpeg|webp|gif)|font\/(?:ttf|otf|woff|woff2));base64,[A-Za-z0-9+/=]+/g;
+  const structural=(source:string)=>source.replace(resource,'retained-resource');
+  if(structural(html).length>1_000_000||structural(css).length>1_000_000)throw Error('The accessibility snapshot exceeds the bounded markup size.');
+  let expanded=html.length+css.length;
+  for(const source of [html,css])for(const match of source.matchAll(/northstar-capture-image:\d+/g)){
+    const bytes=images.get(match[0]);if(!bytes)throw Error('A screen capture image is missing.');
+    expanded+=bytes.length-match[0].length;
+    if(expanded>24_000_000)throw Error('Accessibility capture resources exceed their expanded size budget.');
+  }
+  if(expanded>24_000_000)throw Error('Accessibility capture resources exceed their expanded size budget.');
 }

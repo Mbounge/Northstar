@@ -1,7 +1,7 @@
 'use client';
 import type { AxeResults, Result } from 'axe-core';
-import { bindScreenCaptureImages, screenCaptureImageDataUrls } from './screen-capture-resources';
-import { ACCESSIBILITY_MANUAL_CHECKS, retainAccessibilityBaseline, type AccessibilityFinding, type ScreenAccessibilityReport } from './screen-accessibility';
+import { bindScreenCaptureImages, packScreenCaptureImages, screenCaptureImageDataUrls } from './screen-capture-resources';
+import { ACCESSIBILITY_MANUAL_CHECKS, retainAccessibilityBaseline, validateAccessibilityCaptureSize, type AccessibilityFinding, type ScreenAccessibilityReport } from './screen-accessibility';
 
 export interface AccessibilitySnapshot { html: string; css: string; width: number; height: number; language?: string; direction?: string; title?: string; rootClass?:string;rootStyle?:string; captureImages?: unknown }
 const AXE_VERSION='4.14.0',AXE_SHA256='20c09fe157a8a34a30e241aaa1fcdade657734f08ab379ecfbeb7d45cc46e878';
@@ -36,8 +36,8 @@ function finding(result: Result): AccessibilityFinding {
  * Authored JS never executes here. CSP also forbids network, navigation and forms. */
 export function sanitizeAccessibilitySnapshot(snapshot: AccessibilitySnapshot) {
   if(!Number.isInteger(snapshot.width)||snapshot.width<240||snapshot.width>1920||!Number.isInteger(snapshot.height)||snapshot.height<240||snapshot.height>1600)throw Error('Use a bounded authored viewport.');
-  if (snapshot.html.length > 1_000_000 || snapshot.css.length > 1_000_000) throw Error('The accessibility snapshot exceeds the bounded audit size.');
   const replacements = screenCaptureImageDataUrls(snapshot.captureImages);
+  validateAccessibilityCaptureSize(snapshot.html,snapshot.css,replacements);
   const doc = new DOMParser().parseFromString(bindScreenCaptureImages(snapshot.html, replacements), 'text/html');
   doc.querySelectorAll('script,iframe,object,embed,link,meta,base,[data-northstar-feedback-overlay]').forEach(node => node.remove());
   const safeResource = (value: string) => /^data:(image\/(png|jpeg|webp|gif)|font\/(ttf|otf|woff|woff2));base64,[A-Za-z0-9+/=]+$/.test(value);
@@ -75,7 +75,7 @@ async function scan(snapshot: AccessibilitySnapshot, clean: {html: string; css: 
 export async function auditScreenAccessibility(snapshot: AccessibilitySnapshot, identity: {nodeId: string; encoded: string; sourceVersion: string; title: string}, signal: AbortSignal): Promise<ScreenAccessibilityReport> {
   const clean = sanitizeAccessibilitySnapshot(snapshot);
   const [sourceSha256, domSha256] = await Promise.all([accessibilityDigest(identity.encoded), accessibilityDigest(JSON.stringify({ ...clean, language: snapshot.language, direction: snapshot.direction, rootClass:snapshot.rootClass,rootStyle:snapshot.rootStyle,width: snapshot.width, height: snapshot.height }))]);
-  const report: ScreenAccessibilityReport = { schemaVersion: 1, kind: 'northstar-rendered-accessibility', id: crypto.randomUUID(), nodeId: identity.nodeId, title: identity.title, sourceVersion: identity.sourceVersion, sourceSha256, domSha256, checkedAt: new Date().toISOString(), engine: {name: 'axe-core', version: AXE_VERSION}, target: 'WCAG 2.1 A/AA', scope: 'current rendered state; inert semantic snapshot', status: 'check-failed', viewport:{width:snapshot.width,height:snapshot.height}, scans: [], manualChecks: [...ACCESSIBILITY_MANUAL_CHECKS], visual:{...clean,width:snapshot.width,height:snapshot.height,language:snapshot.language,direction:snapshot.direction,rootClass:snapshot.rootClass,rootStyle:snapshot.rootStyle} };
+  const report: ScreenAccessibilityReport = { schemaVersion: 1, kind: 'northstar-rendered-accessibility', id: crypto.randomUUID(), nodeId: identity.nodeId, title: identity.title, sourceVersion: identity.sourceVersion, sourceSha256, domSha256, checkedAt: new Date().toISOString(), engine: {name: 'axe-core', version: AXE_VERSION}, target: 'WCAG 2.1 A/AA', scope: 'current rendered state; inert semantic snapshot', status: 'check-failed', viewport:{width:snapshot.width,height:snapshot.height}, scans: [], manualChecks: [...ACCESSIBILITY_MANUAL_CHECKS], visual:{...packScreenCaptureImages(clean.html,clean.css),width:snapshot.width,height:snapshot.height,language:snapshot.language,direction:snapshot.direction,rootClass:snapshot.rootClass,rootStyle:snapshot.rootStyle} };
   try {
     const source=await loadAxeSource();
     for (const width of [...new Set([snapshot.width, 320])]) {
@@ -115,7 +115,7 @@ export function accessibilityVisualDocument(capture:NonNullable<ScreenAccessibil
 }
 export function restoreAccessibilityReports(artifacts:readonly {id:string;dataUrl:string;origin:string}[]){
   for(const artifact of artifacts){
-    if(!artifact.id.startsWith('accessibility:')||artifact.origin!=='computed'||artifact.dataUrl.length>5_500_000||!artifact.dataUrl.startsWith('data:application/json;base64,'))continue;
+    if(!artifact.id.startsWith('accessibility:')||artifact.origin!=='computed'||artifact.dataUrl.length>40_000_000||!artifact.dataUrl.startsWith('data:application/json;base64,'))continue;
     try{
       const bytes=Uint8Array.from(atob(artifact.dataUrl.slice(29)),c=>c.charCodeAt(0));
       const report=JSON.parse(new TextDecoder().decode(bytes)) as ScreenAccessibilityReport;

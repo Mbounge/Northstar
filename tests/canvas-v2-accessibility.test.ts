@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
-import { accessibilityEvidenceAllowsCompletion, accessibilityComparison, retainAccessibilityBaseline, accessibilityEvidenceForModel, type ScreenAccessibilityReport } from '../lib/canvas-v2/screen-accessibility';
+import { accessibilityEvidenceAllowsCompletion, accessibilityComparison, retainAccessibilityBaseline, accessibilityEvidenceForModel, validateAccessibilityCaptureSize, type ScreenAccessibilityReport } from '../lib/canvas-v2/screen-accessibility';
 import { accessibilityCourseFixture } from '../app/canvas-v2-e2e/accessibility/course-fixture';
 import { encodeCanvasV2Screen,parseCanvasV2Screen,validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
@@ -136,4 +136,14 @@ test('actual saved-evidence restoration retains the baseline, rechecks freshness
   exports.restoreAccessibilityReports([...artifacts,{id:'accessibility:bad',origin:'computed',dataUrl:'data:application/json;base64,AAAA'}]);
   assert.deepEqual(Array.from(exports.screenAccessibilityHistory('course'),(report:any)=>report.id),['0','3','4']);
   assert.equal(exports.screenAccessibilityStateChanged('course'),true);
+});
+
+test('ordinary retained font bytes do not count as a million characters of markup; expanded resources stay bounded',()=>{
+  const fonts='@font-face{font-family:Real;src:url(data:font/ttf;base64,'+'A'.repeat(1_120_606)+')}';
+  assert.doesNotThrow(()=>validateAccessibilityCaptureSize('<main>Actual page</main>',fonts));
+  assert.throws(()=>validateAccessibilityCaptureSize('<main>'+'x'.repeat(1_000_001)+'</main>',''),/markup size/);
+  const image='data:image/png;base64,'+'A'.repeat(2_000_000),images=new Map([['northstar-capture-image:1',image]]);
+  assert.doesNotThrow(()=>validateAccessibilityCaptureSize('<img src="northstar-capture-image:1">','',images));
+  assert.throws(()=>validateAccessibilityCaptureSize('<img src="northstar-capture-image:1">'.repeat(13),'',images),/expanded size budget/);
+  assert.throws(()=>validateAccessibilityCaptureSize('northstar-capture-image:9','',images),/missing/);
 });
