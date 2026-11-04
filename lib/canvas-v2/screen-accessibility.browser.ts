@@ -113,16 +113,19 @@ export function accessibilityVisualDocument(capture:NonNullable<ScreenAccessibil
   const escape=(value:string)=>value.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
   return `<!doctype html><html lang="${escape(capture.language??'')}" dir="${capture.direction==='rtl'?'rtl':'ltr'}" class="${escape(capture.rootClass??'')}" style="${escape(capture.rootStyle??'')}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${clean.css}</style></head>${doc.body.outerHTML}</html>`;
 }
+export function screenAccessibilityReports(){return [...history.values()].flat();}
+export function restoreStructuredAccessibilityReports(reports:readonly ScreenAccessibilityReport[]){
+  for(const report of reports){
+    if(!report||report.schemaVersion!==1||report.kind!=='northstar-rendered-accessibility'||typeof report.nodeId!=='string'||typeof report.id!=='string'||!Array.isArray(report.scans)||!Array.isArray(report.manualChecks)||!report.engine||!report.viewport)continue;
+    if(!screenAccessibilityHistory(report.nodeId).some(item=>item.id===report.id)){rememberAccessibilityReport(report);invalidateScreenAccessibilityState(report.nodeId);}
+  }
+}
 export function restoreAccessibilityReports(artifacts:readonly {id:string;dataUrl:string;origin:string}[]){
   for(const artifact of artifacts){
     if(!artifact.id.startsWith('accessibility:')||artifact.origin!=='computed'||artifact.dataUrl.length>40_000_000||!artifact.dataUrl.startsWith('data:application/json;base64,'))continue;
     try{
       const bytes=Uint8Array.from(atob(artifact.dataUrl.slice(29)),c=>c.charCodeAt(0));
-      const report=JSON.parse(new TextDecoder().decode(bytes)) as ScreenAccessibilityReport;
-      if(report.schemaVersion!==1||report.kind!=='northstar-rendered-accessibility'||typeof report.nodeId!=='string'||typeof report.id!=='string'||!Array.isArray(report.scans)||!Array.isArray(report.manualChecks)||!report.engine||!report.viewport)continue;
-      // Ignore duplicate IDs already present in live history; a saved old
-      // artifact must not replace a newly checked current state.
-      if(!screenAccessibilityHistory(report.nodeId).some(item=>item.id===report.id)){rememberAccessibilityReport(report);invalidateScreenAccessibilityState(report.nodeId);}
+      restoreStructuredAccessibilityReports([JSON.parse(new TextDecoder().decode(bytes))]);
     }catch{/* Malformed imported evidence is not accepted as proof. */}
   }
 }

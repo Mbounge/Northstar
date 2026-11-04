@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomBytes } from 'node:crypto';
-import { encodeSnapshotText, unpackSnapshotText, SNAPSHOT_MAX_EXPANDED_BYTES } from '../lib/canvas-v2/sessions/snapshot-codec';
+import { encodeSnapshotText, unpackSnapshotText, encodeSnapshotBase85, decodeSnapshotBase85, SNAPSHOT_MAX_EXPANDED_BYTES } from '../lib/canvas-v2/sessions/snapshot-codec';
 import { decodeSnapshotBlob, encodeSnapshot } from '../lib/canvas-v2/sessions/snapshot';
 import { createCanvasV2CommittedRevision } from '../lib/canvas-v2/revisions';
 import type { NorthstarSnapshot } from '../lib/canvas-v2/sessions/types';
@@ -55,4 +55,23 @@ test('compressed snapshots reject declared-size mismatches and unbounded expansi
   await assert.rejects(unpackSnapshotText(JSON.stringify({...packed,expandedBytes:SNAPSHOT_MAX_EXPANDED_BYTES+1}),100000),/malformed/);
   await assert.rejects(unpackSnapshotText(JSON.stringify({...packed,data:'***'}),100000),/malformed/);
   await assert.rejects(unpackSnapshotText(await blob.text(),blob.size-1),{stage:'size'});
+});
+
+test('compact JSON-safe snapshot encoding preserves arbitrary bytes and rejects invalid lengths, overflow and padding',()=>{
+  for(const size of [1,2,3,4,5,31,1024,65537]){
+    const original=randomBytes(size),encoded=encodeSnapshotBase85(original);
+    assert.ok(!/["\\]/.test(encoded));assert.deepEqual(Buffer.from(decodeSnapshotBase85(encoded,size)),original);
+    assert.ok(encoded.length<=Math.ceil(size/4)*5);
+  }
+  assert.throws(()=>decodeSnapshotBase85('00000',2.5),/length/);
+  assert.throws(()=>decodeSnapshotBase85('#####',4),/encoding/);
+  assert.throws(()=>decodeSnapshotBase85('00001',1),/padding/);
+  assert.throws(()=>decodeSnapshotBase85('0000~',4),/encoding/);
+  assert.throws(()=>decodeSnapshotBase85('00000',500000000),/length/);
+});
+test('complete compact saves remain JSON, restore original source exactly and reject corrupt compact metadata',async()=>{
+  const text=JSON.stringify({source:'Exact course café 🏫 '.repeat(500000)});
+  const blob=await encodeSnapshotText(text,1000000,{compactFromBytes:0}),raw=await blob.text(),packed=JSON.parse(raw);
+  assert.equal(blob.type,'application/json');assert.equal(packed.encoding,'gzip-base85');assert.equal(await unpackSnapshotText(raw),text);
+  for(const value of [{...packed,compressedBytes:packed.compressedBytes+4},{...packed,data:packed.data.slice(1)},{...packed,data:'~'+packed.data.slice(1)}])await assert.rejects(unpackSnapshotText(JSON.stringify(value)),/malformed/);
 });

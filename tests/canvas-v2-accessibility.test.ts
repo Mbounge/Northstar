@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
-import { accessibilityEvidenceAllowsCompletion, accessibilityComparison, retainAccessibilityBaseline, accessibilityEvidenceForModel, validateAccessibilityCaptureSize, type ScreenAccessibilityReport } from '../lib/canvas-v2/screen-accessibility';
+import { accessibilityEvidenceAllowsCompletion, accessibilityComparison, retainAccessibilityBaseline, accessibilityEvidenceForModel, accessibilityEvidenceArtifact, validateAccessibilityCaptureSize, type ScreenAccessibilityReport } from '../lib/canvas-v2/screen-accessibility';
 import { accessibilityCourseFixture } from '../app/canvas-v2-e2e/accessibility/course-fixture';
 import { encodeCanvasV2Screen,parseCanvasV2Screen,validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
@@ -115,14 +115,15 @@ test('actual manual-review listener persists the displayed pair and invalidates 
   const end=source.indexOf('    window.addEventListener(ACCESSIBILITY_REPORT_EVENT,retain);',start);
   assert.ok(start>0&&end>start);
   const artifacts={current:new Map<string,unknown>()};let versions=0;let history:ScreenAccessibilityReport[]=[];
-  const retain=vm.runInNewContext(ts.transpile(source.slice(start,end)+'\nretain',{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}),{artifacts,current:{current:{engine:{readCommittedRevision:()=>({document:{html:'course'}})}}},readCanvasV2Screens:()=>[{nodeId:'course'}],screenAccessibilityHistory:()=>history,TextEncoder,btoa,setAccessibilityEvidenceVersion:(next:(value:number)=>number)=>{versions=next(versions);}});
+  const retain=vm.runInNewContext(ts.transpile(source.slice(start,end)+'\nretain',{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}),{artifacts,current:{current:{engine:{readCommittedRevision:()=>({document:{html:'course'}})}}},readCanvasV2Screens:()=>[{nodeId:'course'}],screenAccessibilityHistory:()=>history,accessibilityEvidenceArtifact,TextEncoder,btoa,setAccessibilityEvidenceVersion:(next:(value:number)=>number)=>{versions=next(versions);}});
   for(let index=0;index<5;index++){
     const report={...proof(),id:String(index),visual:{html:`<p>Version ${index}</p>`,css:'',width:960,height:760}};
     history=retainAccessibilityBaseline(history,report);retain({detail:report});
   }
   assert.deepEqual([...artifacts.current.keys()],['accessibility:course:0','accessibility:course:3','accessibility:course:4']);assert.equal(versions,5);
   const artifact=artifacts.current.get('accessibility:course:0') as {dataUrl:string};
-  assert.equal(JSON.parse(Buffer.from(artifact.dataUrl.split(',')[1],'base64').toString()).visual.html,'<p>Version 0</p>');
+  assert.equal(JSON.parse(Buffer.from(artifact.dataUrl.split(',')[1],'base64').toString()).visual,undefined);
+  assert.equal(history[0].visual?.html,'<p>Version 0</p>');
   retain({detail:{...proof(),nodeId:'another-workspace'}});assert.equal(versions,5);
   assert.match(readFileSync(new URL('../components/canvas-v2/canvas-v2-workspace.tsx',import.meta.url),'utf8'),/managedChat\.screenVersions,managedChat\.accessibilityEvidenceVersion/);
 });
@@ -146,4 +147,24 @@ test('ordinary retained font bytes do not count as a million characters of marku
   assert.doesNotThrow(()=>validateAccessibilityCaptureSize('<img src="northstar-capture-image:1">','',images));
   assert.throws(()=>validateAccessibilityCaptureSize('<img src="northstar-capture-image:1">'.repeat(13),'',images),/expanded size budget/);
   assert.throws(()=>validateAccessibilityCaptureSize('northstar-capture-image:9','',images),/missing/);
+});
+
+test('structured accessibility visuals round-trip with shared original font bytes and compact findings artifacts',async()=>{
+  const {encodeSnapshotText,unpackSnapshotText}=await import('../lib/canvas-v2/sessions/snapshot-codec');
+  const font='data:font/ttf;base64,'+Buffer.from('retained-font-bytes-'.repeat(80000)).toString('base64');
+  const reports=Array.from({length:3},(_,index)=>({...proof(),id:String(index),visual:{html:`<p>Course ${index}</p>`,css:`@font-face{font-family:Original;src:url(${font})}`,width:960,height:760}}));
+  const memory={accessibilityReports:reports,artifacts:reports.map(accessibilityEvidenceArtifact)};
+  assert.ok(memory.artifacts.every(artifact=>artifact.bytes<10_000));
+  const text=JSON.stringify(memory),blob=await encodeSnapshotText(text,100_000_000);
+  assert.equal(await unpackSnapshotText(await blob.text()),text);
+  assert.deepEqual(JSON.parse(await unpackSnapshotText(await blob.text())).accessibilityReports,reports);
+});
+
+test('private history deliberately retains accessibility evidence while excluding shared canvas assets',async()=>{
+  const {privateCanvasHistory}=await import('../lib/canvas-v2/sessions/private-workspace');
+  const reports=[{...proof(),visual:{html:'<p>Course</p>',css:'',width:960,height:760}}];
+  const input={turns:[],draft:'',model:'gpt-6.1-sol',effort:'high',memory:{accessibilityReports:reports,artifacts:reports.map(accessibilityEvidenceArtifact),assets:[{id:'shared-assets-stay-out'}],accountPackets:[],accountFlows:[],sourceMedia:[],sourcePages:[],compositionHistory:[],compositionSequence:0}} as unknown as Parameters<typeof privateCanvasHistory>[0];
+  const history=privateCanvasHistory(input);
+  assert.deepEqual(history.memory?.accessibilityReports,reports);assert.deepEqual(history.memory?.assets,[]);
+  assert.equal('revision' in history,false);
 });

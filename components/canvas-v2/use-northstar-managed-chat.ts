@@ -50,8 +50,8 @@ import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
 import { parseCanvasV2Screen, readCanvasV2Screens, canvasV2ScreenReviewAssets, canvasV2ScreenBoundAssets, canvasV2ScreenPreviewAsset, canvasV2ScreenReferencePreview } from '@/lib/canvas-v2/interactive-screen';
 import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, appendCanvasV2NativeScreen, canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
 import { readCanvasV2NativeWorkspaceContext } from '@/lib/canvas-v2/native-workspace-context';
-import { rememberAccessibilityReport, restoreAccessibilityReports, screenAccessibilityHistory, ACCESSIBILITY_REPORT_EVENT } from '@/lib/canvas-v2/screen-accessibility.browser';
-import { accessibilityEvidenceForModel, type ScreenAccessibilityReport } from '@/lib/canvas-v2/screen-accessibility';
+import { rememberAccessibilityReport, restoreAccessibilityReports, screenAccessibilityHistory, screenAccessibilityReports, restoreStructuredAccessibilityReports, ACCESSIBILITY_REPORT_EVENT } from '@/lib/canvas-v2/screen-accessibility.browser';
+import { accessibilityEvidenceForModel, accessibilityEvidenceArtifact, type ScreenAccessibilityReport } from '@/lib/canvas-v2/screen-accessibility';
 import { readCanvasV2SimulationSource, auditCanvasV2Screen, inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion, testCanvasV2ScreenJourney, canvasV2ScreenPixelAppearance } from './interactive-screen';
 import { CANVAS_V2_SCREEN_FEEDBACK_BATCH, mergeCanvasV2ScreenFeedbackBatch, screenFeedbackSelectionSurvives, CANVAS_V2_MAX_FEEDBACK_TARGETS, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking, type CanvasV2ObjectFeedbackTarget, CANVAS_V2_SCREEN_FEEDBACK, canvasV2ScreenFeedbackContext, parseCanvasV2ScreenFeedbackTarget, patchCanvasV2ScreenComponent, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
 import { canvasV2ProductDesignContext, canvasV2RefinementReviewReferences, validateCanvasV2ProductIdentity, type CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
@@ -77,15 +77,23 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const assets = useRef(new Map<string, CanvasV2EvidenceAsset>((input.initial?.memory?.assets ?? []).map(a => [a.id, a])));
   const readProjectAssets = useCallback(() => [...assets.current.values()], []);
   const artifacts = useRef(new Map<string, NorthstarArtifact>((input.initial?.memory?.artifacts ?? []).map(a => [a.id, a])));
-  useEffect(()=>{restoreAccessibilityReports(input.initial?.memory?.artifacts??[]);},[input.initial]);
+  useEffect(()=>{
+    restoreStructuredAccessibilityReports(input.initial?.memory?.accessibilityReports??[]);
+    restoreAccessibilityReports(input.initial?.memory?.artifacts??[]);
+    // Migrate legacy encoded visual reports without losing their captures.
+    // Structured visuals let the existing snapshot dictionary share media.
+    for(const report of screenAccessibilityReports()){
+      const artifact=accessibilityEvidenceArtifact(report);artifacts.current.set(artifact.id,artifact);
+    }
+    if(screenAccessibilityReports().length)setAccessibilityEvidenceVersion(version=>version+1);
+  },[input.initial]);
   const [accessibilityEvidenceVersion,setAccessibilityEvidenceVersion]=useState(0);
   useEffect(()=>{
     if(!input.enabled)return;
     const retain=(event:Event)=>{
       const report=(event as CustomEvent<ScreenAccessibilityReport>).detail;
       if(!readCanvasV2Screens(current.current.engine.readCommittedRevision().document.html).some(screen=>screen.nodeId===report.nodeId))return;
-      const json=JSON.stringify(report),bytes=new TextEncoder().encode(json);
-      const artifact:NorthstarArtifact={id:`accessibility:${report.nodeId}:${report.id}`,name:'accessibility-evidence.json',label:`Accessibility evidence · ${report.title}`,mimeType:'application/json',dataUrl:'data:application/json;base64,'+btoa(Array.from(bytes,byte=>String.fromCharCode(byte)).join('')),bytes:bytes.length,origin:'computed',createdAt:report.checkedAt,inputAssetIds:[]};
+      const artifact=accessibilityEvidenceArtifact(report);
       artifacts.current.set(artifact.id,artifact);
       const retained=new Set(screenAccessibilityHistory(report.nodeId).map(item=>`accessibility:${report.nodeId}:${item.id}`));
       for(const key of artifacts.current.keys())if(key.startsWith(`accessibility:${report.nodeId}:`)&&!retained.has(key))artifacts.current.delete(key);
@@ -272,7 +280,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       };
       const retainAccessibility = (report:ScreenAccessibilityReport) => {
         rememberAccessibilityReport(report);
-        const json=JSON.stringify(report),artifact:NorthstarArtifact={id:`accessibility:${report.nodeId}:${report.id}`,name:'accessibility-evidence.json',label:`Accessibility evidence · ${report.title}`,mimeType:'application/json',dataUrl:'data:application/json;base64,'+btoa(Array.from(new TextEncoder().encode(json),byte=>String.fromCharCode(byte)).join('')),bytes:new TextEncoder().encode(json).length,origin:'computed',createdAt:report.checkedAt,inputAssetIds:[]};
+        const artifact=accessibilityEvidenceArtifact(report);
         artifacts.current.set(artifact.id,artifact);
         // Keep the latest three reports per page as durable before/after proof.
         const old=[...artifacts.current.keys()].filter(key=>key.startsWith(`accessibility:${report.nodeId}:`));
@@ -1168,7 +1176,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     if (editActive.current) current.current.engine.stop();
     stopping.current = (client.current?.cancel() ?? Promise.resolve()).catch(() => undefined).finally(() => { stopping.current = undefined; });
   };
-  const memory = () => ({ conversationEditTargets: conversationEditTargets.current, screenVersions: screenVersionsRef.current, productIdentities: productIdentities.current, artifacts: [...artifacts.current.values()], assets: [...assets.current.values()], accountPackets: accountPackets.current, accountHandles: accountHandles.current.entries?.() ?? [],
+  const memory = () => ({ accessibilityReports:screenAccessibilityReports().filter(report=>artifacts.current.has(`accessibility:${report.nodeId}:${report.id}`)), conversationEditTargets: conversationEditTargets.current, screenVersions: screenVersionsRef.current, productIdentities: productIdentities.current, artifacts: [...artifacts.current.values()], assets: [...assets.current.values()], accountPackets: accountPackets.current, accountHandles: accountHandles.current.entries?.() ?? [],
     referenceRailFlowIds:[...referenceRailFlowIds.current], accountFlows: [...accountFlows.current.entries()], accountFlowSummaries: [...accountFlowSummaries.current.entries()], sourceMedia: sourceMedia.current, sourcePages: sourcePages.current,
     compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
   return { ...input.base, productIdentities: productIdentities.current, screenVersions, screenFeedback: screenFeedbacks[0]?.target, screenFeedbackTargets: screenFeedbacks.map(entry => entry.target), objectFeedbackTargets: objectFeedbacks,

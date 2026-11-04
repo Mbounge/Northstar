@@ -109,3 +109,10 @@ export function validateAccessibilityCaptureSize(html:string,css:string,images:R
   }
   if(expanded>24_000_000)throw Error('Accessibility capture resources exceed their expanded size budget.');
 }
+
+/** Keep findings downloadable while saving visual documents structurally in
+ * session memory, where the snapshot codec can share repeated font/media bytes. */
+export function accessibilityEvidenceArtifact(report:ScreenAccessibilityReport):import('./creative/types').NorthstarArtifact {
+  const json=JSON.stringify(accessibilityEvidenceForModel(report)),bytes=new TextEncoder().encode(json);
+  return {id:`accessibility:${report.nodeId}:${report.id}`,name:'accessibility-findings.json',label:`Accessibility findings · ${report.title}`,mimeType:'application/json',dataUrl:'data:application/json;base64,'+btoa(Array.from(bytes,byte=>String.fromCharCode(byte)).join('')),bytes:bytes.length,origin:'computed',createdAt:report.checkedAt,inputAssetIds:[]};
+}
