@@ -80,11 +80,11 @@ export function screenCaptureImageSourceIsSafe(source: string | null, retainedUr
   return typeof source === 'string' && (/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(source) || retainedUrls.includes(source));
 }
 
-export type ScreenAction = { action: 'preview-element' | 'preview-text' | 'presence-mode' | 'feedback-target' | 'edit-layers' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; attributes?:Record<string,string>; runtimeStyle?:boolean; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
+export type ScreenAction = { action: 'preview-element' | 'preview-text' | 'presence-mode' | 'feedback-target' | 'edit-layers' | 'edit-hover' | 'patch-design' | 'inspect' | 'click' | 'fill' | 'scroll' | 'snapshot' | 'feedback-mode' | 'edit-mode' | 'edit-target' | 'edit-targets' | 'edit-selection' | 'sample-motion' | 'motion-begin' | 'motion-end' | 'live-motion' | 'patch-element' | 'patch-elements' | 'patch-assets' | 'asset-target' | 'patch-structure' | 'restore-focus' | 'patch-stylesheet' | 'test-sequence' | 'drag' | 'presentation-snapshot' | 'accessibility-snapshot'; selector?: string; selectors?:string[]; selectionMode?:'replace'|'toggle'; selectionRequestId?:number; selectionSelectors?:string[]; motionTargetSelector?:string; selectionStart?:number; selectionEnd?:number; value?: string; x?: number; y?: number; progress?: number; text?: string; styles?: Record<string, string>; attributes?:Record<string,string>; runtimeStyle?:boolean; assetEdits?: import('./screen-asset-edit').ScreenAssetPatch[]; designPatch?:{beforeHTML:string;afterHTML:string}; structurePatch?: import('./screen-direct-edit').ScreenStructurePatch; assetSources?: Array<{id:string;bytes:string}>; edits?:Array<{selector:string;text?:string;html?:string;inlineText?:boolean;attributes?:Record<string,string|null>;styles:Record<string,string>}>; stylesheet?: string; fontCss?: string; motionSessionId?: string; sampleTimesMs?: number[]; steps?: ScreenInteractionStep[]; drag?: ScreenPointerDrag };
 
 /** Host selection and saved-source patches preserve the user's live app state. */
 export function screenCommandMayRunDuringHumanInput(action:ScreenAction['action']):boolean {
-  return ['preview-element','preview-text','edit-layers','presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
+  return ['preview-element','preview-text','edit-layers','presence-mode','feedback-target','edit-hover','patch-design','inspect','snapshot','accessibility-snapshot','feedback-mode','edit-mode','edit-target','edit-targets','edit-selection','patch-element','patch-elements','patch-assets','asset-target','patch-structure','patch-stylesheet','motion-end'].includes(action);
 }
 
 export const SCREEN_PROTOCOL = 'northstar-screen-v1';
@@ -358,6 +358,22 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     document.addEventListener('submit', e => e.preventDefault(), true);
     document.addEventListener('keydown', e => {if(e.key==='Escape'){clearFeedback();parent.postMessage({protocol,token,escape:true},'*')}});
     document.addEventListener('click', e => { const a=e.target.closest?.('a'); if(a && !a.getAttribute('href')?.startsWith('#')) e.preventDefault(); }, true);
+    // srcdoc inherits its embedding URL for fragment resolution. Never let a
+    // local section link navigate/reload the host or replace the preview.
+    // Run after product listeners so custom routing can cancel the default.
+    addEventListener('click', e => {
+      const href=e.target.closest?.('a')?.getAttribute('href');
+      if(e.defaultPrevented||!href?.startsWith('#'))return;
+      e.preventDefault();
+      let id;try{id=decodeURIComponent(href.slice(1));}catch{return;}
+      const target=id?document.getElementById(id):document.body;
+      if(!target)return;
+      target.scrollIntoView({block:'start',behavior:'instant'});
+      const added=!target.hasAttribute('tabindex');
+      if(added)target.setAttribute('tabindex','-1');
+      target.focus({preventScroll:true});
+      if(added)target.addEventListener('blur',()=>target.removeAttribute('tabindex'),{once:true});
+    });
     const scrollRegions=()=>{
       const root=document.scrollingElement;
       const regions=[...document.querySelectorAll('*')].filter(el=>el!==root&&el.clientHeight>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).opacity!=='0'&&/auto|scroll/.test(getComputedStyle(el).overflowY)&&el.scrollHeight>el.clientHeight+2).slice(0,12).map(el=>({selector:selectorFor(el),selectorAliases:selectorAliases(el),x:el.scrollLeft,y:el.scrollTop,width:el.clientWidth,height:el.clientHeight,contentHeight:el.scrollHeight,maxY:el.scrollHeight-el.clientHeight}));
@@ -531,6 +547,17 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
       clone.querySelectorAll('script,iframe,object,embed,link,meta,base,[data-northstar-feedback-overlay]').forEach(el=>el.remove());
       return {...packCapture(clone.outerHTML,[...document.querySelectorAll('style')].map(el=>el.textContent).join('\\n')+pseudoCss),width:innerWidth,height:innerHeight,missingCaptures,...inspect()};
     };
+    const accessibilitySnapshot = () => {
+      const clone=document.body.cloneNode(true),live=[...document.body.querySelectorAll('*')],copies=[...clone.querySelectorAll('*')];
+      if(live.length>5000)throw Error('The screen is too large to audit.');
+      live.forEach((el,i)=>{const copy=copies[i];
+        if(el instanceof HTMLInputElement){copy.setAttribute('value',el.type==='password'?'':el.value);copy.toggleAttribute('checked',el.checked)}
+        if(el instanceof HTMLTextAreaElement)copy.textContent=el.value;
+        if(el instanceof HTMLSelectElement)[...copy.options].forEach((option,j)=>option.toggleAttribute('selected',el.options[j].selected));
+      });
+      clone.querySelectorAll('script,iframe,object,embed,link,meta,base,[data-northstar-feedback-overlay]').forEach(el=>el.remove());
+      return {...packCapture(clone.outerHTML,[...document.querySelectorAll('style')].map(el=>el.textContent).join('\\n')),width:innerWidth,height:innerHeight,language:document.documentElement.lang,direction:document.documentElement.dir,rootClass:document.documentElement.className,rootStyle:document.documentElement.getAttribute('style')??'',title:document.title};
+    };
     addEventListener('message', async e => {
       if(e.source!==parent || e.data?.protocol!==protocol || e.data.token!==token) return;
       if(typeof e.data.presentationFrameId==='string'){
@@ -545,6 +572,10 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         if(command.action==='presentation-snapshot'&&[...document.querySelectorAll('canvas')].some(canvas=>(canvas.width===0||canvas.height===0)&&canvasContributesPaint(canvas)))throw Error('Presentation pixels are not ready.');
         finishReviewDraw=window.northstarThree?.beginReviewDraw();
         if(['patch-design','patch-element','patch-elements','patch-stylesheet','patch-structure','patch-assets'].includes(command.action)||command.action==='edit-mode'&&command.value!=='on')restoreInspectorPreview();
+        if(command.action==='accessibility-snapshot'){
+          await document.fonts.ready;await waitTrustedRuntime();
+          parent.postMessage({protocol,token,requestId,result:accessibilitySnapshot()},'*');return;
+        }
         if(command.action==='presentation-snapshot'){
           await document.fonts.ready;await waitTrustedRuntime();
           parent.postMessage({protocol,token,requestId,result:presentationSnapshot()},'*');return;
@@ -815,5 +846,5 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     (${signalCanvasV2ScreenRuntimeReady.toString()})(document, () => parent.postMessage({protocol,token,ready:true},'*'));
   })();`;
   const safeScript = (code: string) => code.replace(/<\/script/gi, '<\\/script');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'nonce-${nonce}'${screen.wasmModules?.length ? " 'wasm-unsafe-eval'" : ''}; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style data-northstar-screen-fonts>${fontCss}</style><style data-northstar-screen-style>${bind(screen.css)}</style>${screenScrollStyle}${screenSemanticsStyle}</head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script>${trustedSource ? `<script nonce="${nonce}">${safeScript(trustedSource)}</script><script nonce="${nonce}">${safeScript(trustedHelper)}</script>` : ''}<script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script><script nonce="${nonce}">${safeScript(`(() => {const fields=${JSON.stringify(retainedState?.fields ?? [])},scrollers=${JSON.stringify(retainedState?.scrollers??[])},scroll=${JSON.stringify(retainedState?.scroll??null)};for(const field of fields){const matches=[...document.querySelectorAll('input,textarea,select')].filter(el=>(field.id?el.id===field.id:el.name===field.name)&&(el.type||el.tagName.toLowerCase())===field.type);if(matches.length===1){matches[0].value=field.value;if('checked' in matches[0])matches[0].checked=field.checked}}for(const saved of scrollers){try{const elements=document.querySelectorAll(saved.selector);if(elements.length===1&&Number.isFinite(saved.x)&&Number.isFinite(saved.y))elements[0].scrollTo(saved.x,saved.y)}catch{/* A changed scroller is not restored. */}}if(scroll&&Number.isFinite(scroll.x)&&Number.isFinite(scroll.y))scrollTo(scroll.x,scroll.y)})();`)}</script></body></html>`;
+  return `<!doctype html><html${screen.language ? ` lang="${screen.language}"` : ''}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'nonce-${nonce}'${screen.wasmModules?.length ? " 'wasm-unsafe-eval'" : ''}; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${screen.title.replace(/[&<>"']/g,c=>`&#${c.charCodeAt(0)};`)}</title><style>html,body{margin:0;min-height:100%;font-family:system-ui,sans-serif}*{box-sizing:border-box}body{color:#111;background:#fff}</style><style data-northstar-screen-fonts>${fontCss}</style><style data-northstar-screen-style>${bind(screen.css)}</style>${screenScrollStyle}${screenSemanticsStyle}</head><body>${bind(screen.html)}<script nonce="${nonce}">${safeScript(boot)}</script>${trustedSource ? `<script nonce="${nonce}">${safeScript(trustedSource)}</script><script nonce="${nonce}">${safeScript(trustedHelper)}</script>` : ''}<script nonce="${nonce}">${safeScript(bind(screen.javascript))}</script><script nonce="${nonce}">${safeScript(`(() => {const fields=${JSON.stringify(retainedState?.fields ?? [])},scrollers=${JSON.stringify(retainedState?.scrollers??[])},scroll=${JSON.stringify(retainedState?.scroll??null)};for(const field of fields){const matches=[...document.querySelectorAll('input,textarea,select')].filter(el=>(field.id?el.id===field.id:el.name===field.name)&&(el.type||el.tagName.toLowerCase())===field.type);if(matches.length===1){matches[0].value=field.value;if('checked' in matches[0])matches[0].checked=field.checked}}for(const saved of scrollers){try{const elements=document.querySelectorAll(saved.selector);if(elements.length===1&&Number.isFinite(saved.x)&&Number.isFinite(saved.y))elements[0].scrollTo(saved.x,saved.y)}catch{/* A changed scroller is not restored. */}}if(scroll&&Number.isFinite(scroll.x)&&Number.isFinite(scroll.y))scrollTo(scroll.x,scroll.y)})();`)}</script></body></html>`;
 }

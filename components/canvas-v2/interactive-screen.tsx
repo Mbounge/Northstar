@@ -2,6 +2,9 @@
 import {rememberScreenRuntimeLayers,screenRuntimeAppearanceCanEdit} from '@/lib/canvas-v2/screen-runtime-design';
 import {VISUAL_FEEDBACK_START} from '@/lib/canvas-v2/visual-feedback';
 import { ScreenDesignStudio } from './screen-design-studio';
+import { ScreenAccessibilityPanel } from './screen-accessibility-panel';
+import { auditScreenAccessibility, rememberAccessibilityReport, invalidateScreenAccessibilityState, screenAccessibilityEpoch, type AccessibilitySnapshot } from '@/lib/canvas-v2/screen-accessibility.browser';
+import { canvasV2FeedbackFingerprint } from '@/lib/canvas-v2/screen-feedback';
 import { PreviewChrome } from './preview-chrome';
 import { buildScreenDesignExport, downloadScreenDesign } from '@/lib/canvas-v2/screen-design-export';
 import type { ScreenDesignOperation, ScreenDesignOrigin } from '@/lib/canvas-v2/screen-design-edit';
@@ -387,6 +390,20 @@ export async function captureCanvasV2ScreenMotion(nodeId: string, encoded: strin
     // Restoring playback is cleanup even when the original request was aborted.
     await controller.run({ action: 'motion-end', motionSessionId }, new AbortController().signal).catch(() => undefined);
   }
+}
+
+/** Audit the real current DOM without executing authored JavaScript in the audit frame. */
+export async function auditCanvasV2Screen(nodeId:string, encoded:string, signal:AbortSignal) {
+  const screen=parseCanvasV2Screen(encoded);
+  if(screen.simulation)throw Error('Audit an authored page. Registered app references have their own runtime.');
+  const epoch=screenAccessibilityEpoch(nodeId);
+  const snapshot=await inspectCanvasV2Screen(nodeId,encoded,{action:'accessibility-snapshot'},signal);
+  const report=await auditScreenAccessibility(snapshot as unknown as AccessibilitySnapshot,{nodeId,encoded,title:screen.title,sourceVersion:canvasV2FeedbackFingerprint(encoded)},signal);
+  // Re-read the live controller: concurrent human/multiplayer edits invalidate proof.
+  if(controllers.get(nodeId)?.encoded!==encoded)throw Error('The page changed during the accessibility check. Run it on the current version.');
+  if(screenAccessibilityEpoch(nodeId)!==epoch)throw Error('The preview was used during the accessibility check. Re-check its new state when you are ready.');
+  rememberAccessibilityReport(report);
+  return report;
 }
 
 export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption = true }: { nodeId: string; encoded: string; showCaption?: boolean }) {
@@ -1049,6 +1066,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
       if (event.data.userInput) {
         if(!Number.isSafeInteger(event.data.inputSequence)||!noteCanvasInputActivity(event.data.userInputType,event.data.inputSequence))return;
         lastHumanInput.current=Date.now();
+        invalidateScreenAccessibilityState(nodeId);
         dismiss('input'); lease?.invalidate(); presentationCache.interrupt();
         if(['wheel','pointerdown'].includes(event.data.userInputType)&&event.data.inputSequence>directInputSequence.current){if(editingRef.current.nodeId!==nodeId){setElementSelection(undefined);closeTextEditor()}setDirectMenu(undefined);setDirectError('')}
         retainRuntimeState(event.data.retainedState);
@@ -1193,7 +1211,7 @@ export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption =
   return <div ref={host} data-canvas-v2-interactive-screen={nodeId} tabIndex={-1} className="group relative h-full w-full" style={{ overflow: 'visible' }} onDragEnter={event => {
     if (editing.mode !== 'preview' && !screen.simulation && [...event.dataTransfer.types].some(type => type === 'Files' || type === SCREEN_ASSET_DRAG_TYPE)) { event.preventDefault(); setAssetDrag(true); }
   }}>
-    {showCaption && <PreviewChrome title={screen.title} appName={screen.simulation?.appName} onReset={resetPreview} />}
+    {showCaption && <PreviewChrome title={screen.title} appName={screen.simulation?.appName} onReset={resetPreview} actions={!screen.simulation ? <ScreenAccessibilityPanel nodeId={nodeId} encoded={encoded} audit={signal=>auditCanvasV2Screen(nodeId,encoded,signal)} requestRepair={!editing.readOnly&&editing.openChat?()=>{editing.select(nodeId);window.dispatchEvent(new CustomEvent(SCREEN_DIRECT_PROMPT_EVENT,{detail:`Improve accessibility of the page ${screen.title.slice(0,200)} (node ${nodeId}). Audit its current state before editing, preserve all original teaching content, links, images and assessment values, repair the measured barriers, then re-check. Retain the original before beside the repaired after and report unresolved human checks. Do not change unrelated pages or claim full WCAG conformance.`}));}:undefined} /> : undefined} />}
     {/* Keep live frame layout dimensions stable between visits. Offscreen
         graphics still use their explicit presentation gate. */}
     <div data-northstar-device-frame={device} className="absolute inset-0 overflow-hidden" onFocusCapture={() => {dismissPresentation.current('focus');if(editing.mode==='preview')editing.previewFocus?.(nodeId)}} style={{contentVisibility: 'visible', borderRadius:deviceMetrics.radius*scale,background:'transparent',boxShadow:device !== 'none' && !screen.simulation ? `0 0 0 ${deviceMetrics.bezel*scale}px #101117,0 0 0 ${(deviceMetrics.bezel+1)*scale}px #626777,0 ${12*scale}px ${32*scale}px #00000038` : undefined}}>

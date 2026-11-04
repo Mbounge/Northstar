@@ -1,4 +1,5 @@
 'use client';
+import { screenContentInventory, compareScreenContent, requireScreenContentPreserved, type ScreenContentInventory } from '@/lib/canvas-v2/screen-content-preservation';
 import { requireLiveScreenInteraction } from '@/lib/canvas-v2/screen-interaction-sequence';
 import {VISUAL_FEEDBACK_BATCH,assertVisualFeedbackSourcesCurrent} from '@/lib/canvas-v2/visual-feedback';
 import { captureValidationIsPending } from '@/lib/canvas-v2/capture-batch';
@@ -49,7 +50,9 @@ import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
 import { parseCanvasV2Screen, readCanvasV2Screens, canvasV2ScreenReviewAssets, canvasV2ScreenBoundAssets, canvasV2ScreenPreviewAsset, canvasV2ScreenReferencePreview } from '@/lib/canvas-v2/interactive-screen';
 import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, appendCanvasV2NativeScreen, canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
 import { readCanvasV2NativeWorkspaceContext } from '@/lib/canvas-v2/native-workspace-context';
-import { readCanvasV2SimulationSource, inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion, testCanvasV2ScreenJourney, canvasV2ScreenPixelAppearance } from './interactive-screen';
+import { rememberAccessibilityReport, restoreAccessibilityReports, screenAccessibilityHistory, ACCESSIBILITY_REPORT_EVENT } from '@/lib/canvas-v2/screen-accessibility.browser';
+import { accessibilityEvidenceForModel, type ScreenAccessibilityReport } from '@/lib/canvas-v2/screen-accessibility';
+import { readCanvasV2SimulationSource, auditCanvasV2Screen, inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion, testCanvasV2ScreenJourney, canvasV2ScreenPixelAppearance } from './interactive-screen';
 import { CANVAS_V2_SCREEN_FEEDBACK_BATCH, mergeCanvasV2ScreenFeedbackBatch, screenFeedbackSelectionSurvives, CANVAS_V2_MAX_FEEDBACK_TARGETS, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking, type CanvasV2ObjectFeedbackTarget, CANVAS_V2_SCREEN_FEEDBACK, canvasV2ScreenFeedbackContext, parseCanvasV2ScreenFeedbackTarget, patchCanvasV2ScreenComponent, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
 import { canvasV2ProductDesignContext, canvasV2RefinementReviewReferences, validateCanvasV2ProductIdentity, type CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
 import { canvasV2ScreenMotionReviewMode, type ScreenAction } from '@/lib/canvas-v2/interactive-screen-runtime';
@@ -74,12 +77,30 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   const assets = useRef(new Map<string, CanvasV2EvidenceAsset>((input.initial?.memory?.assets ?? []).map(a => [a.id, a])));
   const readProjectAssets = useCallback(() => [...assets.current.values()], []);
   const artifacts = useRef(new Map<string, NorthstarArtifact>((input.initial?.memory?.artifacts ?? []).map(a => [a.id, a])));
+  useEffect(()=>{restoreAccessibilityReports(input.initial?.memory?.artifacts??[]);},[input.initial]);
+  const [accessibilityEvidenceVersion,setAccessibilityEvidenceVersion]=useState(0);
+  useEffect(()=>{
+    if(!input.enabled)return;
+    const retain=(event:Event)=>{
+      const report=(event as CustomEvent<ScreenAccessibilityReport>).detail;
+      if(!readCanvasV2Screens(current.current.engine.readCommittedRevision().document.html).some(screen=>screen.nodeId===report.nodeId))return;
+      const json=JSON.stringify(report),bytes=new TextEncoder().encode(json);
+      const artifact:NorthstarArtifact={id:`accessibility:${report.nodeId}:${report.id}`,name:'accessibility-evidence.json',label:`Accessibility evidence · ${report.title}`,mimeType:'application/json',dataUrl:'data:application/json;base64,'+btoa(Array.from(bytes,byte=>String.fromCharCode(byte)).join('')),bytes:bytes.length,origin:'computed',createdAt:report.checkedAt,inputAssetIds:[]};
+      artifacts.current.set(artifact.id,artifact);
+      const retained=new Set(screenAccessibilityHistory(report.nodeId).map(item=>`accessibility:${report.nodeId}:${item.id}`));
+      for(const key of artifacts.current.keys())if(key.startsWith(`accessibility:${report.nodeId}:`)&&!retained.has(key))artifacts.current.delete(key);
+      setAccessibilityEvidenceVersion(version=>version+1);
+    };
+    window.addEventListener(ACCESSIBILITY_REPORT_EVENT,retain);
+    return()=>window.removeEventListener(ACCESSIBILITY_REPORT_EVENT,retain);
+  },[input.enabled]);
   const accountHandles = useRef(new AccountToolHandles(input.initial?.memory?.accountHandles));
   const inspectedPixels = useRef(new Map<string, string>());
   const cropInspections = useRef(new Map<string, { assetId: string; rect: AssetPixelRect; sourceSize: AssetSourceSize; sourcePixels: string }>());
   const inspectedSourceSizes = useRef(new Map<string, AssetSourceSize>());
   const screenPlans = useRef(new Map<string, ScreenConstructionPlan>());
   const refinementBaselines = useRef(new Map<string, { image: string; state: unknown; sourceVersion?: string; viewport: { width: number; height: number } }>());
+  const contentProtections=useRef(new Map<string,{turnId:string;sourceVersion:string;inventory:ScreenContentInventory}>());
   const authorizedScreenSources = useRef(new Map<string, string>());
   const conversationEditTargets = useRef(parseConversationEditTargets(input.initial?.memory?.conversationEditTargets));
   const unavailableSimulationSources = useRef(new Set<string>());
@@ -245,6 +266,19 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     if (client.current) return client.current;
     const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const engine = current.current.engine;
+      const contentPreservationFor=(nodeId:string,html:string)=>{
+        const baseline=contentProtections.current.get(nodeId);
+        return baseline?.turnId===(rootId.current??'')?{...compareScreenContent(baseline.inventory,screenContentInventory(html,new DOMParser())),baselineSourceVersion:baseline.sourceVersion}:undefined;
+      };
+      const retainAccessibility = (report:ScreenAccessibilityReport) => {
+        rememberAccessibilityReport(report);
+        const json=JSON.stringify(report),artifact:NorthstarArtifact={id:`accessibility:${report.nodeId}:${report.id}`,name:'accessibility-evidence.json',label:`Accessibility evidence · ${report.title}`,mimeType:'application/json',dataUrl:'data:application/json;base64,'+btoa(Array.from(new TextEncoder().encode(json),byte=>String.fromCharCode(byte)).join('')),bytes:new TextEncoder().encode(json).length,origin:'computed',createdAt:report.checkedAt,inputAssetIds:[]};
+        artifacts.current.set(artifact.id,artifact);
+        // Keep the latest three reports per page as durable before/after proof.
+        const old=[...artifacts.current.keys()].filter(key=>key.startsWith(`accessibility:${report.nodeId}:`));
+        old.slice(1,-2).forEach(key=>artifacts.current.delete(key));
+        return artifactMetadata(artifact);
+      };
       const reviewScreenPixels = async (screenRevision: ReturnType<typeof engine.readCommittedRevision>, screen: ReturnType<typeof readCanvasV2Screens>[number]) => {
           const captureAssets = structuredClone([...screenRevision.evidence, ...assets.current.values()]);
           const boundIds = new Set(canvasV2ScreenBoundAssets(screen.screen));
@@ -286,7 +320,9 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           };
           // These three surfaces are read independently. Preserve every real
           // capture and validation while overlapping their renderer/asset waits.
-          const [{capture,pixelAppearance},defaultResult,referenceResult] = await Promise.all([liveCapture(),defaultCaptureWork(),referenceCaptureWork()]);
+          const [{capture,pixelAppearance},defaultResult,referenceResult,accessibility] = await Promise.all([liveCapture(),defaultCaptureWork(),referenceCaptureWork(),screen.screen.simulation?undefined:auditCanvasV2Screen(screen.nodeId,screen.encoded,signal)]);
+          if(accessibility)accessibility.contentPreservation=contentPreservationFor(screen.nodeId,screen.screen.html);
+          const accessibilityArtifact=accessibility?retainAccessibility(accessibility):undefined;
           const defaultPixelAppearance=defaultResult?.appearance, defaultCapture=defaultResult?.capture;
           // Authored snapshots are retained only on an explicit review, not every postcommit capture.
           const previewAsset = screen.screen.simulation || action.name === 'canvas_review' ? await canvasV2ScreenPreviewAsset(screen.nodeId,screen.screen,capture.image,screen.encoded) : undefined;
@@ -373,7 +409,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
           });
           const captureRevision = engine.readCommittedRevision();
           requireScreenJourneySourceCurrent(screen.nodeId,screen.encoded,captureAssets,captureRevision.document.html,[...captureRevision.evidence,...assets.current.values()]);
-          return [{ type: 'input_text', text: JSON.stringify({ captureRole: 'render', nodeId: screen.nodeId, revisionId: screenRevision.id, sourceVersion:canvasV2FeedbackFingerprint(screen.encoded), viewport: { width: screen.screen.width, height: screen.screen.height }, pixelAppearance, defaultPixelAppearance, productDesignContext, componentPlan, referenceIntent:screen.screen.referenceIntent, referenceAppearance:screen.screen.referenceAppearance, captureReferenceAssetId: previewAsset?.id, referenceUse: previewAsset ? 'These current preview pixels are retained. Use captureReferenceAssetId with inspect_asset, prepare_asset or workspace_run to extract visible logos, icons and images. For faithful component extraction, inspect this captureReferenceAssetId and add it as primary identity evidence with canvas_product_identity under the source screen’s same productIdentityId. Use referenceNodeId equal to this nodeId on canvas_screen with only the requested component source; faithful is the default intent. Match this product appearance unless the user requested a different direction. Keep the original preview intact.' : undefined, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, reviewReferenceAssetIds: reviewAssets.map(asset => asset.id), modelReferenceAssets, boundAssetIds: canvasV2ScreenBoundAssets(screen.screen), componentComparisonLabels:componentPairLabels, componentMeasurements, measurementNote: componentPlan ? 'Expected geometry is based on the agent’s observed source rectangles; actual geometry comes from this fresh render. Compare paired pixels to verify those observations. Missing, ambiguous or clipped targets are evidence gaps, not passes.' : undefined, qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with prepare_asset (or workspace_run/workspace_export for complex processing), inspect and bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...(defaultCapture?[{type:'input_text',text:JSON.stringify({captureRole:'default',nodeId:screen.nodeId,defaultState:true,sourceVersion:canvasV2FeedbackFingerprint(screen.encoded),note:'Fresh default state of the current saved source, retained for direct reference comparison even when the live screen is scrolled or showing a dialog.',state:defaultCapture.state})},{type:'input_image',image_url:defaultCapture.image}]:[]), ...baselineParts, ...componentPairParts, ...detailParts, ...referenceParts];
+          return [{ type: 'input_text', text: JSON.stringify({ captureRole: 'render', accessibility:accessibilityEvidenceForModel(accessibility), accessibilityArtifact, nodeId: screen.nodeId, revisionId: screenRevision.id, sourceVersion:canvasV2FeedbackFingerprint(screen.encoded), viewport: { width: screen.screen.width, height: screen.screen.height }, pixelAppearance, defaultPixelAppearance, productDesignContext, componentPlan, referenceIntent:screen.screen.referenceIntent, referenceAppearance:screen.screen.referenceAppearance, captureReferenceAssetId: previewAsset?.id, referenceUse: previewAsset ? 'These current preview pixels are retained. Use captureReferenceAssetId with inspect_asset, prepare_asset or workspace_run to extract visible logos, icons and images. For faithful component extraction, inspect this captureReferenceAssetId and add it as primary identity evidence with canvas_product_identity under the source screen’s same productIdentityId. Use referenceNodeId equal to this nodeId on canvas_screen with only the requested component source; faithful is the default intent. Match this product appearance unless the user requested a different direction. Keep the original preview intact.' : undefined, state: capture.state, referenceAssetIds: screen.screen.referenceAssetIds, reviewReferenceAssetIds: reviewAssets.map(asset => asset.id), modelReferenceAssets, boundAssetIds: canvasV2ScreenBoundAssets(screen.screen), componentComparisonLabels:componentPairLabels, componentMeasurements, measurementNote: componentPlan ? 'Expected geometry is based on the agent’s observed source rectangles; actual geometry comes from this fresh render. Compare paired pixels to verify those observations. Missing, ambiguous or clipped targets are evidence gaps, not passes.' : undefined, qualityReview: ['Compare current pixels with the product/reference: platform, navigation, typography, spacing, image crops and actual brand marks.', 'A retained reference is not the same as a displayed asset. Repair plain-letter/emoji logo substitutions when authentic pixels are available; extract with prepare_asset (or workspace_run/workspace_export for complex processing), inspect and bind that asset.', 'For new visual concepts, use generate_image for suitable credible product assets and inspect the outputs.', 'Test requested controls and review meaningful changed, dialog and scrolled states. Runtime errors: 0 alone does not establish visual quality.'], note: 'Live interactive screen state, isolated runtime. Review and repair concrete visual/interaction defects before claiming completion.' }) }, { type: 'input_image', image_url: capture.image }, ...(defaultCapture?[{type:'input_text',text:JSON.stringify({captureRole:'default',nodeId:screen.nodeId,defaultState:true,sourceVersion:canvasV2FeedbackFingerprint(screen.encoded),note:'Fresh default state of the current saved source, retained for direct reference comparison even when the live screen is scrolled or showing a dialog.',state:defaultCapture.state})},{type:'input_image',image_url:defaultCapture.image}]:[]), ...baselineParts, ...componentPairParts, ...detailParts, ...referenceParts];
       };
       const output = await (async () => {
       const args = object(accountHandles.current.decode(action.arguments)); const engine = current.current.engine;
@@ -630,6 +666,19 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const afterInteraction = engine.readCommittedRevision();
         requireScreenJourneySourceCurrent(item.nodeId, item.encoded, interactionAssets, afterInteraction.document.html, [...afterInteraction.evidence, ...assets.current.values()], 'live action');
         return { nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), ...result };
+      }
+      if (action.name === 'canvas_accessibility') {
+        const revision=engine.readCommittedRevision(),item=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);
+        if(!item||item.screen.simulation)throw Error('Choose an existing authored page from canvas_read.');
+        const existing=contentProtections.current.get(item.nodeId),turnId=rootId.current??'';
+        for(const [id,baseline] of contentProtections.current)if(baseline.turnId!==turnId)contentProtections.current.delete(id);
+        if(existing?.turnId!==turnId)contentProtections.current.set(item.nodeId,{turnId,sourceVersion:canvasV2FeedbackFingerprint(item.encoded),inventory:screenContentInventory(item.screen.html,new DOMParser())});
+        const evidence=structuredClone([...revision.evidence,...assets.current.values()]);
+        const report=await auditCanvasV2Screen(item.nodeId,item.encoded,signal);
+        const currentRevision=engine.readCommittedRevision();
+        requireScreenJourneySourceCurrent(item.nodeId,item.encoded,evidence,currentRevision.document.html,[...currentRevision.evidence,...assets.current.values()]);
+        report.contentPreservation=contentPreservationFor(item.nodeId,item.screen.html);
+        return {...accessibilityEvidenceForModel(report),artifact:retainAccessibility(report),note:'Host-measured findings. Repair source without changing teaching meaning; re-test. Manual checks and incomplete rule results remain explicitly unverified. Never claim WCAG conformance from this report.'};
       }
       if (action.name === 'canvas_review') {
         const screenRevision = engine.readCommittedRevision();
@@ -926,6 +975,19 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (operations.some(op => 'html' in op && /data-canvas-v2-design-region/.test(op.html)) && !plan) throw new Error('Plan the composition with canvas_plan before authoring its islands.');
         const authored = insertion?.document ?? applyCanvasV2SourcePatch({ previous: revision.document, operations, evidence, workingContext });
         const document = plan ? normalizeCodexCompositionSurface(plan, authored, engine.readNativeScene()) : authored;
+        // A read-only accessibility audit protects course content for this turn.
+        // Check every write route, including generic edits and object deletion,
+        // before applying a document or native-scene commit.
+        const activeContentProtections=[...contentProtections.current].filter(([,baseline])=>baseline.turnId===(rootId.current??''));
+        if(activeContentProtections.length){
+        const protectedBefore=readCanvasV2Screens(revision.document.html),protectedAfter=readCanvasV2Screens(document.html);
+        for(const [nodeId,baseline] of activeContentProtections){
+          const before=protectedBefore.find(item=>item.nodeId===nodeId),after=protectedAfter.find(item=>item.nodeId===nodeId);
+          if(!before||before.encoded===after?.encoded)continue;
+          if(!after)throw Error('Accessibility remediation cannot remove the protected course page. Nothing was committed.');
+          requireScreenContentPreserved(baseline.inventory,screenContentInventory(after.screen.html,new DOMParser()));
+        }
+        }
         if (plan && planObservation?.revisionId === revision.id) validateCodexComposition(plan, revision.document, document, planObservation);
         else if (plan) throw new Error('The canvas changed during composition. Read it again.');
         let sourceScene: ReturnType<typeof engine.readNativeScene>;
@@ -1111,5 +1173,5 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
     compositionHistory: compositionHistory.current, compositionSequence: compositionSequence.current });
   return { ...input.base, productIdentities: productIdentities.current, screenVersions, screenFeedback: screenFeedbacks[0]?.target, screenFeedbackTargets: screenFeedbacks.map(entry => entry.target), objectFeedbackTargets: objectFeedbacks,
     removeFeedbackTarget: (nodeId: string, selector?: string) => { if (selector) writeScreenFeedbacks(latestScreenFeedbacks.current.filter(entry => entry.target.nodeId !== nodeId || entry.target.selector !== selector)); else writeObjectFeedbacks(latestObjectFeedbacks.current.filter(entry => entry.nodeId !== nodeId)); },
-    clearScreenFeedback: () => { writeScreenFeedbacks([]); writeObjectFeedbacks([]); }, readProjectAssets, memory, referenceRailFlowIds:referenceRailFlowIds.current, rememberReferenceRail, steeredFlowReads, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
+    clearScreenFeedback: () => { writeScreenFeedbacks([]); writeObjectFeedbacks([]); }, readProjectAssets, memory, accessibilityEvidenceVersion, referenceRailFlowIds:referenceRailFlowIds.current, rememberReferenceRail, steeredFlowReads, modelEndpoint: input.endpoint, runtime: input.endpoint?.includes('/codex') ? 'codex' as const : 'agents' as const, turns, busy, routing: false, submit, stop, continueTurn: () => undefined };
 }

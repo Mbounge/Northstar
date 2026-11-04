@@ -57,6 +57,8 @@ export interface CanvasV2InteractiveScreen {
   mockData?: Record<string, unknown>;
   simulation?: { appName: 'GRAET'; section: GraetPreviewSection; startOnInteraction?: boolean } | { appName: 'Medito'; section: MeditoPreviewSection; startOnInteraction?: boolean };
   title: string;
+  /** BCP 47 language for the actual authored document. Never guessed by the host. */
+  language?: string;
   width: number;
   height: number;
   html: string;
@@ -124,6 +126,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
     || typeof screen.javascript !== 'string' || screen.javascript.length > 40_000
     || !Array.isArray(screen.referenceAssetIds) || screen.referenceAssetIds.length > 100
     || screen.referenceAssetIds.some(id => !isCanvasV2ScreenAssetId(id)) || screen.referenceAssetIds.reduce((size,id) => size + (typeof id === 'string' ? id.length : 0), 0) > 24000) throw new Error('Invalid interactive screen. Use finite viewport dimensions and bounded HTML/CSS/JavaScript.');
+  if (screen.language !== undefined && (typeof screen.language !== 'string' || !/^[a-zA-Z]{2,8}(?:-[a-zA-Z0-9]{1,8})*$/.test(screen.language) || screen.language.length > 60)) throw new Error('Use a valid BCP 47 document language, such as en or fr-CA.');
   if (screen.simulation && (!simulatorForApp(screen.simulation.appName) || !(screen.simulation.appName === 'GRAET' ? isGraetPreviewSection(screen.simulation.section) : screen.simulation.appName === 'Medito' && meditoPreviewSections.some(section => section === screen.simulation!.section)) || screen.html !== '<div></div>' || screen.css || screen.javascript || screen.referenceAssetIds.length || screen.width !== (screen.simulation.appName === 'GRAET' ? 383 : 360) || screen.height !== (screen.simulation.appName === 'GRAET' ? 820 : 800))) throw new Error('Registered simulations use their approved runtime and fixed logical viewport; do not supply executable source or URLs.');
   if (screen.simulation?.startOnInteraction !== undefined && typeof screen.simulation.startOnInteraction !== 'boolean') throw new Error('Choose a boolean preview activation mode.');
   if (screen.productIdentityId !== undefined && (typeof screen.productIdentityId !== 'string' || !/^[\w.-]{1,80}$/.test(screen.productIdentityId) || screen.simulation)) throw new Error('Use an existing product identity for authored screens.');
@@ -150,7 +153,7 @@ export function validateCanvasV2Screen(input: unknown): CanvasV2InteractiveScree
   for (const match of (html + '\n' + css + '\n' + javascript).matchAll(SCREEN_ASSET_PATTERN)) {
     if (!tokens.has(match[1])) throw new Error('Declare and retain the exact asset handle before binding it in a screen.');
   }
-  return { version: 1, ...(screen.design?{design:validateScreenDesignSystem(screen.design)}:{}), ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), ...(screen.mockData ? {mockData:structuredClone(screen.mockData)} : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.trustedRuntimeLibraries?.length ? { trustedRuntimeLibraries: [...screen.trustedRuntimeLibraries] } : {}), ...(wasmModules?.length ? {wasmModules} : {}), ...(screen.simulation ? { simulation: { ...screen.simulation } } : {}) };
+  return { version: 1, ...(screen.language ? {language:screen.language} : {}), ...(screen.design?{design:validateScreenDesignSystem(screen.design)}:{}), ...(screen.device ? {device:screen.device} : {}), ...(screen.referenceNodeId?{referenceNodeId:screen.referenceNodeId}:{}),...(screen.referenceIntent?{referenceIntent:screen.referenceIntent}:{}),...(screen.referenceAppearance?{referenceAppearance:screen.referenceAppearance}:{}), ...(screen.productIdentityId ? { productIdentityId: screen.productIdentityId } : {}), ...(screen.mockData ? {mockData:structuredClone(screen.mockData)} : {}), title: screen.title.trim(), width: screen.width, height: screen.height, html, css, javascript, referenceAssetIds: [...refs], ...(screen.trustedRuntimeLibraries?.length ? { trustedRuntimeLibraries: [...screen.trustedRuntimeLibraries] } : {}), ...(wasmModules?.length ? {wasmModules} : {}), ...(screen.simulation ? { simulation: { ...screen.simulation } } : {}) };
 }
 export function readCanvasV2Screens(html: string): Array<{ nodeId: string; encoded: string; screen: CanvasV2InteractiveScreen }> {
   return [...html.matchAll(/<[^>]+\bdata-canvas-v2-screen\s*=\s*(["'])([^"']*)\1[^>]*>/gi)].map(match => {

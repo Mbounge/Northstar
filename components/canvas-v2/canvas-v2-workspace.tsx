@@ -1357,7 +1357,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   // Panning changes the camera, never personal conversation memory. Preserve
   // its identity so private autosave does no cloning/encoding for navigation.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Conversation keys invalidate ref-owned memory; camera changes must not rebuild it.
-  const snapshotMemory=useMemo(()=>managedMemory.current(),[chat.turns,chat.attachments,managedChat.screenVersions]);
+  const snapshotMemory=useMemo(()=>managedMemory.current(),[chat.turns,chat.attachments,managedChat.screenVersions,managedChat.accessibilityEvidenceVersion]);
   useEffect(() => {
     snapshotListener.current?.({ schema: 1, revision: engine.committed, turns: chat.turns, draft: chat.draft, attachments: chat.attachments,
       model: chat.modelSelection, effort: chat.reasoningEffort, viewport, memory: snapshotMemory }, chat.busy);

@@ -51,13 +51,13 @@ test('direct-options ownership uses one exact current descriptor or one fresh fa
 });
 
 test('native capture-quiet bridge requires exact sending frame, protocol, token and native input sequence',()=>{
- const frameWindow={},activity:unknown[][]=[];const retained:unknown[]=[];
+ const frameWindow={},activity:unknown[][]=[];const retained:unknown[]=[],invalidated:string[]=[];
  const receiveDeclaration=find((node):node is ts.VariableDeclaration=>ts.isVariableDeclaration(node)&&node.name.getText(tree)==='receive'&&!!node.initializer?.getText(tree).includes('event.source === frame.current?.contentWindow'));
- const receive=run(`(${receiveDeclaration.initializer!.getText(tree)})`,{process:{env:{NODE_ENV:'production'}},frame:{current:{contentWindow:frameWindow}},SCREEN_PROTOCOL:'scoped-protocol',token:'private-token',simulation:false,handoffId:'',inView:true,Array,Number,Date,controllers:new Map(),nodeId:'screen',directInputSequence:{current:0},editingRef:{current:{nodeId:'screen'}},lastHumanInput:{current:0},noteCanvasInputActivity:(...args:unknown[])=>{activity.push(args);return true;},retainRuntimeState:(state:unknown)=>retained.push(state),dismiss:()=>{},lease:{invalidate:()=>{}},presentationCache:{interrupt:()=>{}},setDirectMenu:()=>{},setDirectError:()=>{}}) as (event:unknown)=>void;
+ const receive=run(`(${receiveDeclaration.initializer!.getText(tree)})`,{process:{env:{NODE_ENV:'production'}},frame:{current:{contentWindow:frameWindow}},SCREEN_PROTOCOL:'scoped-protocol',token:'private-token',simulation:false,handoffId:'',inView:true,Array,Number,Date,controllers:new Map(),nodeId:'screen',directInputSequence:{current:0},editingRef:{current:{nodeId:'screen'}},lastHumanInput:{current:0},noteCanvasInputActivity:(...args:unknown[])=>{activity.push(args);return true;},retainRuntimeState:(state:unknown)=>retained.push(state),invalidateScreenAccessibilityState:(nodeId:string)=>invalidated.push(nodeId),dismiss:()=>{},lease:{invalidate:()=>{}},presentationCache:{interrupt:()=>{}},setDirectMenu:()=>{},setDirectError:()=>{}}) as (event:unknown)=>void;
  const data={protocol:'scoped-protocol',token:'private-token',userInput:true,userInputType:'wheel',inputSequence:2};
  for(const event of [{source:{},data},{source:frameWindow,data:{...data,token:'wrong'}},{source:frameWindow,data:{...data,protocol:'wrong'}},{source:frameWindow,data:{...data,inputSequence:undefined}}])receive(event);
- assert.equal(activity.length,0);assert.equal(retained.length,0);
- receive({source:frameWindow,data});assert.deepEqual(activity,[['wheel',2]]);assert.equal(retained.length,1);
+ assert.equal(activity.length,0);assert.equal(retained.length,0);assert.deepEqual(invalidated,[]);
+ receive({source:frameWindow,data});assert.deepEqual(activity,[['wheel',2]]);assert.equal(retained.length,1);assert.deepEqual(invalidated,['screen']);
 });
 
 test('first-party simulation input only informs capture scheduling for trusted native events',()=>{
