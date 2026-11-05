@@ -44,6 +44,8 @@ export interface ScreenAccessibilityReport {
   manualChecks: string[];
   error?: string;
   visual?:AccessibilityVisualCapture;
+  comparisonSourceNodeId?:string;
+  nativeVerification?:import('./accessibility-native').AccessibilityNativeResult;
   contentPreservation?:ScreenContentPreservation & {baselineSourceVersion?:string};
 }
 export const ACCESSIBILITY_MANUAL_CHECKS = [
@@ -91,8 +93,8 @@ export function retainAccessibilityBaseline(reports:ScreenAccessibilityReport[],
  * responses by sending the full visual document back through the AI loop. */
 export function accessibilityEvidenceForModel(report:ScreenAccessibilityReport|undefined){
   if(!report)return undefined;
-  const {visual,...evidence}=report;
-  return {...evidence,visualCaptureAvailable:!!visual};
+  const {visual,nativeVerification,...evidence}=report;
+  return {...evidence,visualCaptureAvailable:!!visual,...(nativeVerification?{nativeVerification:{...nativeVerification,captures:nativeVerification.captures.map(({label,tree})=>({label,tree,pixelsAvailable:true}))}}:{})};
 }
 
 /** Inline retained fonts/media are resources, not markup complexity. Bound

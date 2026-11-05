@@ -2,7 +2,7 @@ import { object, string } from '../managed-agent/protocol';
 type Connection = { transport: 'local' } | { transport: 'worker'; endpoint: string; accessToken: string; expiresAt: number };
 
 /** Refresh account authorization without reissuing a model turn or moving its session. */
-export function codexWorkerFetch(fetcher: typeof fetch = fetch, now = Date.now): typeof fetch {
+export function codexWorkerFetch(fetcher: typeof fetch = fetch, now = Date.now, operation:'codex'|'accessibility'='codex'): typeof fetch {
   let connection: Connection | undefined;
   let pending: Promise<Connection> | undefined;
   let sessionEndpoint: string | undefined;
@@ -29,9 +29,9 @@ export function codexWorkerFetch(fetcher: typeof fetch = fetch, now = Date.now):
     if (String(input) !== '/api/canvas-v2/codex') return fetcher(input, init);
     const send = async (target: Connection) => {
       init?.signal?.throwIfAborted();
-      if (target.transport === 'local') return fetcher(input, init);
+      if (target.transport === 'local') return fetcher(operation==='accessibility'?'/api/canvas-v2/accessibility/native':input, init);
       const headers = new Headers(init?.headers); headers.set('Authorization', `Bearer ${target.accessToken}`);
-      return fetcher(target.endpoint, { ...init, headers, credentials: 'omit', redirect: 'error' });
+      return fetcher(operation==='accessibility'?target.endpoint.replace('/v1/codex','/v1/accessibility'):target.endpoint, { ...init, headers, credentials: 'omit', redirect: 'error' });
     };
     let target = await connect();
     let response = await send(target);

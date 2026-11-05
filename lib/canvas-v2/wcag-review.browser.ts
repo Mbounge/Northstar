@@ -10,7 +10,7 @@ export function wcagReviewFor(nodeId:string){return reviews.get(nodeId);}
 export function wcagReviews(){return [...reviews.values()];}
 function publish(review:WcagReviewCase){reviews.delete(review.nodeId);reviews.set(review.nodeId,review);while(reviews.size>12)reviews.delete(reviews.keys().next().value!);window.dispatchEvent(new CustomEvent(WCAG_REVIEW_EVENT,{detail:{nodeId:review.nodeId}}));}
 /** Only trusted host call sites can mint receipts. No tool accepts a claimed receipt kind. */
-export function rememberWcagObservation(nodeId:string,sourceVersion:string,kind:'render'|'journey',description:string,details?:Pick<WcagEvidence,'scenario'|'inventory'>){
+export function rememberWcagObservation(nodeId:string,sourceVersion:string,kind:'render'|'journey'|'native-keyboard'|'native-pointer'|'accessibility-tree',description:string,details?:Pick<WcagEvidence,'scenario'|'inventory'>){
   const receipt:WcagEvidence={...details,id:crypto.randomUUID(),nodeId,sourceVersion,kind,description:description.slice(0,2000),checkedAt:new Date().toISOString(),stateEpoch:screenAccessibilityEpoch(nodeId)};
   const previous=observations.get(nodeId)??[];observations.delete(nodeId);observations.set(nodeId,[...previous,receipt].slice(-32));while(observations.size>12)observations.delete(observations.keys().next().value!);
   const review=reviews.get(nodeId);if(review&&review.sourceVersion===sourceVersion&&!review.historical)publish({...review,evidence:[...review.evidence,receipt].slice(-64)});
@@ -33,7 +33,7 @@ export function runWcagReview(input:{nodeId:string;sourceVersion:string;action:'
     if(screenAccessibilityStateChanged(nodeId))throw Error('The preview state changed. Audit and start a fresh criterion review; keep earlier findings as historical evidence.');
     review=recordWcagAssessments(review,input.assessments??[],sourceVersion,screenAccessibilityEpoch(nodeId));publish(review);
   }
-  return {...review,summary:wcagReviewSummary(review,sourceVersion),...(input.action==='start'?{criteria:wcagReviewPlan(review.target)}:{}),limitations:'Agent judgments are separate from host measurements. Native keyboard, assistive technology, complete-site and full-media review receipts are not currently issued by this client. Mark those applicable checks needs-human with exact steps; never impersonate a human reviewer. Report scope, omitted resources, failed criteria and unverified work. No conformance certificate is issued.'};
+  return {...review,summary:wcagReviewSummary(review,sourceVersion),...(input.action==='start'?{criteria:wcagReviewPlan(review.target)}:{}),limitations:'Agent judgments are separate from host measurements. The native browser tool can provide source-bound keyboard, pointer and ARIA-tree observations for the supplied tasks. These are not actual assistive-technology output, complete-site or full-media evidence. Mark applicable unavailable checks needs-human with exact steps; never impersonate a human reviewer. Report scope, omitted resources, failed criteria and unverified work. No conformance certificate is issued.'};
 }
 export function resetWcagReviewSession(){const ids=[...reviews.keys()];reviews.clear();observations.clear();for(const nodeId of ids)window.dispatchEvent(new CustomEvent(WCAG_REVIEW_EVENT,{detail:{nodeId}}));}
 export function restoreWcagReviews(values:readonly WcagReviewCase[]){

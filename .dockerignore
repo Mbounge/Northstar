@@ -3,6 +3,8 @@
 !worker/package.json
 !worker/package-lock.json
 !worker/main.ts
+!worker/accessibility-native.server.ts
+!worker/native-local.ts
 !worker/build.mjs
 !lib/
 !lib/canvas-v2/

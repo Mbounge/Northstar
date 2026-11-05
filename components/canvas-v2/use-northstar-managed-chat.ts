@@ -1,4 +1,6 @@
 'use client';
+import {verifyNativeAccessibility} from '@/lib/canvas-v2/accessibility-native.browser';
+import type {AccessibilityNativeStep} from '@/lib/canvas-v2/accessibility-native';
 import { runWcagReview, rememberWcagObservation, resetWcagReviewSession, restoreWcagReviews, wcagReviews, WCAG_REVIEW_EVENT } from '@/lib/canvas-v2/wcag-review.browser';
 import { probeCanvasV2ScreenAccessibility } from './interactive-screen';
 import type { WcagProbeScenario } from '@/lib/canvas-v2/wcag-probe.browser';
@@ -278,7 +280,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   };
   const getClient = () => {
     if (client.current) return client.current;
-    const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region','canvas_accessibility_review','canvas_accessibility_probe'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
+    const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region','canvas_accessibility_review','canvas_accessibility_probe','canvas_accessibility_native'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const engine = current.current.engine;
       const contentPreservationFor=(nodeId:string,html:string)=>{
         const baseline=contentProtections.current.get(nodeId);
@@ -682,6 +684,17 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const afterInteraction = engine.readCommittedRevision();
         requireScreenJourneySourceCurrent(item.nodeId, item.encoded, interactionAssets, afterInteraction.document.html, [...afterInteraction.evidence, ...assets.current.values()], 'live action');
         return { nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), ...result };
+      }
+      if (action.name === 'canvas_accessibility_native') {
+        const revision=engine.readCommittedRevision(),item=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);
+        if(!item||item.screen.simulation)throw Error('Choose an authored page from canvas_read.');
+        const evidence=structuredClone([...revision.evidence,...assets.current.values()]);
+        const result=await verifyNativeAccessibility(item.nodeId,item.screen,evidence,args.steps as AccessibilityNativeStep[],signal),after=engine.readCommittedRevision();
+        requireScreenJourneySourceCurrent(item.nodeId,item.encoded,evidence,after.document.html,[...after.evidence,...assets.current.values()]);
+        const wcagEvidence=[];
+        for(const kind of (result.errors.length?[]:['native-keyboard','native-pointer','accessibility-tree']) as Array<'native-keyboard'|'native-pointer'|'accessibility-tree'>){if(kind==='native-keyboard'&&!(args.steps as AccessibilityNativeStep[])?.some((step:AccessibilityNativeStep)=>step.action==='key'))continue;if(kind==='native-pointer'&&!(args.steps as AccessibilityNativeStep[])?.some((step:AccessibilityNativeStep)=>step.action==='pointer-cancel'))continue;wcagEvidence.push(rememberWcagObservation(item.nodeId,result.sourceVersion,kind,JSON.stringify({job:result.id,browser:result.browser,steps:result.steps,limits:result.limits}).slice(0,2000)));}
+        const report=screenAccessibilityHistory(item.nodeId).at(-1);if(report?.sourceVersion===result.sourceVersion){report.nativeVerification=result;retainAccessibility(report);}
+        return [{type:'input_text',text:JSON.stringify({...result,captures:result.captures.map(({label,tree})=>({label,tree})),wcagEvidence})},...result.captures.flatMap((capture,index)=>[{type:'input_text',text:JSON.stringify({captureRole:'accessibility-native',nodeId:item.nodeId,sourceVersion:result.sourceVersion,nativeCapture:index,label:capture.label})},{type:'input_image',image_url:capture.image}])];
       }
       if (action.name === 'canvas_accessibility_probe') {
         const revision=engine.readCommittedRevision(),item=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);

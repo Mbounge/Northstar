@@ -2,7 +2,7 @@ import { wcagCriteria, wcagCriterionUrl, type WcagTarget } from './wcag-criteria
 
 /** An agent assessment is an accountable interpretation, never a scan pass. */
 export type WcagDecision = 'pass'|'fail'|'not-applicable'|'needs-human';
-export type WcagEvidenceKind = 'source'|'render'|'audit'|'journey'|'native-keyboard'|'native-pointer'|'assistive-technology'|'media-review'|'site-review';
+export type WcagEvidenceKind = 'source'|'render'|'audit'|'journey'|'native-keyboard'|'native-pointer'|'accessibility-tree'|'assistive-technology'|'media-review'|'site-review';
 export interface WcagEvidence {id:string;nodeId:string;sourceVersion:string;kind:WcagEvidenceKind;description:string;checkedAt:string;historical?:boolean;stateEpoch?:number;scenario?:string;inventory?:{controls:number;media:number;images:number;links:number;truncated:boolean};}
 export interface WcagAssessment {criterionId:string;decision:WcagDecision;reason:string;evidenceIds:string[];remainingWork:string;}
 export interface WcagReviewCase {

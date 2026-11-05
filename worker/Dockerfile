@@ -6,16 +6,18 @@ WORKDIR /app
 COPY lib/canvas-v2 ./lib/canvas-v2
 COPY lib/preview/graet-navigation.ts lib/preview/simulator-registry.ts ./lib/preview/
 COPY lib/app-data/canvas-v2-catalog.ts lib/app-data/review-media.ts ./lib/app-data/
-COPY worker/main.ts worker/build.mjs ./worker/
+COPY worker/main.ts worker/build.mjs worker/accessibility-native.server.ts worker/native-local.ts ./worker/
 COPY tsconfig.json ./
 RUN npm --prefix worker run build && npm --prefix worker prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini && rm -rf /var/lib/apt/lists/*
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/northstar-browsers
 ENV NODE_ENV=production PORT=10000 NORTHSTAR_CODEX_BINARY=/app/worker/node_modules/.bin/codex
 WORKDIR /app/worker
 COPY --from=build --chown=node:node /app/worker/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/worker/dist ./dist
+RUN node ./node_modules/playwright-core/cli.js install --with-deps firefox && chmod -R a+rX /opt/northstar-browsers
 USER node
 RUN /app/worker/node_modules/.bin/codex --version | grep -Fx 'codex-cli 0.153.4'
 EXPOSE 10000

@@ -31,7 +31,7 @@ async function readBody(request: IncomingMessage, max: number): Promise<JsonObje
     return object(parsed);
   } catch { throw new HttpError(400, 'Invalid request.'); }
 }
-export function createWorkerServer(host: WorkerHost, config: WorkerConfig) {
+export function createWorkerServer(host: WorkerHost, config: WorkerConfig, nativeAccessibility?: (body:JsonObject,signal:AbortSignal)=>Promise<Response>) {
   let stopping = false;
   let active = 0;
   const connections = new Set<ServerResponse>();
@@ -47,7 +47,7 @@ export function createWorkerServer(host: WorkerHost, config: WorkerConfig) {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     const path = (request.url || '').split('?')[0];
     if (request.method === 'GET' && ['/healthz', '/readyz'].includes(path)) { json(stopping ? 503 : 200, { ready: !stopping }); return; }
-    if (path !== '/v1/codex') { json(404, { error: 'Not found.' }); return; }
+    if (path !== '/v1/codex' && !(path==='/v1/accessibility'&&nativeAccessibility)) { json(404, { error: 'Not found.' }); return; }
     const origin = request.headers.origin || '';
     if (!config.allowedOrigins.has(origin)) { json(403, { error: 'Invalid origin.' }); return; }
     response.setHeader('Access-Control-Allow-Origin', origin);
@@ -66,7 +66,7 @@ export function createWorkerServer(host: WorkerHost, config: WorkerConfig) {
     const bodyTimeout = setTimeout(() => request.destroy(), 15_000); bodyTimeout.unref();
     try {
       const body = await readBody(request, config.maxBodyBytes); clearTimeout(bodyTimeout);
-      const result = await host.handle(body, { owner, key: config.apiKey, signal: controller.signal });
+      const result = path==='/v1/accessibility' ? await nativeAccessibility!(body,controller.signal) : await host.handle(body, { owner, key: config.apiKey, signal: controller.signal });
       if (response.destroyed) { await result.body?.cancel(); return; }
       result.headers.forEach((value, name) => response.setHeader(name, value));
       response.setHeader('Cache-Control', 'no-store, no-transform');
