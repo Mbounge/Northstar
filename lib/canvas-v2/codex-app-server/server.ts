@@ -136,7 +136,7 @@ export class CodexSessionHost {
     if (supported !== undefined && (!Array.isArray(supported) || supported.length > 16 || supported.some(name => typeof name !== 'string' || !/^[a-z_]{1,64}$/.test(name)))) throw new Error('Invalid client tool capabilities. Reload Northstar and try again.');
     // Already-open clients must not be offered a new browser tool they cannot
     // execute. Known capabilities narrow this session's fixed toolset only.
-    const configuration = { ...this.configuration, tools: this.configuration.tools.filter(tool => tool.name !== 'adjust_image_region' || (Array.isArray(supported) && supported.includes(tool.name))) };
+    const configuration = { ...this.configuration, tools: this.configuration.tools.filter(tool => !['adjust_image_region','canvas_accessibility_review','canvas_accessibility_probe'].includes(tool.name) || (Array.isArray(supported) && supported.includes(tool.name))) };
     const toolNames = new Set(configuration.tools.flatMap(tool => tool.type === 'function' ? [tool.name] : []));
     const selected = northstarRunConfig(body.model, body.effort);
     const ownerCount = () => [...this.sessions.values()].filter(s => s.owner === owner).length + (this.starting.get(owner) || 0);

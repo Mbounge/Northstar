@@ -1,4 +1,5 @@
 'use client';
+import { probeAccessibilitySnapshot, type WcagProbeScenario } from '@/lib/canvas-v2/wcag-probe.browser';
 import {rememberScreenRuntimeLayers,screenRuntimeAppearanceCanEdit} from '@/lib/canvas-v2/screen-runtime-design';
 import {VISUAL_FEEDBACK_START} from '@/lib/canvas-v2/visual-feedback';
 import { ScreenDesignStudio } from './screen-design-studio';
@@ -404,6 +405,15 @@ export async function auditCanvasV2Screen(nodeId:string, encoded:string, signal:
   if(screenAccessibilityEpoch(nodeId)!==epoch)throw Error('The preview was used during the accessibility check. Re-check its new state when you are ready.');
   rememberAccessibilityReport(report);
   return report;
+}
+
+/** Review-only transformations of the current actual semantic DOM. Never mutate live state. */
+export async function probeCanvasV2ScreenAccessibility(nodeId:string,encoded:string,scenario:WcagProbeScenario,signal:AbortSignal){
+ const epoch=screenAccessibilityEpoch(nodeId),snapshot=await inspectCanvasV2Screen(nodeId,encoded,{action:'accessibility-snapshot'},signal);
+ const result=await probeAccessibilitySnapshot(snapshot as unknown as AccessibilitySnapshot,scenario,signal);
+ const capture=await rasterizeScreenSnapshot(nodeId,encoded,signal,result as ScreenResult,false);
+ if(controllers.get(nodeId)?.encoded!==encoded||screenAccessibilityEpoch(nodeId)!==epoch)throw Error('The page source or state changed during inspection. Re-check the current page.');
+ return capture;
 }
 
 export function CanvasV2InteractiveScreenObject({ nodeId, encoded, showCaption = true }: { nodeId: string; encoded: string; showCaption?: boolean }) {

@@ -36,7 +36,7 @@ export interface ScreenAccessibilityReport {
   domSha256: string;
   checkedAt: string;
   engine: { name: 'axe-core'; version: string };
-  target: 'WCAG 2.1 A/AA';
+  target: 'WCAG 2.1 A/AA'|'WCAG 2.2 A/AA';
   scope: 'current rendered state; inert semantic snapshot';
   status: 'issues-found' | 'no-automated-issues' | 'check-failed';
   viewport: {width:number;height:number};
@@ -62,7 +62,7 @@ export function accessibilityIssueCount(report: ScreenAccessibilityReport) {
 export function accessibilityEvidenceAllowsCompletion(input: unknown, sourceVersion: string): boolean {
   const report = input as ScreenAccessibilityReport | undefined;
   return Boolean(report && report.schemaVersion === 1 && report.kind === 'northstar-rendered-accessibility'
-    && report.target==='WCAG 2.1 A/AA' && report.scope==='current rendered state; inert semantic snapshot' && typeof report.nodeId==='string' && Boolean(report.nodeId)
+    && ['WCAG 2.1 A/AA','WCAG 2.2 A/AA'].includes(report.target) && report.scope==='current rendered state; inert semantic snapshot' && typeof report.nodeId==='string' && Boolean(report.nodeId)
     && report.contentPreservation?.status!=='changed'
     && report.sourceVersion === sourceVersion && report.engine?.name === 'axe-core' && /^\d+\.\d+\.\d+$/.test(report.engine.version)
     && /^[a-f0-9]{64}$/.test(report.sourceSha256) && /^[a-f0-9]{64}$/.test(report.domSha256)
