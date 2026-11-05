@@ -56,8 +56,8 @@ import { isGraetPreviewSection } from '@/lib/preview/graet-navigation';
 import { parseCanvasV2Screen, readCanvasV2Screens, canvasV2ScreenReviewAssets, canvasV2ScreenBoundAssets, canvasV2ScreenPreviewAsset, canvasV2ScreenReferencePreview } from '@/lib/canvas-v2/interactive-screen';
 import { arrangeCanvasV2Screens, reviseCanvasV2NativeScreen, appendCanvasV2NativeScreen, canvasV2ScreenPatch } from '@/lib/canvas-v2/interactive-screen-patch';
 import { readCanvasV2NativeWorkspaceContext } from '@/lib/canvas-v2/native-workspace-context';
-import { rememberAccessibilityReport, restoreAccessibilityReports, screenAccessibilityHistory, screenAccessibilityReports, restoreStructuredAccessibilityReports, ACCESSIBILITY_REPORT_EVENT } from '@/lib/canvas-v2/screen-accessibility.browser';
-import { accessibilityEvidenceForModel, accessibilityEvidenceArtifact, type ScreenAccessibilityReport } from '@/lib/canvas-v2/screen-accessibility';
+import { rememberAccessibilityReport, restoreAccessibilityReports, screenAccessibilityHistory, screenAccessibilityReports, restoreStructuredAccessibilityReports, screenAccessibilityEpoch, screenAccessibilityStateChanged, ACCESSIBILITY_REPORT_EVENT } from '@/lib/canvas-v2/screen-accessibility.browser';
+import { accessibilityEvidenceForModel, accessibilityEvidenceArtifact, retainAccessibilityProbe, type ScreenAccessibilityReport } from '@/lib/canvas-v2/screen-accessibility';
 import { readCanvasV2SimulationSource, auditCanvasV2Screen, inspectCanvasV2Screen, captureCanvasV2Screen, captureCanvasV2ScreenMotion, testCanvasV2ScreenJourney, canvasV2ScreenPixelAppearance } from './interactive-screen';
 import { CANVAS_V2_SCREEN_FEEDBACK_BATCH, mergeCanvasV2ScreenFeedbackBatch, screenFeedbackSelectionSurvives, CANVAS_V2_MAX_FEEDBACK_TARGETS, CANVAS_V2_OBJECT_FEEDBACK, canvasV2FeedbackFingerprint, setCanvasV2FeedbackPicking, type CanvasV2ObjectFeedbackTarget, CANVAS_V2_SCREEN_FEEDBACK, canvasV2ScreenFeedbackContext, parseCanvasV2ScreenFeedbackTarget, patchCanvasV2ScreenComponent, patchCanvasV2ScreenElement, type CanvasV2ScreenFeedbackTarget } from '@/lib/canvas-v2/screen-feedback';
 import { canvasV2ProductDesignContext, canvasV2RefinementReviewReferences, validateCanvasV2ProductIdentity, type CanvasV2ProductIdentity } from '@/lib/canvas-v2/product-identity';
@@ -688,6 +688,8 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       if (action.name === 'canvas_accessibility_native') {
         const revision=engine.readCommittedRevision(),item=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);
         if(!item||item.screen.simulation)throw Error('Choose an authored page from canvas_read.');
+        const checkedReport=screenAccessibilityHistory(item.nodeId).at(-1);
+        if(!checkedReport||checkedReport.sourceVersion!==canvasV2FeedbackFingerprint(item.encoded)||screenAccessibilityStateChanged(item.nodeId))throw Error('Run canvas_accessibility on this current source and state before native verification so its actual proof can be retained.');
         const evidence=structuredClone([...revision.evidence,...assets.current.values()]);
         const result=await verifyNativeAccessibility(item.nodeId,item.screen,evidence,args.steps as AccessibilityNativeStep[],signal),after=engine.readCommittedRevision();
         requireScreenJourneySourceCurrent(item.nodeId,item.encoded,evidence,after.document.html,[...after.evidence,...assets.current.values()]);
@@ -699,13 +701,17 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
       if (action.name === 'canvas_accessibility_probe') {
         const revision=engine.readCommittedRevision(),item=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);
         if(!item||item.screen.simulation)throw Error('Choose an existing authored page.');
+        const checkedReport=screenAccessibilityHistory(item.nodeId).at(-1);
+        if(!checkedReport||checkedReport.sourceVersion!==canvasV2FeedbackFingerprint(item.encoded)||screenAccessibilityStateChanged(item.nodeId))throw Error('Run canvas_accessibility on this current source and state before inspection so its actual proof can be retained.');
         const scenario=string(args.scenario) as WcagProbeScenario;
         if(!['inventory','text-spacing','text-resize','orientation','reflow'].includes(scenario))throw Error('Choose a supported WCAG inspection scenario.');
         const evidence=structuredClone([...revision.evidence,...assets.current.values()]);
         const capture=await probeCanvasV2ScreenAccessibility(item.nodeId,item.encoded,scenario,signal),after=engine.readCommittedRevision();
         requireScreenJourneySourceCurrent(item.nodeId,item.encoded,evidence,after.document.html,[...after.evidence,...assets.current.values()]);
         const observed=object(object(capture.state).observations),inventory=object(observed.inventory);
+        const retained=retainAccessibilityProbe(checkedReport,{id:crypto.randomUUID(),scenario,sourceVersion:canvasV2FeedbackFingerprint(item.encoded),stateEpoch:screenAccessibilityEpoch(item.nodeId),checkedAt:new Date().toISOString(),width:Number(object(capture.state).width),height:Number(object(capture.state).height),image:capture.image,observations:observed});
         const wcagEvidence=rememberWcagObservation(item.nodeId,canvasV2FeedbackFingerprint(item.encoded),'render',`WCAG ${scenario} inspection: actual isolated static pixels and measured inventory. Not native keyboard, screen-reader or browser zoom.`,{scenario,inventory:{controls:Array.isArray(observed.controls)?observed.controls.length:0,media:Array.isArray(inventory.media)?inventory.media.length:0,images:Array.isArray(inventory.images)?inventory.images.length:0,links:Array.isArray(inventory.links)?inventory.links.length:0,truncated:observed.truncated===true}});
+        retained.probeCaptures!.at(-1)!.id=wcagEvidence.id;retainAccessibility(retained);
         return [{type:'input_text',text:JSON.stringify({nodeId:item.nodeId,sourceVersion:canvasV2FeedbackFingerprint(item.encoded),wcagEvidence,captureRole:'accessibility-probe',wcagScenario:scenario,...capture.state})},{type:'input_image',image_url:capture.image}];
       }
       if (action.name === 'canvas_accessibility_review') {

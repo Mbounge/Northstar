@@ -3,6 +3,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {CanvasV2Workspace} from '@/components/canvas-v2/canvas-v2-workspace';
 import {STFX_ACCESSIBILITY_EXAMPLES,STFX_NATIVE_READING_STEPS,stfxAccessibilitySnapshot} from '@/lib/canvas-v2/stfx-accessibility-examples';
 import type {NorthstarSnapshot} from '@/lib/canvas-v2/sessions/types';
+import {CANVAS_V2_WORKSPACE} from '@/lib/canvas-v2/workspace-coordinate-space';
 import type {FilmCameraController} from '@/lib/canvas-v2/film-camera';
 import {auditCanvasV2Screen} from '@/components/canvas-v2/interactive-screen';
 import {rememberAccessibilityReport,screenAccessibilityReports} from '@/lib/canvas-v2/screen-accessibility.browser';
@@ -14,7 +15,7 @@ export function StfxAccessibilityStudio({owner}:{owner?:string}){
  const [ready,setReady]=useState(false);useEffect(()=>setReady(true),[]);
  const [initial]=useState(stfxAccessibilitySnapshot),latest=useRef<NorthstarSnapshot>(initial),camera=useRef<FilmCameraController|null>(null),[selected,setSelected]=useState(0),[status,setStatus]=useState('Choose an example, then inspect its working before and after.'),[busy,setBusy]=useState(false),[saved,setSaved]=useState(''),[proof,setProof]=useState<unknown>();
  const register=useCallback((value:FilmCameraController|null)=>{camera.current=value},[]),receive=useCallback((value:NorthstarSnapshot)=>{latest.current=value},[]);
- function show(index=selected){setSelected(index);camera.current?.stage({x:0,y:310+index*1120,width:1880,height:1060,padding:70,anchorX:.6});}
+ function show(index=selected){setSelected(index);camera.current?.stage({x:CANVAS_V2_WORKSPACE.aiAuthoringOriginX,y:CANVAS_V2_WORKSPACE.aiAuthoringOriginY+310+index*1200,width:1880,height:1160,padding:70,anchorX:.6});}
  async function verify(){const example=STFX_ACCESSIBILITY_EXAMPLES[selected],prefix='stfx-'+example.id;setBusy(true);setStatus('Checking source preservation, rendered findings and actual native reading tasks…');try{
   const screens=readCanvasV2Screens(latest.current.revision.document.html),before=screens.find(item=>item.nodeId===prefix+'-before')?.screen,after=screens.find(item=>item.nodeId===prefix+'-after')?.screen;if(!before||!after)throw Error('The example was removed or changed. Choose an existing before/after pair.');const preservation=requireScreenContentPreserved(screenContentInventory(before.html,new DOMParser()),screenContentInventory(after.html,new DOMParser()));
   const beforeReport=await auditCanvasV2Screen(prefix+'-before',encodeCanvasV2Screen(before),new AbortController().signal),afterReport=await auditCanvasV2Screen(prefix+'-after',encodeCanvasV2Screen(after),new AbortController().signal);

@@ -82,3 +82,11 @@ test('the not-yet-created default relay root remains an empty queue', async () =
     assert.deepEqual(await poll(undefined, { ...process.env, TMPDIR: t.root, TMP: t.root, TEMP: t.root }), []);
   } finally { await t.close(); }
 });
+
+test('progress continuation exchanges remain discoverable to the real subagent dispatcher',async()=>{
+ const t=await fixture();try{await writeFile(join(t.session,'inbox.json'),JSON.stringify({...t.inbox,kind:'continue',exchangeId:'continued-exchange',responsePath:join(t.session,'continued-exchange.response.json')}));const jobs=await poll(t.root);assert.equal(jobs.length,1);assert.equal(jobs[0].kind,'continue');assert.equal(jobs[0].exchangeId,'continued-exchange');assert.equal(jobs[0].submitted,false);}finally{await t.close();}
+});
+
+test('reviewer stage comes from its JSON packet even when image captions follow',async()=>{
+ const t=await fixture();try{await writeFile(join(t.session,'configuration.json'),JSON.stringify({dynamicTools:[]}));await writeFile(join(t.session,'inbox.json'),JSON.stringify({...t.inbox,input:[{type:'text',text:JSON.stringify({reviewStage:'initial_appearance'})},{type:'text',text:'Image 1: actual current screen pixels'}]}));assert.equal((await poll(t.root))[0].role,'initial');}finally{await t.close();}
+});

@@ -25,6 +25,14 @@ export interface AccessibilityVisualCapture {
   html:string; css:string; width:number; height:number;
   language?:string; direction?:string; rootClass?:string; rootStyle?:string; captureImages?:Record<string,string>;
 }
+export interface AccessibilityProbeCapture {
+  id:string;scenario:'inventory'|'text-spacing'|'text-resize'|'orientation'|'reflow';
+  sourceVersion:string;stateEpoch:number;checkedAt:string;
+  width:number;height:number;image:string;observations:Record<string,unknown>;
+}
+export function retainedAccessibilityImage(image:unknown):image is string{
+  return typeof image==='string'&&image.length<=8_000_000&&/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(image);
+}
 export interface ScreenAccessibilityReport {
   schemaVersion: 1;
   kind: 'northstar-rendered-accessibility';
@@ -46,6 +54,7 @@ export interface ScreenAccessibilityReport {
   visual?:AccessibilityVisualCapture;
   comparisonSourceNodeId?:string;
   nativeVerification?:import('./accessibility-native').AccessibilityNativeResult;
+  probeCaptures?:AccessibilityProbeCapture[];
   contentPreservation?:ScreenContentPreservation & {baselineSourceVersion?:string};
 }
 export const ACCESSIBILITY_MANUAL_CHECKS = [
@@ -93,8 +102,17 @@ export function retainAccessibilityBaseline(reports:ScreenAccessibilityReport[],
  * responses by sending the full visual document back through the AI loop. */
 export function accessibilityEvidenceForModel(report:ScreenAccessibilityReport|undefined){
   if(!report)return undefined;
-  const {visual,nativeVerification,...evidence}=report;
-  return {...evidence,visualCaptureAvailable:!!visual,...(nativeVerification?{nativeVerification:{...nativeVerification,captures:nativeVerification.captures.map(({label,tree})=>({label,tree,pixelsAvailable:true}))}}:{})};
+  const {visual,nativeVerification,probeCaptures,...evidence}=report;
+  return {...evidence,visualCaptureAvailable:!!visual,...(probeCaptures?{probeCaptures:probeCaptures.map(({image,...capture})=>({...capture,pixelsAvailable:!!image}))}:{}),...(nativeVerification?{nativeVerification:{...nativeVerification,captures:nativeVerification.captures.map(({label,tree})=>({label,tree,pixelsAvailable:true}))}}:{})};
+}
+
+/** Retain actual host probe pixels without silently evicting evidence that a
+ * recorded decision may reference. A new audit can establish a fresh report. */
+export function retainAccessibilityProbe(report:ScreenAccessibilityReport,capture:AccessibilityProbeCapture):ScreenAccessibilityReport{
+  if(capture.sourceVersion!==report.sourceVersion||!capture.id||!['inventory','text-spacing','text-resize','orientation','reflow'].includes(capture.scenario)||!retainedAccessibilityImage(capture.image)||!Number.isFinite(Date.parse(capture.checkedAt))||!Number.isInteger(capture.stateEpoch)||capture.stateEpoch<0||!Number.isFinite(capture.width)||!Number.isFinite(capture.height)||capture.width<240||capture.width>1920||capture.height<240||capture.height>1600||!capture.observations||typeof capture.observations!=='object'||Array.isArray(capture.observations)||JSON.stringify(capture.observations).length>500_000)throw Error('The probe does not contain bounded current-source host evidence.');
+  const captures=[...(report.probeCaptures??[]).filter(item=>item.id!==capture.id),structuredClone(capture)];
+  if(captures.length>12||captures.reduce((bytes,item)=>bytes+item.image.length+JSON.stringify(item.observations).length,0)>8_000_000)throw Error('This checked page has reached its retained probe budget. Start a fresh audit before further inspection; no new receipt was issued.');
+  return {...report,probeCaptures:captures};
 }
 
 /** Inline retained fonts/media are resources, not markup complexity. Bound

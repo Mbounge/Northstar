@@ -9,7 +9,7 @@ import { SnapshotSaveSchedule } from '@/lib/canvas-v2/sessions/snapshot-save-sch
 import type { NorthstarSnapshot } from '@/lib/canvas-v2/sessions/types';
 import { exportSubagentSnapshot, importSubagentSnapshotBlob, listSavedSubagentSnapshots, loadSavedSubagentSnapshot, readSubagentSnapshotDurable, writeSubagentSnapshotDurableDetailed, type SavedSubagentSnapshotSummary } from './snapshot';
 
-export function CodexSubagentWorkspace({ accountEndpoint = '/canvas-v2-e2e/codex/account', presentation = false, recording = false }: { accountEndpoint?: string; presentation?: boolean; recording?: boolean }) {
+export function CodexSubagentWorkspace({ accountEndpoint = '/canvas-v2-e2e/codex/account', presentation = false, recording = false, seed, seedRootId, agentEndpoint }: { accountEndpoint?: string; presentation?: boolean; recording?: boolean; seed?: NorthstarSnapshot; seedRootId?: string; agentEndpoint?: string }) {
   const [renderProfiling] = useState(canvasV2RenderProfilingEnabled);
   const filmCamera = useRef<FilmCameraController | null>(null);
   const registerFilmCamera = useCallback((controller: FilmCameraController | null) => { filmCamera.current = controller; }, []);
@@ -41,12 +41,12 @@ export function CodexSubagentWorkspace({ accountEndpoint = '/canvas-v2-e2e/codex
     // replace its newer unsaved state with an older durable checkpoint.
     if (hydrated.current) return () => { mounted.current = false; };
     void readSubagentSnapshotDurable(window.sessionStorage).then(snapshot => {
-      if (active) { hydrated.current = true; setState({ ready: true, snapshot }); }
+      if (active) { hydrated.current = true; const retained=seedRootId&&snapshot&&!snapshot.revision.document.html.includes(`data-canvas-v2-node-id="${seedRootId}"`)?undefined:snapshot; setState({ ready: true, snapshot:retained??seed }); }
     }).catch(() => {
-      if (active) { hydrated.current = true; setState({ ready: true }); }
+      if (active) { hydrated.current = true; setState({ ready: true, snapshot:seed }); }
     });
     return () => { active = false; mounted.current = false; };
-  }, []);
+  }, [seed,seedRootId]);
 
   const refreshSavedCanvases = useCallback(async () => {
     setSavedCanvases(await listSavedSubagentSnapshots());
@@ -142,7 +142,7 @@ export function CodexSubagentWorkspace({ accountEndpoint = '/canvas-v2-e2e/codex
     </>}
     {presentation && saveStatus.state === 'error' && <div role="alert" className="fixed bottom-5 right-5 z-[1001] max-w-md rounded-lg bg-[#602929] p-3 text-sm text-white">Canvas changes are not saved. {saveStatus.detail}<button type="button" className="ml-3 underline" onClick={() => void flushSnapshots(true)}>Retry save</button></div>}
     <CanvasV2RenderProfiler id="Workspace" enabled={renderProfiling}><CanvasV2Workspace registerFilmCamera={recording ? registerFilmCamera : undefined} key={workspaceKey} initialSnapshot={state.snapshot} onSnapshot={onSnapshot}
-      accountEndpoint={accountEndpoint} agentEndpoint={`/canvas-v2-e2e/codex-subagent/agent?owner=${owner}`}
+      accountEndpoint={accountEndpoint} agentEndpoint={`${agentEndpoint??'/canvas-v2-e2e/codex-subagent/agent'}?owner=${owner}`}
       designEndpoint="/canvas-v2-e2e/design" routerEndpoint="/canvas-v2-e2e/route" researchEndpoint={accountEndpoint === '/api/canvas-v2/account' ? '/api/canvas-v2/research' : '/canvas-v2-e2e/research'} /></CanvasV2RenderProfiler>
     {recording && <FilmRecorder camera={filmCamera} />}
   </>;

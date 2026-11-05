@@ -4,10 +4,9 @@ import { tmpdir } from 'node:os';
 async function readJob(path) {
     const inbox=JSON.parse(await readFile(join(path,'inbox.json'),'utf8'));
     const config=JSON.parse(await readFile(join(path,'configuration.json'),'utf8'));
-    if(!['turn','tool_result','steer'].includes(inbox.kind)||!inbox.exchangeId)return;
+    if(!['turn','tool_result','steer','continue'].includes(inbox.kind)||!inbox.exchangeId)return;
     if(typeof inbox.responsePath!=='string'||!inbox.responsePath)throw new Error('The pending inbox has no responsePath.');
-    const text=(Array.isArray(inbox.input)?inbox.input:[]).filter(p=>p.type==='text').map(p=>p.text).join('\n');
-    let stage;try{stage=JSON.parse(text).reviewStage;}catch{}
+    let stage;for(const part of Array.isArray(inbox.input)?inbox.input:[]){if(part.type!=='text')continue;try{const value=JSON.parse(part.text);if(value.reviewStage){stage=value.reviewStage;break;}}catch{}}
     const reviewer=Array.isArray(config.dynamicTools)&&!config.dynamicTools.length;
     const ageSeconds=Math.round((Date.now()-(await stat(join(path,'inbox.json'))).mtimeMs)/1000);
     const submitted=Boolean(await stat(inbox.responsePath).catch(()=>null));
