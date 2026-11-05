@@ -2,12 +2,15 @@ import {firefox,type Browser,type Frame,type Page} from 'playwright-core';
 import {createHash,randomUUID} from 'node:crypto';
 import {buildCanvasV2ScreenRuntime} from '../lib/canvas-v2/interactive-screen-runtime';
 import {encodeCanvasV2Screen} from '../lib/canvas-v2/interactive-screen';
-import {validateAccessibilityNativeRequest,type AccessibilityNativeResult} from '../lib/canvas-v2/accessibility-native';
+import {validateAccessibilityNativeRequest,validateAccessibilityStaticProbeRequest,staticProbeScrollTargets,staticProbeCoverageRanges,type AccessibilityNativeResult,type AccessibilityStaticProbeResult} from '../lib/canvas-v2/accessibility-native';
+import {bindScreenCaptureImages,screenCaptureImageDataUrls} from '../lib/canvas-v2/screen-capture-resources';
+import {wcagProbeScript} from '../lib/canvas-v2/wcag-probe.browser';
 
 let occupied=false;
 /** This is a product capability, not a paid author/reviewer call. Each job gets
  * a fresh sandboxed Firefox context, no user session/cookies and no network. */
-export async function runAccessibilityNative(raw:unknown,signal:AbortSignal):Promise<AccessibilityNativeResult>{
+export async function runAccessibilityNative(raw:unknown,signal:AbortSignal):Promise<AccessibilityNativeResult|AccessibilityStaticProbeResult>{
+ if((raw as {mode?:unknown})?.mode==='static-probe')return runAccessibilityStaticProbe(raw,signal);
  const input=validateAccessibilityNativeRequest(raw),encoded=encodeCanvasV2Screen(input.screen);
  if(createHash('sha256').update(encoded).digest('hex')!==input.sourceSha256)throw Error('The native review source hash does not match its actual retained page.');
  if(occupied)throw Error('A native accessibility review is already running. Try again when it finishes.');
@@ -70,7 +73,7 @@ export function inspectNativeElementVisibility(element:Element){
  for(let current:Element|null=element;current;current=current.parentElement){
   const style=win.getComputedStyle(current);
   if(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'||Number(style.opacity)===0)painted=false;
-  if(current!==element){const bounds=current.getBoundingClientRect();if(/^(auto|scroll|hidden|clip)$/.test(style.overflowX)){left=Math.max(left,bounds.left+current.clientLeft);right=Math.min(right,bounds.left+current.clientLeft+current.clientWidth);}if(/^(auto|scroll|hidden|clip)$/.test(style.overflowY)){top=Math.max(top,bounds.top+current.clientTop);bottom=Math.min(bottom,bounds.top+current.clientTop+current.clientHeight);}}
+  if(current!==element&&current!==doc.scrollingElement&&current!==doc.documentElement){const bounds=current.getBoundingClientRect();if(/^(auto|scroll|hidden|clip)$/.test(style.overflowX)){left=Math.max(left,bounds.left+current.clientLeft);right=Math.min(right,bounds.left+current.clientLeft+current.clientWidth);}if(/^(auto|scroll|hidden|clip)$/.test(style.overflowY)){top=Math.max(top,bounds.top+current.clientTop);bottom=Math.min(bottom,bounds.top+current.clientTop+current.clientHeight);}}
  }
  const withinViewport=painted&&right>left&&bottom>top;
  const points=withinViewport?[[.5,.5],[.2,.2],[.8,.2],[.2,.8],[.8,.8]].map(([x,y])=>[left+(right-left)*x,top+(bottom-top)*y]):[];
@@ -92,3 +95,52 @@ export async function observeNativeGeometrySettlement(options:{minMs:number;stab
  });
 }
 async function settleNativeGeometry(frame:Frame,minMs:number){return await frame.evaluate(observeNativeGeometrySettlement,{minMs,stableMs:64,maxMs:1200});}
+
+/** Browser screenshots of one transformed inert copy, not DOM rasterization.
+ * No authored script, network, cookie, form submission or live canvas mutation. */
+async function runAccessibilityStaticProbe(raw:unknown,signal:AbortSignal):Promise<AccessibilityStaticProbeResult>{
+ const input=validateAccessibilityStaticProbeRequest(raw),{snapshot,scenario,snapshotSha256,stateEpoch}=input.probe,encoded=encodeCanvasV2Screen(input.screen);
+ if(createHash('sha256').update(encoded).digest('hex')!==input.sourceSha256||createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')!==snapshotSha256)throw Error('Static probe source or semantic snapshot hash does not match its retained bytes.');
+ if(occupied)throw Error('An accessibility browser review is already running. Try again when it finishes.');
+ signal.throwIfAborted();occupied=true;let browser:Browser|undefined;
+ const abort=()=>{void browser?.close().catch(()=>{})},deadline=setTimeout(abort,40000);signal.addEventListener('abort',abort,{once:true});
+ try{
+  const env=Object.fromEntries(['PATH','HOME','TMPDIR','TEMP','TMP','LANG','FONTCONFIG_PATH','PLAYWRIGHT_BROWSERS_PATH'].flatMap(key=>process.env[key]?[[key,process.env[key]!]]:[]));
+  browser=await firefox.launch({headless:true,timeout:20000,env,firefoxUserPrefs:{'media.peerconnection.enabled':false,'network.dns.disablePrefetch':true,'network.prefetch-next':false}});
+  const width=scenario==='reflow'?320:scenario==='orientation'?snapshot.height:snapshot.width,height=scenario==='orientation'?Math.min(1600,snapshot.width):snapshot.height;
+  const context=await browser.newContext({viewport:{width,height},serviceWorkers:'block',acceptDownloads:false,permissions:[],reducedMotion:'reduce'});
+  await context.route('**/*',route=>route.abort());const page=await context.newPage();page.setDefaultTimeout(3500);
+  const resources=screenCaptureImageDataUrls(snapshot.captureImages),expanded={html:bindScreenCaptureImages(snapshot.html,resources),css:bindScreenCaptureImages(snapshot.css,resources)};
+  // DOMParser lives in the trusted blank host. The submitted document is never
+  // inserted until active content is stripped and script-src 'none' is set.
+  const clean=await page.evaluate(sanitizeStaticProbeDocument,expanded);
+  const escape=(value:string)=>value.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+  const source=`<!doctype html><html lang="${escape(snapshot.language??'')}" dir="${snapshot.direction==='rtl'?'rtl':'ltr'}" class="${escape(snapshot.rootClass??'')}" style="${escape(snapshot.rootStyle??'')}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none';img-src data:;font-src data:;style-src 'unsafe-inline';script-src 'none';connect-src 'none';frame-src 'none';object-src 'none';base-uri 'none';form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(snapshot.title??'')}</title><style>${clean.css}</style></head>${clean.html}</html>`;
+  await page.setContent('<!doctype html><html><body style="margin:0;overflow:hidden"><iframe title="Inert accessibility probe" sandbox="" style="display:block;width:100vw;height:100vh;border:0"></iframe></body></html>');
+  await page.locator('iframe').evaluate((element,source)=>{(element as HTMLIFrameElement).srcdoc=source;},source);
+  const frame=await waitForFrame(page,signal);await frame.locator('body').waitFor();
+  const transformed=await frame.evaluate(wcagProbeScript(scenario)) as {observations:Record<string,unknown>};
+  const initial=await settleNativeGeometry(frame,80);if(!initial.settled)throw Error('The transformed static page did not settle; no probe evidence was recorded.');
+  const geometry=()=>frame.evaluate(()=>{const root=document.scrollingElement??document.documentElement,selector=(element:Element)=>{if(element.id)return '#'+CSS.escape(element.id);const parts:string[]=[];for(let current:Element|null=element;current&&current!==document.body;current=current.parentElement){parts.unshift(current.localName+':nth-of-type('+([...current.parentElement?.children??[]].filter(other=>other.localName===current!.localName).indexOf(current)+1)+')');if(parts.length>=8)break;}return 'body > '+parts.join(' > ');};const nested=[...document.querySelectorAll('*')].filter(element=>element!==root&&element!==document.documentElement&&element!==document.body&&((element.scrollHeight>element.clientHeight+1&&/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(element).overflowY))||(element.scrollWidth>element.clientWidth+1&&/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(element).overflowX))));return {x:scrollX,y:scrollY,width:innerWidth,height:innerHeight,contentWidth:Math.max(innerWidth,root.scrollWidth),contentHeight:Math.max(innerHeight,root.scrollHeight),nestedScrollRegions:nested.slice(0,64).map(element=>({selector:selector(element),scrollWidth:element.scrollWidth,clientWidth:element.clientWidth,scrollHeight:element.scrollHeight,clientHeight:element.clientHeight})),nestedScrollRegionCount:nested.length};});
+  const start=await geometry(),targets=staticProbeScrollTargets(start.contentHeight,height),views:AccessibilityStaticProbeResult['views']=[];let imageBytes=0,budgetTruncated=false,contentHeight=start.contentHeight,contentWidth=start.contentWidth;
+  for(const [index,target] of targets.entries()){
+   signal.throwIfAborted();await frame.evaluate(y=>scrollTo({left:0,top:y,behavior:'instant'}),target);
+   const settlement=await settleNativeGeometry(frame,48);if(!settlement.settled)throw Error('Static probe scrolling did not settle; no probe evidence was recorded.');
+   const actual=await geometry();contentHeight=Math.max(contentHeight,actual.contentHeight);contentWidth=Math.max(contentWidth,actual.contentWidth);
+   const bytes=await page.screenshot({type:'jpeg',quality:75}),image='data:image/jpeg;base64,'+bytes.toString('base64');
+   if(imageBytes+image.length>6_000_000){budgetTruncated=true;break;}
+   imageBytes+=image.length;views.push({label:index===0?'Top':index===targets.length-1?(actual.y+actual.height>=actual.contentHeight-1?'Bottom':'Lower viewport · bottom not reached'):'Section '+(index+1),x:actual.x,y:actual.y,width:actual.width,height:actual.height,image});
+  }
+  if(!views.length)throw Error('Static probe pixels exceed the bounded evidence size.');
+  const {capturedRanges,uncoveredRanges}=staticProbeCoverageRanges(contentHeight,views),coverage={viewport:{width,height},content:{width:contentWidth,height:contentHeight},capturedRanges,uncoveredRanges,horizontalOverflow:Math.max(0,contentWidth-width),nestedScrollRegions:start.nestedScrollRegions,nestedScrollRegionCount:start.nestedScrollRegionCount,completeRootVerticalCoverage:uncoveredRanges.length===0,truncated:budgetTruncated||uncoveredRanges.length>0||start.nestedScrollRegionCount>64,limits:'Root vertical viewport tiles only; coverage is not a claim that all text is unobscured. Nested scroll contents and horizontally offscreen content are not traversed; inspect the listed regions separately. Actual scroll offsets are retained. No browser zoom, authored JS behavior or assistive-technology output.'};
+  return {kind:'northstar-static-accessibility-probe',id:randomUUID(),nodeId:input.nodeId,sourceVersion:input.sourceVersion,sourceSha256:input.sourceSha256,snapshotSha256,stateEpoch,scenario,checkedAt:new Date().toISOString(),browser:'Firefox '+browser.version(),width,height,observations:transformed.observations,views,coverage,limits:'One sanitized current-state semantic snapshot; authored scripts removed, network denied, reduced motion requested. The same inert copy is transformed once, then captured with actual browser viewport pixels. Text resize doubles computed font size; it is not browser zoom. Geometry and pixels require agent interpretation; no criterion pass or conformance claim is generated.'};
+ }finally{clearTimeout(deadline);signal.removeEventListener('abort',abort);await browser?.close().catch(()=>{});occupied=false;}
+}
+export function sanitizeStaticProbeDocument(snapshot:{html:string;css:string}){
+ const doc=new DOMParser().parseFromString(snapshot.html,'text/html');
+ doc.querySelectorAll('script,iframe,object,embed,link,meta,base,[data-northstar-feedback-overlay]').forEach(node=>node.remove());
+ const safeResource=(value:string)=>/^data:(image\/(png|jpeg|webp|gif)|font\/(ttf|otf|woff|woff2));base64,[A-Za-z0-9+/=]+$/.test(value);
+ for(const element of doc.querySelectorAll('*'))for(const attribute of [...element.attributes])if(/^on/i.test(attribute.name)||['srcdoc','srcset','autofocus','formaction','action'].includes(attribute.name)||['src','poster'].includes(attribute.name)&&!safeResource(attribute.value)||['href','xlink:href'].includes(attribute.name)&&!/^(#|https?:|mailto:|tel:)/i.test(attribute.value))element.removeAttribute(attribute.name);
+ doc.querySelectorAll('input[type="password"],input[type="hidden"]').forEach(input=>input.removeAttribute('value'));
+ return {html:doc.body.outerHTML,css:snapshot.css.replace(/<\/style/gi,'<\\/style')};
+}

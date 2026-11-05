@@ -92,3 +92,12 @@ test('independent review retains probe pixels with source-specific criterion evi
  context.tool('canvas_review',{nodeId:'course'},[text({nodeId:'course',sourceVersion:'v2',viewport:{width:960,height:760},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,new'}]);
  const next=JSON.parse(context.packet('').text);assert.equal(next.productWork[0].accessibilityProbes,undefined);assert.equal(next.imageDirectory.some((image:{role:string})=>image.role==='screen:course:accessibility:text-spacing'),false);
 });
+
+test('independent reviewer keeps distinct static views and replaces a scenario family without phantom lower pixels',async()=>{
+ const {DiscoveryReviewContext}=await import('../lib/canvas-v2/codex-app-server/discovery-review');const context=new DiscoveryReviewContext(),text=(value:unknown)=>({type:'inputText',text:JSON.stringify(value)});
+ context.tool('canvas_review',{nodeId:'course'},[text({nodeId:'course',sourceVersion:'v1',viewport:{width:880,height:820},state:{}}),{type:'inputImage',imageUrl:'data:image/png;base64,render'}]);
+ const view=(index:number,label:string,y:number)=>[text({nodeId:'course',sourceVersion:'v1',captureRole:'accessibility-probe',wcagScenario:'reflow',probeCapture:index,probeView:{label,x:0,y,width:320,height:820},wcagEvidence:evidence('render'),...(index===0?{observations:{coverage:{completeRootVerticalCoverage:true}}}:{})}),{type:'inputImage',imageUrl:'data:image/png;base64,view'+index}];
+ context.tool('canvas_accessibility_probe',{nodeId:'course',scenario:'reflow'},[...view(0,'Top',0),...view(1,'Bottom',780)]);
+ let packet=JSON.parse(context.packet('').text);assert.equal(packet.productWork[0].accessibilityProbes[0].views.length,2);assert.equal(packet.productWork[0].accessibilityProbes[0].observations.coverage.completeRootVerticalCoverage,true);assert.ok(packet.imageDirectory.some((item:{role:string})=>item.role==='screen:course:accessibility:reflow:0'));assert.ok(packet.imageDirectory.some((item:{role:string})=>item.role==='screen:course:accessibility:reflow:1'));
+ context.tool('canvas_accessibility_probe',{nodeId:'course',scenario:'reflow'},view(0,'Top',0));packet=JSON.parse(context.packet('').text);assert.equal(packet.productWork[0].accessibilityProbes[0].views.length,1);assert.ok(!packet.imageDirectory.some((item:{role:string})=>item.role==='screen:course:accessibility:reflow:1'));
+});

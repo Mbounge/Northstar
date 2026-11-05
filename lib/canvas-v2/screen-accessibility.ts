@@ -28,7 +28,7 @@ export interface AccessibilityVisualCapture {
 export interface AccessibilityProbeCapture {
   id:string;scenario:'inventory'|'text-spacing'|'text-resize'|'orientation'|'reflow';
   sourceVersion:string;stateEpoch:number;checkedAt:string;
-  width:number;height:number;image:string;observations:Record<string,unknown>;
+  width:number;height:number;image:string;views?:import('./accessibility-native').AccessibilityStaticProbeView[];observations:Record<string,unknown>;
 }
 export function retainedAccessibilityImage(image:unknown):image is string{
   return typeof image==='string'&&image.length<=8_000_000&&/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(image);
@@ -103,15 +103,16 @@ export function retainAccessibilityBaseline(reports:ScreenAccessibilityReport[],
 export function accessibilityEvidenceForModel(report:ScreenAccessibilityReport|undefined){
   if(!report)return undefined;
   const {visual,nativeVerification,probeCaptures,...evidence}=report;
-  return {...evidence,visualCaptureAvailable:!!visual,...(probeCaptures?{probeCaptures:probeCaptures.map(({image,...capture})=>({...capture,pixelsAvailable:!!image}))}:{}),...(nativeVerification?{nativeVerification:{...nativeVerification,captures:nativeVerification.captures.map(({label,tree})=>({label,tree,pixelsAvailable:true}))}}:{})};
+  return {...evidence,visualCaptureAvailable:!!visual,...(probeCaptures?{probeCaptures:probeCaptures.map(({image,views,...capture})=>({...capture,pixelsAvailable:!!image,...(views?{views:views.map(({image,...view})=>({...view,pixelsAvailable:!!image}))}:{})}))}:{}),...(nativeVerification?{nativeVerification:{...nativeVerification,captures:nativeVerification.captures.map(({label,tree})=>({label,tree,pixelsAvailable:true}))}}:{})};
 }
 
 /** Retain actual host probe pixels without silently evicting evidence that a
  * recorded decision may reference. A new audit can establish a fresh report. */
 export function retainAccessibilityProbe(report:ScreenAccessibilityReport,capture:AccessibilityProbeCapture):ScreenAccessibilityReport{
   if(capture.sourceVersion!==report.sourceVersion||!capture.id||!['inventory','text-spacing','text-resize','orientation','reflow'].includes(capture.scenario)||!retainedAccessibilityImage(capture.image)||!Number.isFinite(Date.parse(capture.checkedAt))||!Number.isInteger(capture.stateEpoch)||capture.stateEpoch<0||!Number.isFinite(capture.width)||!Number.isFinite(capture.height)||capture.width<240||capture.width>1920||capture.height<240||capture.height>1600||!capture.observations||typeof capture.observations!=='object'||Array.isArray(capture.observations)||JSON.stringify(capture.observations).length>500_000)throw Error('The probe does not contain bounded current-source host evidence.');
+  if(capture.views!==undefined&&(!Array.isArray(capture.views)||!capture.views.length||capture.views.length>6||capture.views.some(view=>!retainedAccessibilityImage(view.image)||typeof view.label!=='string'||view.label.length>100||!Number.isFinite(view.x)||!Number.isFinite(view.y)||view.x<0||view.y<0||view.width!==capture.width||view.height!==capture.height)))throw Error('The probe view sequence is invalid or exceeds its bound.');
   const captures=[...(report.probeCaptures??[]).filter(item=>item.id!==capture.id),structuredClone(capture)];
-  if(captures.length>12||captures.reduce((bytes,item)=>bytes+item.image.length+JSON.stringify(item.observations).length,0)>8_000_000)throw Error('This checked page has reached its retained probe budget. Start a fresh audit before further inspection; no new receipt was issued.');
+  if(captures.length>12||captures.reduce((bytes,item)=>bytes+[...new Set([item.image,...(item.views??[]).map(view=>view.image)])].reduce((n,image)=>n+image.length,0)+JSON.stringify(item.observations).length,0)>8_000_000)throw Error('This checked page has reached its retained probe budget. Start a fresh audit before further inspection; no new receipt was issued.');
   return {...report,probeCaptures:captures};
 }
 

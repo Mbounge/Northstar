@@ -18,6 +18,12 @@ test('native assertions reject DOM-visible text or focus outside the viewport, c
  const visible=inspectNativeElementVisibility(visibilityFixture({x:10,y:10,width:120,height:20}));assert.equal(visible.withinViewport,true);assert.equal(visible.unobscured,true);
 });
 
+test('root scrolling is clipped by the viewport, not the scrolled html border box',()=>{
+ const element=visibilityFixture({x:10,y:160,width:120,height:20}) as unknown as {ownerDocument:{scrollingElement:unknown;documentElement:unknown};parentElement:{style:{overflowY:string};getBoundingClientRect:()=>unknown}};
+ const root=element.parentElement;root.style.overflowY='auto';root.getBoundingClientRect=()=>({x:0,y:-500,width:320,height:100,left:0,top:-500,right:320,bottom:-400});element.ownerDocument.scrollingElement=root;element.ownerDocument.documentElement=root;
+ assert.equal(inspectNativeElementVisibility(element as unknown as Element).withinViewport,true);
+});
+
 async function settlementFixture(position:(time:number)=>number,frames=true){
  let clock=0,nextId=0;const callbacks=new Map<number,()=>void>(),timers=new Map<number,{at:number;callback:()=>void}>();
  const root={scrollWidth:320,scrollHeight:3000};

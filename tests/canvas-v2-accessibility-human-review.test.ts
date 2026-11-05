@@ -25,3 +25,10 @@ test('actual probe pixels and observations remain human proof while compact mode
 test('opening accessibility always selects the criteria verification surface first',()=>{
  const source=readFileSync(new URL('../components/canvas-v2/screen-accessibility-panel.tsx',import.meta.url),'utf8');assert.match(source,/setSection\('criteria'\);setOpen\(true\)/);assert.match(source,/Actual retained checks &amp; evidence|Actual retained checks & evidence/);
 });
+
+test('all static probe views remain inspectable while compact artifacts strip every image and enforce shared byte bounds',()=>{
+ const probe=capture();probe.views=[{label:'Top',x:0,y:0,width:880,height:820,image:probe.image},{label:'Bottom',x:0,y:780,width:880,height:820,image:'data:image/jpeg;base64,bG93ZXJwaXhlbHM='}];probe.observations.coverage={completeRootVerticalCoverage:true,capturedRanges:[{start:0,end:1600}],uncoveredRanges:[],nestedScrollRegions:[]};
+ const retained=retainAccessibilityProbe(report(),probe),compact=JSON.stringify(accessibilityEvidenceForModel(retained));assert.equal(retained.probeCaptures?.[0].views?.length,2);assert.ok(!compact.includes('cGl4ZWxz'));assert.ok(!compact.includes('bG93ZXJwaXhlbHM='));assert.match(compact,/Bottom/);assert.match(compact,/completeRootVerticalCoverage/);
+ for(const views of [[{...probe.views[0],image:'https://remote.invalid/pixel'}],[{...probe.views[0],width:999}],Array(7).fill(probe.views[0])])assert.throws(()=>retainAccessibilityProbe(report(),{...probe,views}));
+ const large='data:image/jpeg;base64,'+'A'.repeat(1_400_000),allViews=Array.from({length:6},(_,index)=>({...probe.views![0],label:String(index),image:large+String.fromCharCode(65+index)}));assert.throws(()=>retainAccessibilityProbe(report(),{...probe,image:allViews[0].image,views:allViews}),/retained probe budget/);
+});
