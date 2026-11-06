@@ -4,6 +4,7 @@ import { wcagReviewPlan, wcagReviewSummary, type WcagReviewCase, type WcagEviden
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AccessibilityDiagnostics, NativeAccessibilityReview } from './accessibility-review-evidence';
+import { criterionScanComparison, criterionSourceOutline } from '@/lib/canvas-v2/accessibility-criterion-evidence';
 import { recoverAccessibilityVisual } from '@/lib/canvas-v2/accessibility-comparison-source';
 import { wcagRequirementSummary } from '@/lib/canvas-v2/wcag-requirement-summary';
 import { Accessibility, Download, X, ArrowUpRight } from 'lucide-react';
@@ -46,7 +47,7 @@ export function ScreenAccessibilityPanel({nodeId, encoded, audit, requestRepair,
         {stale&&(section==='findings'||section==='native')&&<p role="status" className={`text-xs ${auditMuted}`}>Showing evidence from a saved page state.</p>}
         {section==='findings'&&<AccessibilityDiagnostics key={focusedEvidence??'diagnostics'} report={report} review={criterionReview} focusedEvidence={focusedEvidence}/>}
         {section==='native'&&<NativeAccessibilityReview verification={report?.nativeVerification}/>}
-        {section==='criteria'&&<WcagCriteriaOverview review={criterionReview} sourceVersion={canvasV2FeedbackFingerprint(encoded)} stale={stale} report={report} stateEpoch={screenAccessibilityEpoch(nodeId)} onEvidence={(kind,id)=>{setFocusedEvidence(id);setSection(kind);}}/>}
+        {section==='criteria'&&<WcagCriteriaOverview review={criterionReview} sourceVersion={canvasV2FeedbackFingerprint(encoded)} stale={stale} report={report} previous={previous} readSources={readSources} stateEpoch={screenAccessibilityEpoch(nodeId)} onEvidence={(kind,id)=>{setFocusedEvidence(id);setSection(kind);}}/>}
         {section==='comparison'&&!report&&<p className="py-6 text-sm text-slate-600 dark:text-[#b5acc2]">Check the original page to retain the before, make the repair through Northstar, then re-check to capture its after.</p>}
         {section==='comparison'&&report&&<AccessibilityComparison before={previous??report} after={previous?report:undefined} stale={stale} readSources={readSources}/>}
         {section==='comparison'&&report&&previous&&!stale&&<button type="button" className="text-xs text-slate-600 dark:text-[#b5acc2] underline underline-offset-2" onClick={()=>setCurrentAccessibilityBaseline(nodeId)}>Use this checked version as the new before</button>}
@@ -73,7 +74,7 @@ type CriterionRow = ReturnType<typeof accessibilityCriterionRows>[number];
 const auditControl = 'min-h-9 rounded-md border border-[#e1dce9] bg-transparent px-3 text-sm dark:border-white/15';
 const auditMuted = 'text-[#655d74] dark:text-[#b9aec8]';
 
-export function WcagCriteriaOverview({review,sourceVersion,stale,report,onEvidence,stateEpoch}:{review?:WcagReviewCase;sourceVersion:string;stale:boolean;report?:ScreenAccessibilityReport;stateEpoch?:number;onEvidence:(view:EvidenceView,evidenceId?:string)=>void}){
+export function WcagCriteriaOverview({review,sourceVersion,stale,report,previous,readSources,onEvidence,stateEpoch}:{review?:WcagReviewCase;sourceVersion:string;stale:boolean;report?:ScreenAccessibilityReport;previous?:ScreenAccessibilityReport;readSources?:()=>Iterable<string>;stateEpoch?:number;onEvidence:(view:EvidenceView,evidenceId?:string)=>void}){
   const [filter,setFilter]=useState('all');
   const [search,setSearch]=useState('');
   const [evidenceCriterion,setEvidenceCriterion]=useState<string>();
@@ -155,32 +156,100 @@ export function WcagCriteriaOverview({review,sourceVersion,stale,report,onEviden
     </div>
     {selected&&<div className="space-y-3">
       <button type="button" onClick={()=>{returnFocus.current=true;setEvidenceCriterion(undefined);}} className="text-sm text-violet-800 underline underline-offset-2 dark:text-[#d2c5ff]">← Back to audit table</button>
-      <h3 ref={evidenceHeading} tabIndex={-1} className="text-base font-semibold">Evidence for {selected.criterion.id} {selected.criterion.title}</h3>
-      <CriterionEvidence row={selected} report={report} sourceVersion={sourceVersion} onEvidence={onEvidence}/>
+      <h3 ref={evidenceHeading} tabIndex={-1} className="w-fit rounded text-base font-semibold">Evidence for {selected.criterion.id} {selected.criterion.title}</h3>
+      <CriterionEvidence key={selected.criterion.id} row={selected} report={report} previous={previous} readSources={readSources} onEvidence={onEvidence}/>
     </div>}
   </section>;
 }
 
-function CriterionEvidence({row,report,sourceVersion,onEvidence}:{row:CriterionRow;report?:ScreenAccessibilityReport;sourceVersion:string;onEvidence:(view:EvidenceView,evidenceId?:string)=>void}){
-  return <ul className="divide-y divide-[#e7e1ee] text-sm dark:divide-white/10">
-    {row.evidence.map(({id,receipt})=>{
-      if(!receipt)return <li key={id} className="py-3">Saved evidence is missing for this check.</li>;
-      const reportMatches=report?.sourceVersion===receipt.sourceVersion;
-      const probe=reportMatches&&report?.probeCaptures?.some(capture=>capture.id===id&&capture.sourceVersion===receipt.sourceVersion);
-      const native=reportMatches&&report?.nativeVerification&&['native-keyboard','native-pointer','accessibility-tree'].includes(receipt.kind);
-      const comparison=reportMatches&&report?.visual&&['render','audit'].includes(receipt.kind);
-      const view=probe?'findings':native?'native':comparison?'comparison':undefined;
-      const saved=row.historical||receipt.historical||receipt.sourceVersion!==sourceVersion;
-      return <li key={id} className="space-y-1 py-3">
-        <p className="font-medium">{evidenceLabel[receipt.kind]}</p>
-        <p className={`break-words leading-relaxed ${auditMuted}`}>{receipt.description}</p>
-        <p className={`break-all text-xs ${auditMuted}`}>
-          {saved?'Saved state':'Captured state'} · <time dateTime={receipt.checkedAt}>{new Date(receipt.checkedAt).toLocaleString()}</time> · Source {receipt.sourceVersion}{receipt.stateEpoch!==undefined?` · state ${receipt.stateEpoch}`:''}
-        </p>
-        {view&&<button type="button" onClick={()=>onEvidence(view,id)} className="text-xs text-violet-800 underline underline-offset-2 dark:text-[#d2c5ff]">{probe?'Open inspection images and measurements':native?'Open browser capture and trace':'Open before & after'}</button>}
-      </li>;
-    })}
-  </ul>;
+const evidenceLink = 'w-fit text-sm font-medium text-violet-800 underline underline-offset-2 dark:text-[#d2c5ff]';
+const evidenceBox = 'rounded-lg border border-[#e1dce9] p-3 dark:border-white/10';
+
+export function CriterionEvidence({row,report,previous,readSources,onEvidence}:{row:CriterionRow;report?:ScreenAccessibilityReport;previous?:ScreenAccessibilityReport;readSources?:()=>Iterable<string>;onEvidence:(view:EvidenceView,evidenceId?:string)=>void}){
+  const [showTechnical,setShowTechnical]=useState(false);
+  const [showPages,setShowPages]=useState(false);
+  const {criterion,assessment}=row;
+  const measurements=criterionScanComparison(criterion.id,previous,report);
+  const hasPair=!!previous&&!!report&&previous.id!==report.id;
+  const structure=hasPair&&(criterion.id==='1.3.1'||criterion.id==='1.3.2');
+  const checks=row.evidence.map(({id,receipt})=>{
+    if(!receipt)return {id,label:'Evidence unavailable',summary:'The original record for this check is missing.'};
+    const matchingReports=[report,previous].filter(item=>item?.sourceVersion===receipt.sourceVersion);
+    const probe=matchingReports.flatMap(item=>item?.probeCaptures??[]).find(capture=>capture.id===id&&capture.sourceVersion===receipt.sourceVersion);
+    const jobId=receipt.description.match(/^\s*\{\s*"job"\s*:\s*"([^"]+)"/)?.[1];
+    const native=jobId?matchingReports.map(item=>item?.nativeVerification).find(result=>result?.id===jobId):undefined;
+    let summary:string;
+    switch(receipt.kind){
+      case 'source': summary='Identifies the exact saved page used for this review.';break;
+      case 'render': summary=probe?`Page inspection at ${probe.width} × ${probe.height} CSS px.`:'A rendered page inspection was recorded.';break;
+      case 'audit': summary='Automated rules were run against a captured page state.';break;
+      case 'native-keyboard': {
+        const keyboardSteps=native?.steps.filter(step=>step&&typeof step==='object'&&'action' in step&&step.action==='key').length;
+        summary=keyboardSteps?`Keyboard and focus observed over ${keyboardSteps} key ${keyboardSteps===1?'press':'presses'}.`:'Keyboard and focus observations were recorded in the browser.';
+        break;
+      }
+      case 'native-pointer': summary='Pointer interaction was checked in the browser.';break;
+      case 'accessibility-tree': summary='The browser’s accessibility tree was captured.';break;
+      case 'journey': summary='The preview recorded a simulated interaction.';break;
+      default: summary=/^\s*[\[{]/.test(receipt.description)?'A check was recorded. The original record is in Technical details.':receipt.description;
+    }
+    const view:EvidenceView|undefined=probe&&report?.probeCaptures?.includes(probe)?'findings':native&&native===report?.nativeVerification?'native':undefined;
+    return {id,label:evidenceLabel[receipt.kind],summary,view,receipt};
+  });
+  return <div className="space-y-4 text-sm">
+    <div className={`grid gap-4 sm:grid-cols-2 ${evidenceBox}`}>
+      <div><h4 className="font-semibold">What WCAG requires</h4>
+        <p className={`mt-1 ${auditMuted}`}>{wcagRequirementSummary[criterion.id]}</p>
+        <a href={criterion.url} target="_blank" rel="noreferrer" className={`mt-1 inline-block ${evidenceLink}`}>Read the W3C standard <ArrowUpRight aria-hidden="true" size={12} className="inline"/></a>
+      </div>
+      <div><h4 className="font-semibold">What the agent found</h4>
+        {assessment&&<><p className={`mt-1 font-medium ${decisionTone[assessment.decision]}`}>{decisionLabel[assessment.decision]}{row.historical&&' · Saved review'}</p><p className={`mt-1 break-words ${auditMuted}`}>{assessment.reason}</p>
+          {assessment.remainingWork&&<p className={`mt-2 break-words ${auditMuted}`}><strong>Still to verify.</strong> {assessment.remainingWork}</p>}</>}
+      </div>
+    </div>
+    <section aria-label="Change evidence" className={`space-y-2 ${evidenceBox}`}>
+      <h4 className="font-semibold">Before &amp; after</h4>
+      {structure&&<><p className={auditMuted}>Selected headings and tables from the saved pages, in source order.</p>
+        <div className="grid gap-3 sm:grid-cols-2"><CriterionSource report={previous} label="Before" readSources={readSources}/><CriterionSource report={report} label="After" readSources={readSources}/></div></>}
+      {!!measurements.length&&<div className="overflow-x-auto">
+        <table className="w-full min-w-[340px] text-left">
+          <thead><tr><th scope="col" className="pr-3">Automated rule</th><th scope="col" className="pr-3">Before</th><th scope="col">After</th></tr></thead>
+          <tbody>{measurements.map(item=><tr key={`${item.viewport}:${item.rule}`} className="border-t border-[#e1dce9] align-top dark:border-white/10"><th scope="row" className="py-2 pr-3 font-medium">{item.label}<span className={`block text-xs ${auditMuted}`}>{item.viewport} CSS px</span></th><td className="py-2 pr-3">{item.before}</td><td className="py-2">{item.after}</td></tr>)}</tbody>
+        </table>
+      </div>}
+      {!structure&&!measurements.length&&<p className={auditMuted}>{hasPair?'No separate before-and-after measurement was saved for this criterion.':'A before-and-after pair is not saved for this page.'}</p>}
+      {hasPair&&<button type="button" aria-expanded={showPages} onClick={()=>setShowPages(value=>!value)} className={evidenceLink}>{showPages?'Hide page comparison':'View both pages side by side'}</button>}
+      {hasPair&&showPages&&<AccessibilityComparison before={previous} after={report} stale={row.historical} readSources={readSources}/>}
+    </section>
+    <section aria-label="Checks used" className={evidenceBox}>
+      <h4 className="font-semibold">Checks used</h4>
+      <ul className="mt-1 divide-y divide-[#e7e1ee] dark:divide-white/10">
+        {checks.map(({id,label,summary,view})=><li key={id} className="grid gap-x-3 gap-y-1 py-2 sm:grid-cols-[minmax(9rem,1fr)_3fr]">
+          <span className="font-medium">{label}</span><div className={`break-words ${auditMuted}`}>{summary}
+            {view&&<button type="button" onClick={()=>onEvidence(view,id)} className={`ml-2 ${evidenceLink}`}>{view==='findings'?'View inspection':'View browser check'}</button>}
+          </div>
+        </li>)}
+      </ul>
+      {checks.some(check=>check.receipt)&&<button type="button" aria-expanded={showTechnical} onClick={()=>setShowTechnical(value=>!value)} className={evidenceLink}>{showTechnical?'Hide technical details':'Technical details'}</button>}
+      {showTechnical&&<ul className="mt-2 space-y-3">
+        {checks.map(({id,label,receipt})=>receipt&&<li key={id} className={evidenceBox}><p className="font-medium">{label}</p>
+          <p className={`mt-1 break-all text-xs ${auditMuted}`}><time dateTime={receipt.checkedAt}>{new Date(receipt.checkedAt).toLocaleString()}</time> · Source {receipt.sourceVersion}{receipt.stateEpoch!==undefined?` · state ${receipt.stateEpoch}`:''}</p>
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-xs">{receipt.description}</pre>
+        </li>)}
+      </ul>}
+    </section>
+  </div>;
+}
+
+function CriterionSource({report,label,readSources}:{report:ScreenAccessibilityReport;label:string;readSources?:()=>Iterable<string>}){
+  const {visual,loading}=useAccessibilityVisual(report,readSources);
+  const [outline,setOutline]=useState<string[]>();
+  useEffect(()=>{setOutline(visual?criterionSourceOutline(visual.html):undefined);},[visual]);
+  return <div className="rounded-md bg-violet-50/70 px-3 py-2 dark:bg-white/[.04]">
+    <p className="mb-1 font-medium">{label}</p>
+    {outline?.length?<ol className={`list-decimal space-y-1 break-words pl-5 ${auditMuted}`}>{outline.map((text,index)=><li key={index}>{text}</li>)}</ol>:
+      <p className={auditMuted}>{loading?'Finding the saved page…':outline?'No headings or tables in this capture.':'Saved page source unavailable.'}</p>}
+  </div>;
 }
 
 function AccessibilityComparison({before,after,stale,readSources}:{before:ScreenAccessibilityReport;after?:ScreenAccessibilityReport;stale:boolean;readSources?:()=>Iterable<string>}){
@@ -217,9 +286,7 @@ function AccessibilityComparison({before,after,stale,readSources}:{before:Screen
   </section>;
 }
 
-function AccessibilityCapture({report,label,narrow,readSources}:{report:ScreenAccessibilityReport;label:string;narrow:boolean;readSources?:()=>Iterable<string>}){
-  const host=useRef<HTMLDivElement>(null);
-  const [available,setAvailable]=useState(320);
+function useAccessibilityVisual(report:ScreenAccessibilityReport,readSources?:()=>Iterable<string>){
   const [recovery,setRecovery]=useState<{id:string;visual?:ScreenAccessibilityReport['visual']}>();
   const visual=report.visual??(recovery?.id===report.id?recovery.visual:undefined);
   const loading=!report.visual&&!!readSources&&recovery?.id!==report.id;
@@ -231,6 +298,13 @@ function AccessibilityCapture({report,label,narrow,readSources}:{report:ScreenAc
     },()=>{if(!cancelled)setRecovery({id:report.id});});
     return()=>{cancelled=true;};
   },[report,readSources]);
+  return {visual,loading};
+}
+
+function AccessibilityCapture({report,label,narrow,readSources}:{report:ScreenAccessibilityReport;label:string;narrow:boolean;readSources?:()=>Iterable<string>}){
+  const host=useRef<HTMLDivElement>(null);
+  const [available,setAvailable]=useState(320);
+  const {visual,loading}=useAccessibilityVisual(report,readSources);
   useEffect(()=>{
     const element=host.current;
     if(!element)return;

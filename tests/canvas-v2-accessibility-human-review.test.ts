@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
+import {criterionScanComparison} from '../lib/canvas-v2/accessibility-criterion-evidence';
 import {wcagRequirementSummary} from '../lib/canvas-v2/wcag-requirement-summary';
-import {accessibilityCriterionRows,WcagCriteriaOverview} from '../components/canvas-v2/screen-accessibility-panel';
+import {accessibilityCriterionRows,CriterionEvidence,WcagCriteriaOverview} from '../components/canvas-v2/screen-accessibility-panel';
 import {accessibilityEvidenceForModel,retainAccessibilityProbe,type ScreenAccessibilityReport,type AccessibilityProbeCapture} from '../lib/canvas-v2/screen-accessibility';
 import {createWcagReview,type WcagReviewCase} from '../lib/canvas-v2/wcag-review';
 const review=():WcagReviewCase=>({...createWcagReview({nodeId:'course',sourceVersion:'current',target:'2.2',scope:'Only this actual course page and its reading tasks.',tasks:['Read assessment information']}),stateEpoch:3,assessments:[{criterionId:'1.3.1',decision:'pass',reason:'Actual source and current rendered table retain the column headings and assessment relationships.',evidenceIds:['source-table'],remainingWork:''},{criterionId:'4.1.2',decision:'needs-human',reason:'The browser tree is retained, but no actual screen-reader output was collected.',evidenceIds:['native-tree'],remainingWork:'Test the reading controls with actual assistive technology.'}],evidence:[{id:'source-table',nodeId:'course',sourceVersion:'current',stateEpoch:3,kind:'source',description:'Actual table source and headings inspected.',checkedAt:'2026-11-05T15:00:00Z'},{id:'native-tree',nodeId:'course',sourceVersion:'current',stateEpoch:3,kind:'accessibility-tree',description:'Actual browser ARIA tree; no screen-reader speech.',checkedAt:'2026-11-05T15:00:00Z'}]});
@@ -36,4 +37,31 @@ test('all static probe views remain inspectable while compact artifacts strip ev
  const retained=retainAccessibilityProbe(report(),probe),compact=JSON.stringify(accessibilityEvidenceForModel(retained));assert.equal(retained.probeCaptures?.[0].views?.length,2);assert.ok(!compact.includes('cGl4ZWxz'));assert.ok(!compact.includes('bG93ZXJwaXhlbHM='));assert.match(compact,/Bottom/);assert.match(compact,/completeRootVerticalCoverage/);
  for(const views of [[{...probe.views[0],image:'https://remote.invalid/pixel'}],[{...probe.views[0],width:999}],Array(7).fill(probe.views[0])])assert.throws(()=>retainAccessibilityProbe(report(),{...probe,views}));
  const large='data:image/jpeg;base64,'+'A'.repeat(1_400_000),allViews=Array.from({length:6},(_,index)=>({...probe.views![0],label:String(index),image:large+String.fromCharCode(65+index)}));assert.throws(()=>retainAccessibilityProbe(report(),{...probe,image:allViews[0].image,views:allViews}),/retained probe budget/);
+});
+
+test('criterion evidence leads with the requirement and outcome and keeps raw browser records out of the default view',()=>{
+ const saved=review();
+ saved.evidence[1].description='{"job":"private-raw-trace","steps":[{"action":"key","key":"Tab"}]}';
+ const row=accessibilityCriterionRows(saved,'changed').find(item=>item.criterion.id==='4.1.2')!;
+ const html=renderToStaticMarkup(createElement(CriterionEvidence,{row,onEvidence(){}}));
+ assert.match(html,/What WCAG requires/);
+ assert.match(html,/Verification needed · Saved review/);
+ assert.match(html,/Test the reading controls with actual assistive technology/);
+ assert.match(html,/accessibility tree was captured/);
+ assert.match(html,/A before-and-after pair is not saved/);
+ assert.match(html,/Technical details/);
+ assert.doesNotMatch(html,/private-raw-trace/);
+});
+
+test('criterion changes use tagged findings at matching viewports and only count recorded rule passes',()=>{
+ const issue={rule:'color-contrast',impact:'serious',description:'Contrast',help:'Text contrast',helpUrl:'',criteria:['wcag143'],nodes:[],nodeCount:3};
+ const scan={width:880,height:820,violations:[issue],incomplete:[],passedRules:5,inapplicableRules:0,horizontalOverflow:0};
+ const before={...report(),id:'before',status:'issues-found',scans:[scan]} as ScreenAccessibilityReport;
+ const after={...before,id:'after',status:'no-automated-issues',scans:[{...scan,violations:[],passedRuleIds:[]}]} as ScreenAccessibilityReport;
+ assert.deepEqual(criterionScanComparison('1.4.3',before,after).map(({before,after})=>[before,after]),[['3 affected · Issue found','No result recorded']]);
+ after.scans[0].passedRuleIds=['color-contrast'];
+ assert.equal(criterionScanComparison('1.4.3',before,after)[0].after,'Rule passed');
+ assert.deepEqual(criterionScanComparison('1.3.2',before,after),[]);
+ after.scans[0].height=900;
+ assert.deepEqual(criterionScanComparison('1.4.3',before,after),[]);
 });
