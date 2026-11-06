@@ -29,14 +29,22 @@ export function criterionSourceOutline(html: string) {
   // Template content stays inert, including external resources from the audited page.
   const template = document.createElement('template');
   template.innerHTML = html;
-  const readText = (element: Element) => (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const readText = (element: Element) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const parts: string[] = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) parts.push(node.nodeValue ?? '');
+    return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  };
   return Array.from(template.content.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"],table'))
     .filter(element => !element.closest('[hidden],[aria-hidden="true"]'))
     .map(element => {
       if (element.localName !== 'table') return readText(element);
-      const headings = Array.from(element.querySelectorAll('th,[role="columnheader"]')).filter(header => header.closest('table') === element);
-      const labels = headings.slice(0, 5).map(readText).filter(Boolean);
-      const caption = element.querySelector('caption');
-      return [caption && readText(caption), labels.length ? `Table headers: ${labels.join(' · ')}` : 'Table with no marked headers'].filter(Boolean).join(' · ');
+      const headings = Array.from(element.querySelectorAll('th,[role="columnheader"],[role="rowheader"]')).filter(header => header.closest('table') === element);
+      const columns = headings.filter(header => header.matches('[scope="col"],[scope="colgroup"],[role="columnheader"],thead th:not([scope="row"]):not([role="rowheader"])'));
+      const labels = (columns.length ? columns : headings).slice(0, 5).map(readText).filter(Boolean);
+      const caption = element.querySelector(':scope > caption');
+      const summary = labels.length ? `${columns.length ? 'Column headers' : 'Table headers'}: ${labels.join(' · ')}`
+        : headings.length ? 'Table with unlabeled headers' : 'Table with no marked headers';
+      return [caption && readText(caption), summary].filter(Boolean).join(' · ');
     }).filter(Boolean).slice(0, 6);
 }
