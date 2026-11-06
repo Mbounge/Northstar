@@ -7,6 +7,8 @@ import ts from 'typescript';
 import { accessibilityEvidenceAllowsCompletion, accessibilityComparison, retainAccessibilityBaseline, accessibilityEvidenceForModel, accessibilityEvidenceArtifact, validateAccessibilityCaptureSize, type ScreenAccessibilityReport } from '../lib/canvas-v2/screen-accessibility';
 import { accessibilityCourseFixture } from '../app/canvas-v2-e2e/accessibility/course-fixture';
 import { encodeCanvasV2Screen,parseCanvasV2Screen,validateCanvasV2Screen } from '../lib/canvas-v2/interactive-screen';
+import { recoverAccessibilityVisual } from '../lib/canvas-v2/accessibility-comparison-source';
+import { canvasV2FeedbackFingerprint } from '../lib/canvas-v2/screen-feedback';
 import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-runtime';
 import { NORTHSTAR_AGENT_TOOLS,NORTHSTAR_AGENT_INSTRUCTIONS } from '../lib/canvas-v2/managed-agent/config';
 const proof=():ScreenAccessibilityReport=>({schemaVersion:1,kind:'northstar-rendered-accessibility',id:'proof',nodeId:'course',title:'Biology',sourceVersion:'version-1',sourceSha256:'a'.repeat(64),domSha256:'b'.repeat(64),checkedAt:'2026-11-04T12:00:00Z',engine:{name:'axe-core',version:'4.14.0'},target:'WCAG 2.1 A/AA',scope:'current rendered state; inert semantic snapshot',status:'no-automated-issues',viewport:{width:960,height:760},scans:[960,320].map(width=>({width,height:760,violations:[],incomplete:[],passedRules:14,inapplicableRules:50,horizontalOverflow:0})),manualChecks:['Keyboard and screen reader review pending.']});
@@ -27,6 +29,16 @@ test('human-only checks are retained rather than silently passed or sent into en
 test('before/after comparisons identify resolved and newly introduced element-level barriers',()=>{
   const before=proof(),after=proof();before.scans[0].violations=[issue];after.scans[0].violations=[{...issue,rule:'label'}];
   assert.deepEqual(accessibilityComparison(before,after),{resolved:['960:button-name:#send'],introduced:['960:label:#send'],remaining:[]});
+});
+test('findings-only baselines recover their exact static source, including a retained original under a different title',async()=>{
+  const source={...accessibilityCourseFixture(false),title:'Original page',javascript:'',referenceAssetIds:[]};
+  const original=encodeCanvasV2Screen(source);
+  const audited=encodeCanvasV2Screen({...source,title:'Working copy'});
+  const report={...proof(),title:'Working copy',viewport:{width:source.width,height:source.height},sourceVersion:canvasV2FeedbackFingerprint(audited),sourceSha256:createHash('sha256').update(audited).digest('hex')};
+  const altered=encodeCanvasV2Screen({...source,html:'<p>Different content</p>'});
+  assert.equal((await recoverAccessibilityVisual(report,()=>[altered,original]))?.html,parseCanvasV2Screen(original).html);
+  assert.equal(await recoverAccessibilityVisual(report,()=>[altered]),undefined);
+  assert.equal(await recoverAccessibilityVisual({...report,sourceSha256:'f'.repeat(64)},()=>[original]),undefined);
 });
 test('document language survives storage and reaches the runtime; malicious language is rejected',()=>{
   const screen=accessibilityCourseFixture(true),parsed=parseCanvasV2Screen(encodeCanvasV2Screen(screen));
@@ -137,6 +149,10 @@ test('actual saved-evidence restoration retains the baseline, rechecks freshness
   exports.restoreAccessibilityReports([...artifacts,{id:'accessibility:bad',origin:'computed',dataUrl:'data:application/json;base64,AAAA'}]);
   assert.deepEqual(Array.from(exports.screenAccessibilityHistory('course'),(report:any)=>report.id),['0','3','4']);
   assert.equal(exports.screenAccessibilityStateChanged('course'),true);
+  const visual={html:'<main>Original page</main>',css:'',width:960,height:760};
+  exports.restoreStructuredAccessibilityReports([{...proof(),id:'0',visual}]);
+  assert.deepEqual(Array.from(exports.screenAccessibilityHistory('course'),(report:any)=>report.id),['0','3','4']);
+  assert.equal(exports.screenAccessibilityHistory('course')[0].visual,visual);
 });
 
 test('ordinary retained font bytes do not count as a million characters of markup; expanded resources stay bounded',()=>{

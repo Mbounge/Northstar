@@ -117,7 +117,18 @@ export function screenAccessibilityReports(){return [...history.values()].flat()
 export function restoreStructuredAccessibilityReports(reports:readonly ScreenAccessibilityReport[]){
   for(const report of reports){
     if(!report||report.schemaVersion!==1||report.kind!=='northstar-rendered-accessibility'||typeof report.nodeId!=='string'||typeof report.id!=='string'||!Array.isArray(report.scans)||!Array.isArray(report.manualChecks)||!report.engine||!report.viewport)continue;
-    if(!screenAccessibilityHistory(report.nodeId).some(item=>item.id===report.id)){rememberAccessibilityReport(report);invalidateScreenAccessibilityState(report.nodeId);}
+    const reports=screenAccessibilityHistory(report.nodeId);
+    const saved=reports.find(item=>item.id===report.id);
+    if(!saved){
+      rememberAccessibilityReport(report);
+      invalidateScreenAccessibilityState(report.nodeId);
+    }else if(!saved.visual&&report.visual&&saved.sourceSha256===report.sourceSha256&&saved.domSha256===report.domSha256){
+      // A compact findings artifact may have arrived first. Restore the
+      // full visual in place so the original stays first in the timeline.
+      const restored={...saved,visual:report.visual};
+      history.set(report.nodeId,reports.map(item=>item===saved?restored:item));
+      window.dispatchEvent(new CustomEvent(ACCESSIBILITY_REPORT_EVENT,{detail:restored}));
+    }
   }
 }
 export function restoreAccessibilityReports(artifacts:readonly {id:string;dataUrl:string;origin:string}[]){

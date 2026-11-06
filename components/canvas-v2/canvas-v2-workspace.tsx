@@ -920,12 +920,22 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   const [marquee, setMarquee] = useState<MarqueeGesture>();
   const [mutationError, setMutationError] = useState<string>();
   const compareScreen=useCallback((nodeId:string)=>{void flushScreenDirectEdits().then(()=>setVersionHistoryNode(nodeId)).catch(error=>setMutationError(String(error)))},[]);
-  const screenEditingContext=useMemo(()=>({...screenEditing,compare:compareScreen,
+  const committedScreenSource=useRef(engine.readCommittedRevision);
+  committedScreenSource.current=engine.readCommittedRevision;
+  const accessibilitySourceHistory=useRef(engine.history);
+  accessibilitySourceHistory.current=engine.history;
+  const readAccessibilitySources=useCallback(function*(){
+    yield* readCanvasV2Screens(committedScreenSource.current().document.html).map(item=>item.encoded);
+    for(const revision of accessibilitySourceHistory.current.slice(-12).reverse()){
+      yield* readCanvasV2Screens(revision.document.html).map(item=>item.encoded);
+    }
+  },[]);
+  const screenEditingContext=useMemo(()=>({...screenEditing,compare:compareScreen,readAccessibilitySources,
     presence:collaborationEnabled&&collaboration?{pointer:(clientX:number,clientY:number)=>{
       const rect=workspaceOriginRef.current,current=viewportRef.current;
       collaboration.pointer({x:(clientX-rect.left-current.x)/current.scale,y:(clientY-rect.top-current.y)/current.scale});
     },leave:()=>collaboration.pointer(null)}:undefined,
-  }),[screenEditing,compareScreen,collaboration,collaborationEnabled]);
+  }),[screenEditing,compareScreen,readAccessibilitySources,collaboration,collaborationEnabled]);
   const [layersOpen, setLayersOpen] = useState(false);
   const [objectMenu, setObjectMenu] = useState<CanvasV2ObjectMenu>();
   const [toolbarMenu, setToolbarMenu] = useState<"shape" | "color" | "line" | "font" | "size" | "image" | "arrange">();
