@@ -1,3 +1,4 @@
+import { installCanvasV2AuthoredTimeline } from './authored-timeline';
 import {readScreenRuntimeLayers} from './screen-runtime-design';
 import {reconcileScreenDesignSource} from './screen-design-live';
 import { screenInlineTextMarkup } from './screen-inline-text';
@@ -107,11 +108,12 @@ export function bindCanvasV2ScreenAssetSource(source: string, referenceAssetIds:
 
 /** Holding CSS does not hold JavaScript's state/timers. Default those screens
  * to elapsed capture; pure CSS/Web Animations can still use deterministic seeking. */
-export function canvasV2ScreenNeedsViewportActivity(screen:Pick<CanvasV2InteractiveScreen,'trustedRuntimeLibraries'|'wasmModules'>) {
-  return Boolean(screen.wasmModules?.length || screen.trustedRuntimeLibraries?.some(library=>library==='three'||library==='three-webgpu'));
+export function canvasV2ScreenNeedsViewportActivity(screen:Pick<CanvasV2InteractiveScreen,'trustedRuntimeLibraries'|'wasmModules'>&{javascript?:string}) {
+  return Boolean(/\bnorthstarTimeline\b/.test(screen.javascript??'') || screen.wasmModules?.length || screen.trustedRuntimeLibraries?.some(library=>library==='three'||library==='three-webgpu'));
 }
 export function canvasV2ScreenMotionReviewMode(screen:Pick<CanvasV2InteractiveScreen,'javascript'|'trustedRuntimeLibraries'|'wasmModules'>,requested?:unknown):'live'|'timeline' {
   if(requested==='timeline')return 'timeline';
+  if(requested!=='live'&&/\bnorthstarTimeline\b/.test(screen.javascript))return 'timeline';
   return requested==='live'||canvasV2ScreenNeedsViewportActivity(screen)||/\b(?:requestAnimationFrame|setTimeout|setInterval)\s*\(/.test(screen.javascript)?'live':'timeline';
 }
 
@@ -127,7 +129,7 @@ export function fixedScreenMediaQuery(query: string, appearance: 'light' | 'dark
 
 /** Opaque origin, no host APIs or cookies, no remote dependencies. Only registered
  * image bytes are substituted by the host; model code never receives their URLs. */
-export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '', retainedState?: {data?:Record<string,unknown>;fields?:Array<{id:string;name:string;type:string;value:string;checked:boolean}>;scroll?:{x:number;y:number};scrollers?:Array<{selector:string;x:number;y:number}>;focused?:{id:string;type:string;start?:number;end?:number}}) {
+export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '', retainedState?: {data?:Record<string,unknown>;fields?:Array<{id:string;name:string;type:string;value:string;checked:boolean}>;scroll?:{x:number;y:number};scrollers?:Array<{selector:string;x:number;y:number}>;focused?:{id:string;type:string;start?:number;end?:number}}, appearanceOverride?: 'light' | 'dark', exportTimeline = false) {
   const screen = validateCanvasV2Screen(input);
   const bind = (source: string) => bindCanvasV2ScreenAssetSource(source, screen.referenceAssetIds, imageBytes);
   const trustedModelAssets = Object.fromEntries(screen.referenceAssetIds.flatMap(id => { const bytes = imageBytes.get(id); return bytes && isCanvasV2ScreenModelBytes(bytes) ? [[canvasV2ScreenAssetToken(id), bytes]] : []; }));
@@ -173,7 +175,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     // Private journey checks can exercise both motion preferences without
     // changing the user's OS settings or their live canvas runtime.
     const testMotionPreference=${JSON.stringify(motionPreference ?? null)};
-    const productAppearance=${JSON.stringify(screen.referenceAppearance === 'dark' ? 'dark' : 'light')};
+    const productAppearance=${JSON.stringify(appearanceOverride ?? (screen.referenceAppearance === 'dark' ? 'dark' : 'light'))};
     const fixedMediaQuery=${fixedScreenMediaQuery.toString()};
     if(productAppearance)document.documentElement.style.colorScheme=productAppearance;
     const rewriteMedia=query=>fixedMediaQuery(query,productAppearance,testMotionPreference);
@@ -182,6 +184,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     const rewriteRules=rules=>{for(const rule of rules){if(rule instanceof CSSMediaRule){const next=rewriteMedia(rule.media.mediaText);if(next!==rule.media.mediaText)rule.media.mediaText=next}if(rule.cssRules)rewriteRules(rule.cssRules)}};
     const keepProductMedia=()=>{if(productAppearance||testMotionPreference)for(const sheet of document.styleSheets)rewriteRules(sheet.cssRules)};
     keepProductMedia();
+    ${/\bnorthstarTimeline\b/.test(screen.javascript) ? `(${installCanvasV2AuthoredTimeline.toString()})(${exportTimeline});` : ''}
     // Newly authored styles and local stylesheet patches obey the same product
     // appearance, without remounting or resetting inputs, scroll or mock state.
     if(productAppearance||testMotionPreference)new MutationObserver(records=>{
@@ -270,7 +273,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     const pointerRequests=new Map(),runPointerDrag=(()=>{const __name=(value)=>value;return ${runScreenPointerDrag.toString()}})();
     const dragPointer=async(step,requestId,clickOnly=false)=>{const inputSequence=humanInputSequence,aborter=new AbortController();pointerRequests.set(requestId,aborter);try{return await runPointerDrag(document,step,{signal:aborter.signal,interrupted:()=>humanInputSequence!==inputSequence,clickOnly})}finally{if(pointerRequests.get(requestId)===aborter)pointerRequests.delete(requestId)}};
     const clickPointer=(selector,requestId)=>dragPointer({action:'drag',selector,drag:{from:{x:.5,y:.5},to:{x:.5,y:.5},durationMs:0,moves:1,end:'up',pointerType:'mouse'}},requestId,true);
-    const releaseMotion = () => {const session=motionSession;motionSession=undefined;if(!session)return;clearTimeout(session.timer);for(const {a,time,state,rate} of session.saved){try{if(a.playState==='idle')continue;a.playbackRate=rate;if(state==='idle')a.cancel();else{a.currentTime=time;if(state==='running')a.play();else if(state==='finished')a.finish();else a.pause()}}catch{a.cancel()}}};
+    const releaseMotion = () => {const session=motionSession;motionSession=undefined;if(!session)return;clearTimeout(session.timer);if(session.authored?.duration){try{window.northstarTimeline.seek(session.authored.time);if(session.authored.playing)window.northstarTimeline.play()}catch{}}for(const {a,time,state,rate} of session.saved){try{if(a.playState==='idle')continue;a.playbackRate=rate;if(state==='idle')a.cancel();else{a.currentTime=time;if(state==='running')a.play();else if(state==='finished')a.finish();else a.pause()}}catch{a.cancel()}}};
     const selectorFor = el => {
       if(el===document.documentElement)return 'html';
       if(el===document.body)return 'body';
@@ -565,7 +568,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
         return;
       }
       if(typeof e.data.cancelRequestId==='string'){pointerRequests.get(e.data.cancelRequestId)?.abort();return}
-      if(typeof e.data.viewportActive==='boolean'){window.northstarThree?.setViewportActive(e.data.viewportActive);window.northstarWasm?.setViewportActive(e.data.viewportActive);return}
+      if(typeof e.data.viewportActive==='boolean'){window.northstarThree?.setViewportActive(e.data.viewportActive);window.northstarWasm?.setViewportActive(e.data.viewportActive);window.northstarTimeline?.setViewportActive(e.data.viewportActive);return}
       const {requestId,command}=e.data;
       let finishReviewDraw;
       try {
@@ -803,21 +806,24 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
           releaseMotion();
           if(command.selector){const trigger=document.querySelector(command.selector);if(!trigger||!visible(trigger)||trigger.disabled)throw Error('Choose a visible motion trigger.');activateControl(trigger)}
           void document.body.offsetHeight;
+          const authored=window.northstarTimeline?.getState();
+          if(authored?.duration)window.northstarTimeline.pause();
           const saved=document.getAnimations().filter(a=>a.effect instanceof KeyframeEffect && ['running','paused'].includes(a.playState)).slice(0,80).map(a=>({a,time:a.currentTime,state:a.playState,rate:a.playbackRate}));
           const timeline=motionTimeline(saved.map(({a,time,rate})=>{const t=a.effect.getComputedTiming();return {time:typeof time==='number'?time:0,rate,duration:Number(t.duration),delay:Number(t.delay||0),endTime:Number(t.endTime),iterations:Number(t.iterations)}}));
           for(const {a} of saved)a.pause();
-          const id=String(requestId);motionSession={id,saved,timeline,timer:setTimeout(releaseMotion,30000)};
+          const id=String(requestId);motionSession={id,saved,timeline,authored,timer:setTimeout(releaseMotion,30000)};
           await settle();
           if(motionSession?.id!==id)throw Error('Motion review was interrupted. Preserve user input and review again.');
-          parent.postMessage({protocol,token,requestId,result:{motionSessionId:id,animationCount:saved.length}},'*');return;
+          parent.postMessage({protocol,token,requestId,result:{motionSessionId:id,animationCount:saved.length+(authored?.duration?1:0)}},'*');return;
         }
         if(command.action==='sample-motion'){
           if(typeof command.progress!=='number'||command.progress<0||command.progress>1)throw Error('Motion progress must be between 0 and 1.');
           if(!motionSession || motionSession.id!==command.motionSessionId)throw Error('Motion review was interrupted or expired. Preserve user input and review again.');
           const animations=motionSession.saved.map(s=>s.a);
           const timeline=motionSession.timeline,elapsed=timeline.start+timeline.duration*command.progress;
+          if(motionSession.authored?.duration)window.northstarTimeline.seek(motionSession.authored.duration*command.progress);
           animations.forEach((a,i)=>{const entry=timeline.entries[i];a.currentTime=entry.rate?(elapsed-entry.origin)*entry.rate:entry.heldTime});
-          const result={...snapshot(),motionSample:{progress:command.progress,elapsedMs:elapsed,windowDurationMs:timeline.duration,truncated:timeline.truncated,continuous:timeline.continuous,animationCount:animations.length,method:'Shared elapsed-time Web Animations sample preserving delay, stagger and duration. Continuous effects cover a cycle; sequences over 10 seconds are bounded. JavaScript loops, GIF/video and performance are not verified by seeking.'}};parent.postMessage({protocol,token,requestId,result},'*');return;
+          const result={...snapshot(),motionSample:{progress:command.progress,elapsedMs:elapsed,windowDurationMs:motionSession.authored?.duration?motionSession.authored.duration*1000:timeline.duration,truncated:timeline.truncated,continuous:timeline.continuous,animationCount:animations.length+(motionSession.authored?.duration?1:0),method:motionSession.authored?.duration?'Authored deterministic timeline.':'Shared elapsed-time Web Animations sample preserving delay, stagger and duration. Continuous effects cover a cycle; sequences over 10 seconds are bounded. JavaScript loops, GIF/video and performance are not verified by seeking.'}};parent.postMessage({protocol,token,requestId,result},'*');return;
         }
         const el=command.selector?document.querySelector(command.selector):undefined;
         let gesture;

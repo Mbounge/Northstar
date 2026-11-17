@@ -1,3 +1,4 @@
+import { copyFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 await build({
@@ -9,3 +10,7 @@ await build({
   alias: { 'next/dist/compiled/acorn': fileURLToPath(new URL('./node_modules/acorn/dist/acorn.mjs', import.meta.url)) },
   sourcemap: false, legalComments: 'eof',
 });
+
+for (const script of ['blender-scene.py', 'kokoro-narration.py']) {
+  await copyFile(new URL(script, import.meta.url), new URL(`./dist/${script}`, import.meta.url));
+}

@@ -1,8 +1,9 @@
+import { parseExplainerPlayback, type CanvasExplainerPlayback } from './explainer';
 import type { CanvasV2EvidenceAsset } from './types';
 export const CANVAS_V2_MEDIA_TOGGLE_EVENT = "canvas-v2:toggle-media";
 export const CANVAS_V2_MEDIA_STATE_EVENT = "canvas-v2:media-state";
 export const MEDIA_ATTRIBUTE = "data-canvas-v2-media";
-export interface CanvasV2PlayableMedia { version: 1; type: "video" | "gif"; src: string; evidenceId: string; description: string; }
+export interface CanvasV2PlayableMedia { version: 1; type: "video" | "gif"; src: string; evidenceId: string; description: string; explainer?: CanvasExplainerPlayback; }
 /** Only host-owned players may embed supported watch URLs. Never accept arbitrary iframe URLs. */
 export function canvasV2VideoEmbedUrl(src: string): string | undefined {
   let url: URL; try { url = new URL(src); } catch { return undefined; }
@@ -23,8 +24,11 @@ export function parseCanvasV2PlayableMedia(raw: string): CanvasV2PlayableMedia {
   if(value.src.startsWith('data:')){
     const allowed=value.type==='gif'?/^data:image\/gif;base64,[A-Za-z0-9+/=]+$/:/^data:video\/(?:mp4|webm);base64,[A-Za-z0-9+/=]+$/;
     if(!allowed.test(value.src))throw new Error('Use retained GIF, MP4 or WebM bytes for uploaded media.');
-    return {version:1,type:value.type,src:value.src,evidenceId:value.evidenceId,description:value.description};
+    if(value.explainer&&value.type!=='video')throw new Error('Narration metadata needs a retained video.');
+    return {version:1,type:value.type,src:value.src,evidenceId:value.evidenceId,description:value.description,
+      ...(value.explainer ? {explainer:parseExplainerPlayback(value.explainer)} : {})};
   }
+  if(value.explainer)throw new Error('Narrated videos must use retained file bytes.');
   if(value.src.length>8000)throw new Error('The hosted media reference is too large.');
   const url = new URL(value.src);
   if (!["https:", "http:", "blob:"].includes(url.protocol) || url.username || url.password || (url.protocol === "blob:" && !/^blob:https?:\/\//.test(value.src))) throw new Error("Use a direct hosted video/GIF URL or a local media upload.");

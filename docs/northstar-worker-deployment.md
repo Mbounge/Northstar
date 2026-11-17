@@ -60,6 +60,25 @@ To build the same Linux image as Render from the repository root:
 docker build -f worker/Dockerfile -t northstar-worker .
 ```
 
+## Canvas media authoring
+
+The worker uses FFmpeg and ffprobe for narrated MP4 export. The Linux image
+includes both. Local workers resolve them on PATH or accept
+`NORTHSTAR_FFMPEG` and `NORTHSTAR_FFPROBE`.
+
+| Worker variable | Setup |
+| --- | --- |
+| `NORTHSTAR_BLENDER_BINARY` | Absolute path to the provisioned Blender 4.5.9 executable |
+| `NORTHSTAR_KOKORO_PYTHON` | Absolute path to Python with the UKIO Kokoro ONNX dependencies installed |
+| `NORTHSTAR_KOKORO_MODEL_DIR` | Absolute directory containing `kokoro-v1.0.int8.onnx` and `voices-v1.0.bin` |
+| `NORTHSTAR_NARRATION_ADAPTER` | Optional absolute path to a trusted executable taking an input text file and output WAV file. Takes precedence over Kokoro. |
+| `NORTHSTAR_FILM_CHROMIUM` | Optional absolute path to Chromium for rendering WebGL scenes on a worker where Firefox lacks the required graphics support |
+
+The macOS system voice is available for local previews when no narrator is
+configured. The Linux image provisions Blender, the English Kokoro voice, and headless
+Chromium. Its build checks the Blender executable and synthesizes a test WAV. Verify a live scene, a voiced MP4 and an editable Blender
+model through the signed-in Canvas before rolling out the authoring tools.
+
 ## Capacity and current limits
 
 The Render template starts with four resident conversations per worker and two per user. `NORTHSTAR_MAX_SESSIONS` and `NORTHSTAR_MAX_SESSIONS_PER_USER` tune admission without changing model behavior or setting a limit on app/screen counts. Benchmark CPU/memory before raising capacity. An actively connected turn no longer expires simply because it has run for 30 minutes. Active work disconnected from all streams still stops after the existing 30-second grace period; idle sessions expire after 30 minutes without activity. An open Codex page renews its idle lease once per minute without calling the model. Saved sessions now restore their committed canvas, chat, media, draft and model settings after refresh. Temporary sessions still start fresh. Refresh stops browser-owned execution; a later message continues from saved visible context in a new native runtime.

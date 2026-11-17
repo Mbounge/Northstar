@@ -1,4 +1,10 @@
 'use client';
+import { buildCanvasBlenderScene, renderCanvasExplainerFromScreen } from '@/lib/canvas-v2/creative-browser.browser';
+import { explainerWebVtt } from '@/lib/canvas-v2/explainer';
+import { canvasV2MediaDisplaySize, MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from '@/lib/canvas-v2/canvas-media';
+import { applyCanvasV2NativeSceneMutation } from '@/lib/canvas-v2/native-scene';
+import { serializeCanvasV2NativeSceneChanges } from '@/lib/canvas-v2/native-scene-source';
+import { isCanvasV2ScreenModelBytes } from '@/lib/canvas-v2/screen-asset-pixels';
 import {verifyNativeAccessibility} from '@/lib/canvas-v2/accessibility-native.browser';
 import type {AccessibilityNativeStep} from '@/lib/canvas-v2/accessibility-native';
 import { runWcagReview, rememberWcagObservation, resetWcagReviewSession, restoreWcagReviews, wcagReviews, WCAG_REVIEW_EVENT } from '@/lib/canvas-v2/wcag-review.browser';
@@ -280,7 +286,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   };
   const getClient = () => {
     if (client.current) return client.current;
-    const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region','canvas_accessibility_review','canvas_accessibility_probe','canvas_accessibility_native'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
+    const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region','canvas_accessibility_review','canvas_accessibility_probe','canvas_accessibility_native','canvas_render_explainer','canvas_build_blender'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const engine = current.current.engine;
       const contentPreservationFor=(nodeId:string,html:string)=>{
         const baseline=contentProtections.current.get(nodeId);
@@ -684,6 +690,79 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const afterInteraction = engine.readCommittedRevision();
         requireScreenJourneySourceCurrent(item.nodeId, item.encoded, interactionAssets, afterInteraction.document.html, [...afterInteraction.evidence, ...assets.current.values()], 'live action');
         return { nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), ...result };
+      }
+      if (action.name === 'canvas_render_explainer' || action.name === 'canvas_build_blender') {
+        const revision = engine.readCommittedRevision();
+        requireCodexCanvasReadRevision(readRevision.current, revision.id);
+        const retained = [...revision.evidence, ...assets.current.values()];
+        const source = readCanvasV2Screens(revision.document.html).find(item => item.nodeId === args.nodeId);
+        const isFilm = action.name === 'canvas_render_explainer';
+        if (isFilm && (!source || source.screen.simulation)) throw Error('Read the authored scene you want to use for the film.');
+        const title = string(args.title).trim();
+        if (isFilm && (!title || title.length > 140)) throw Error('Give the film a title up to 140 characters.');
+        const id = `creation-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+        const inputs = isFilm && source ? canvasV2ScreenBoundAssets(source.screen) : [];
+        const artifact = (name: string, mimeType: string, dataUrl: string): NorthstarArtifact => {
+          const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+          return { id: `${id}:${name}`, name, label: name, mimeType, dataUrl,
+            bytes: Math.floor(base64.replace(/=+$/, '').length * 3 / 4), createdAt, origin: 'generated', inputAssetIds: inputs };
+        };
+        const textData = (text: string, mimeType: string) => `data:${mimeType};base64,` + btoa(Array.from(new TextEncoder().encode(text), byte => String.fromCharCode(byte)).join(''));
+        const film = isFilm && source ? await renderCanvasExplainerFromScreen(source.nodeId, source.screen, retained, args.beats, args.interaction, signal) : undefined;
+        const blender = film ? undefined : await buildCanvasBlenderScene(args.scene, signal);
+        signal.throwIfAborted();
+        const label = film ? title : blender!.output.title;
+        const files = film ? [
+          artifact('explainer.mp4','video/mp4',film.video),
+          artifact('captions.vtt','text/vtt',textData(explainerWebVtt(film.chapters),'text/vtt')),
+          artifact('transcript.txt','text/plain',textData(film.chapters.map(beat=>`${beat.title}\n${beat.narration}\nVisual description: ${beat.description}`).join('\n\n'),'text/plain')),
+          artifact('explainer-source.json','application/json',textData(JSON.stringify({ source:source!.screen, sourceSha256:film.sourceSha256, beats:film.chapters, interaction:film.interaction, inputAssetIds:inputs },null,2),'application/json')),
+        ] : blender!.artifacts.map(file => artifact(file.name,file.mimeType,`data:${file.mimeType};base64,${file.dataBase64}`));
+        const primary = files.find(file=>file.name === (film?'explainer.mp4':'scene.glb'));
+        if (!primary || !film && !isCanvasV2ScreenModelBytes(primary.dataUrl)) throw Error('The generated model has no valid embedded GLB.');
+        const asset: CanvasV2EvidenceAsset = { id:primary.id, label, url:primary.dataUrl, originalUrl:primary.dataUrl,
+          authority:'inferred', mediaType:film?'video':'model', mimeType:primary.mimeType,
+          description:film?'Rendered from the saved authored timeline with measured narration.':'Original geometry produced by the Blender worker.' };
+        const turnId = rootId.current;
+        files.forEach(file=>artifacts.current.set(file.id,file));
+        assets.current.set(asset.id,asset);
+        setTurns(all=>all.map(turn=>turn.id===turnId?{...turn,artifacts:[...(turn.artifacts??[]),...files]}:turn));
+        const currentRevision = engine.readCommittedRevision();
+        const scene = engine.readNativeScene();
+        const size = film ? canvasV2MediaDisplaySize(film.width,film.height) : {width:480,height:360};
+        const sourceBounds = source && scene ? canvasV2NativeSceneAbsoluteBounds(scene,source.nodeId) : undefined;
+        const visible = current.current.getWorkingContext?.('reference')?.visibleBounds;
+        if (!scene || scene.revisionId!==revision.id || currentRevision.id!==revision.id) {
+          return { committed:false, assetId:asset.id, artifacts:files.map(artifactMetadata), note:'The canvas changed during production. The files are saved in chat. Read the latest canvas before placing results.' };
+        }
+        const position = findCanvasV2OpenPlacement({
+          preferred:sourceBounds?{x:sourceBounds.x+sourceBounds.width+80,y:sourceBounds.y}:
+            {x:(visible?.x??CANVAS_V2_WORKSPACE.aiAuthoringOriginX)+80,y:(visible?.y??CANVAS_V2_WORKSPACE.aiAuthoringOriginY)+80},
+          bounds:{x:0,y:0,width:CANVAS_V2_WORKSPACE.width,height:CANVAS_V2_WORKSPACE.height},
+          footprint:size,obstacles:readCanvasV2NativeWorkspaceContext(scene,revision.id)?.placementBounds??[],gap:48,
+        });
+        if(!position)return { committed:false, assetId:asset.id, artifacts:files.map(artifactMetadata), note:'No open space was found. The finished files are saved in chat.' };
+        const value = film ? parseCanvasV2PlayableMedia(JSON.stringify({version:1,type:'video',src:asset.url,evidenceId:asset.id,description:label,explainer:film}))
+          : {version:1,evidenceId:asset.id,label};
+        const next = applyCanvasV2NativeSceneMutation(scene,{kind:'batch',label:`Added ${label}`,mutations:[
+          {kind:'create',primitive:'shape',nodeId:id,...position,...size},
+          {kind:'attribute',nodeId:id,name:film?MEDIA_ATTRIBUTE:MODEL_ATTRIBUTE,value:JSON.stringify(value)},
+        ]});
+        const committed = engine.applyManualDocument(serializeCanvasV2NativeSceneChanges(revision.document,scene,next),`Added ${label}`,[...revision.evidence,asset],next,
+          {origin:'northstar',expectedParentId:revision.id,selectionNodeIds:[id]});
+        const result = { committed, ...(committed?{nodeId:id}:{}), assetId:asset.id, artifacts:files.map(artifactMetadata),
+          ...(film?{title:label,duration:film.duration,voice:film.voice,sourceSha256:film.sourceSha256,chapters:film.chapters, interaction:film.interaction}:blender!.output),
+          ...(!committed?{note:engine.readManualFailure()||'The files are saved in chat; placement did not commit.'}:{}) };
+        if (!film) return result;
+        const frames = [
+          { label:'Opening frame', image:film.poster },
+          ...film.reviewFrames.map(frame => ({ label:`${frame.seconds.toFixed(2)} s · ${frame.beat}`, image:frame.image })),
+          { label:'Closing frame', image:film.endFrame },
+        ];
+        return [{type:'input_text',text:JSON.stringify(result)}, ...frames.flatMap(frame => [
+          {type:'input_text',text:frame.label}, {type:'input_image',image_url:frame.image},
+        ])];
       }
       if (action.name === 'canvas_accessibility_native') {
         const revision=engine.readCommittedRevision(),item=readCanvasV2Screens(revision.document.html).find(item=>item.nodeId===args.nodeId);
