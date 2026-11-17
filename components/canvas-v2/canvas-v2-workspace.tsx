@@ -4102,6 +4102,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   }, [beginCameraPreview, constrainViewport, previewViewport, scheduleWheelCommit, zoomViewportAtPoint]);
 
   workspaceWheelHandlerRef.current = (event: globalThis.WheelEvent) => {
+    if (!event.ctrlKey && !event.metaKey && (event.target as Element | null)?.closest?.('[data-canvas-v2-film-scroll]')) return;
     event.preventDefault();
     event.stopPropagation();
     if (nativePinchScaleRef.current !== undefined && (event.ctrlKey || event.metaKey)) return;

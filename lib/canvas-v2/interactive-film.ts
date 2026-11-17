@@ -72,7 +72,7 @@ export function parseInteractiveFilm(raw: unknown, beatCount: number): Interacti
   const input = raw as InteractiveFilm;
   if (!input || typeof input.sourceRevision !== 'string' || !/^[0-9a-f]{64}$/.test(input.sourceRevision) ||
       !Array.isArray(input.frame) || input.frame.length !== 2 ||
-      input.frame.some(size => !Number.isInteger(size) || size < 96 || size > 1280) ||
+      input.frame.some(size => !Number.isInteger(size) || size < 96 || size > 1920) ||
       !Number.isInteger(input.fps) || input.fps < 1 || input.fps > 120) throw Error('Invalid interactive film record.');
   return { ...parseFilmInteraction(input, beatCount), sourceRevision: input.sourceRevision, frame: [...input.frame], fps: input.fps };
 }

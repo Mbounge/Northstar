@@ -6,7 +6,7 @@ import { readCanvasV2ScreenAssetPixels, readCanvasV2ScreenModelBytes } from './s
 import { readCanvasV2ScreenFontCss } from './screen-fonts';
 import { accessibilityDigest } from './screen-accessibility.browser';
 import { parseFilmInteraction } from './interactive-film';
-import { isCanvasExplainerFrame, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerRender } from './explainer';
+import { canvasExplainerDimensions, isCanvasExplainerFrame, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerRender } from './explainer';
 import type { CanvasV2EvidenceAsset } from './types';
 
 const transport = codexWorkerFetch(fetch, Date.now, 'accessibility');
@@ -32,9 +32,12 @@ export async function renderCanvasExplainerFromScreen(nodeId: string, screen: Ca
   }
   const fontCss = await readCanvasV2ScreenFontCss(screen, signal);
   const result = await request({ mode: 'explainer-render', nodeId, sourceVersion: sourceSha256, sourceSha256, screen, assets, fontCss, beats, interaction }, signal);
+  const dimensions = canvasExplainerDimensions(screen.width, screen.height);
+  const matchesFrame = result.width === dimensions.width && result.height === dimensions.height ||
+    result.width === screen.width - screen.width % 2 && result.height === screen.height - screen.height % 2;
   if (result.kind !== 'northstar-narrated-explainer' || result.sourceSha256 !== sourceSha256 ||
     typeof result.video !== 'string' || result.video.length > 6_670_000 || !/^data:video\/mp4;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.video) ||
-    result.width !== screen.width - screen.width % 2 || result.height !== screen.height - screen.height % 2) throw Error('The film does not match the retained scene.');
+    !matchesFrame) throw Error('The film does not match the retained scene.');
   const playback = parseExplainerPlayback(result);
   if (Boolean(interaction) !== Boolean(playback.interaction) ||
       playback.interaction && (playback.interaction.frame[0] !== result.width || playback.interaction.frame[1] !== result.height ||

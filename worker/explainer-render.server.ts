@@ -11,7 +11,7 @@ import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-
 import { isCanvasV2ScreenModelBytes } from '../lib/canvas-v2/screen-asset-pixels';
 import { validateAccessibilityNativeRequest } from '../lib/canvas-v2/accessibility-native';
 import { parseFilmInteraction } from '../lib/canvas-v2/interactive-film';
-import { explainerSceneTime, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerChapter } from '../lib/canvas-v2/explainer';
+import { canvasExplainerDimensions, explainerSceneTime, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerChapter } from '../lib/canvas-v2/explainer';
 
 const exec = promisify(execFile);
 const framesPerSecond = 24;
@@ -92,7 +92,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     await writeFile(join(cwd,'audio.txt'), audioFiles.map(path => `file '${path.split('/').at(-1)}'`).join('\n'));
     await command(ffmpeg, ['-nostdin','-v','error','-y','-f','concat','-safe','1','-i','audio.txt','-c','copy','narration.wav'], signal, cwd);
     const width = input.screen.width, height = input.screen.height;
-    const dimension = { width: width - width % 2, height: height - height % 2 };
+    const { pixelRatio, ...dimension } = canvasExplainerDimensions(width, height);
     const env = Object.fromEntries(['PATH','HOME','TMPDIR','TEMP','TMP','LANG','FONTCONFIG_PATH','PLAYWRIGHT_BROWSERS_PATH']
       .flatMap(key => process.env[key] ? [[key, process.env[key]!]] : []));
     const chrome = process.env.NORTHSTAR_FILM_CHROMIUM;
@@ -103,7 +103,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     })
       : await firefox.launch({ headless: true, env, timeout: 20_000, firefoxUserPrefs: { 'media.peerconnection.enabled': false, 'network.dns.disablePrefetch': true, 'network.prefetch-next': false } });
     signal.throwIfAborted();
-    const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', acceptDownloads: false, permissions: [] });
+    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: pixelRatio, serviceWorkers: 'block', acceptDownloads: false, permissions: [] });
     await context.route('**/*', route => route.abort());
     const page = await context.newPage();
     context.on('page', popup => { if (popup !== page) void popup.close(); });
@@ -129,10 +129,15 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
       const timeline = (window as unknown as { northstarTimeline: { seek(seconds: number): void } }).northstarTimeline;
       timeline.seek(seconds);
     }, time);
-    const shot = async () => page.screenshot({ type: 'jpeg', quality: 81, timeout: 6_000, clip: { x: 0, y: 0, ...dimension } });
+    const shot = async () => page.screenshot({ type: 'jpeg', quality: 94, timeout: 6_000, clip: { x: 0, y: 0, width: dimension.width / pixelRatio, height: dimension.height / pixelRatio } });
+    // Match the UKIO quality preset while keeping long/high-motion cuts inside
+    // the portable Canvas object's existing five-megabyte video budget.
+    const videoKbps = Math.min(1950, Math.floor(4_600_000 * 8 / duration / 1000) - 96);
+    const spatial = input.screen.trustedRuntimeLibraries?.some(library => library.startsWith('three'));
     const child = spawn(ffmpeg, ['-nostdin','-v','error','-y','-threads','1','-f','image2pipe','-framerate',String(framesPerSecond),
       '-vcodec','mjpeg','-i','pipe:0','-i','narration.wav','-t',String(duration),'-c:v','libx264','-threads','2','-preset','fast',
-      '-crf','21','-maxrate','500k','-bufsize','900k','-pix_fmt','yuv420p','-c:a','aac','-b:a','64k','-movflags','+faststart','film.mp4'],
+      '-crf',spatial?'18':'19','-maxrate',`${videoKbps}k`,'-bufsize',`${Math.round(videoKbps * 1.25)}k`,'-pix_fmt','yuv420p',
+      '-c:a','aac','-b:a','96k','-af','loudnorm=I=-16:TP=-1.8:LRA=10','-ar','48000','-movflags','+faststart','film.mp4'],
       { cwd, signal, stdio: ['pipe', 'ignore', 'ignore'] });
     const complete = new Promise<void>((resolve, reject) => {
       child.once('error', reject);
@@ -174,7 +179,6 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
         Math.abs(Number(verdict.format?.duration) - duration) > .15 || !first || !last) throw Error('The encoded video or narration did not verify.');
     // Reject empty renders even when the browser registered a working clock.
     // Sample actual decoded pixels at the beat midpoints, not the DOM.
-    let visible = false;
     for (const frame of reviewFrames) {
       const path = join(cwd, 'review.jpg');
       await writeFile(path, Buffer.from(frame.image.split(',')[1], 'base64'));
@@ -182,9 +186,8 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
         '-frames:v','1','-f','null','-'], signal, cwd);
       const lo = Number(signalStats.stderr.match(/lavfi.signalstats.YMIN=(\d+)/)?.[1]);
       const hi = Number(signalStats.stderr.match(/lavfi.signalstats.YMAX=(\d+)/)?.[1]);
-      if (hi - lo > 10) { visible = true; break; }
+      if (!(hi - lo > 10)) throw Error(`The middle of “${frame.beat}” rendered blank. Keep a visible subject in each part of the lesson.`);
     }
-    if (!visible) throw Error('The rendered film is blank. Check that the artwork stays visible when the timeline controls are hidden.');
     const bytes = await readFile(film);
     const sourceRevision = createHash('sha256').update(bytes).digest('hex');
     const playback = parseExplainerPlayback({ duration, poster: data(first), chapters,

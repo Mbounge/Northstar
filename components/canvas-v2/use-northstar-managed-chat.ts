@@ -730,7 +730,9 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         setTurns(all=>all.map(turn=>turn.id===turnId?{...turn,artifacts:[...(turn.artifacts??[]),...files]}:turn));
         const currentRevision = engine.readCommittedRevision();
         const scene = engine.readNativeScene();
-        const size = film ? canvasV2MediaDisplaySize(film.width,film.height) : {width:480,height:360};
+        const size = film?.interaction
+          ? { width:640, height:Math.round(640 * film.height / film.width) + 115 }
+          : film ? canvasV2MediaDisplaySize(film.width,film.height) : {width:480,height:360};
         const sourceBounds = source && scene ? canvasV2NativeSceneAbsoluteBounds(scene,source.nodeId) : undefined;
         const visible = current.current.getWorkingContext?.('reference')?.visibleBounds;
         if (!scene || scene.revisionId!==revision.id || currentRevision.id!==revision.id) {

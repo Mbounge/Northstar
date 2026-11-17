@@ -12,7 +12,7 @@ import { canvasV2WarmMediaRetention, releaseCanvasV2VideoSource, rememberCanvasV
 export function CanvasV2PlayableMediaObject(props: { media: CanvasV2PlayableMedia; nodeId: string; retainedPlayback?: CanvasV2RetainedMediaPlayback }) {
   const { media } = props;
   const playback = media.explainer;
-  if (playback?.interaction) return <CanvasV2InteractiveFilm key={playback.interaction.sourceRevision} media={media} playback={playback} film={playback.interaction} />;
+  if (playback?.interaction) return <CanvasV2InteractiveFilm key={playback.interaction.sourceRevision} media={media} playback={playback} film={playback.interaction} nodeId={props.nodeId} />;
   return <StandardMediaObject {...props} />;
 }
 
