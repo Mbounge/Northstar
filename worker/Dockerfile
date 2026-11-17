@@ -14,8 +14,12 @@ FROM node:22-bookworm-slim AS media
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils python3-venv \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/northstar-blender /opt/northstar-kokoro/weights \
-    && curl --fail --show-error --silent --location --retry 3 \
-      https://download.blender.org/release/Blender4.5/blender-4.5.9-linux-x64.tar.xz -o /tmp/blender.tar.xz \
+    && (curl --fail --show-error --silent --location --retry 2 --max-time 180 \
+        https://ftp.halifax.rwth-aachen.de/blender/release/Blender4.5/blender-4.5.9-linux-x64.tar.xz -o /tmp/blender.tar.xz \
+      || curl --fail --show-error --silent --location --retry 2 --max-time 180 \
+        https://ftp.nluug.nl/pub/graphics/blender/release/Blender4.5/blender-4.5.9-linux-x64.tar.xz -o /tmp/blender.tar.xz \
+      || curl --fail --show-error --silent --location --retry 2 --max-time 180 \
+        https://download.blender.org/release/Blender4.5/blender-4.5.9-linux-x64.tar.xz -o /tmp/blender.tar.xz) \
     && echo 'dcdc3eca6c9825bb35a8033b689c053f3cb5a9b0cd2a61b2eac2a49436b4ad3d  /tmp/blender.tar.xz' | sha256sum -c - \
     && tar -xJf /tmp/blender.tar.xz --strip-components=1 -C /opt/northstar-blender \
     && rm /tmp/blender.tar.xz
