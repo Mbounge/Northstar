@@ -51,7 +51,10 @@ export function parseFilmInteraction(raw: unknown, beatCount: number): FilmInter
       new Set(branch.choices.map(choice => choice.beat)).size === branch.choices.length &&
       new Set(branch.choices.map(choice => choice.label.trim())).size === branch.choices.length;
   });
-  if (!valid) throw Error('Place each choice on its own consecutive beat between a question beat and a shared ending beat. Beat numbers start at 1.');
+  if (branches.some(branch => !isLabel(branch?.prompt, 220))) {
+    throw Error('Put the viewer question in interaction.branches[].prompt, up to 220 characters.');
+  }
+  if (!valid) throw Error(`Place each choice on a consecutive beat between the question and the shared ending. This cut has ${beatCount} beat(s). Example for 4 beats: {afterBeat:1,prompt:"Which route?",choices:[{label:"First route",beat:2},{label:"Second route",beat:3}],rejoinBeat:4}.`);
   const sorted = [...branches].sort((a, b) => a.afterBeat - b.afterBeat);
   if (sorted.some((branch, index) => index > 0 && branch.afterBeat < sorted[index - 1].rejoinBeat)) {
     throw Error('Complete each set of choices before the next branching point.');

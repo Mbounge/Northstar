@@ -66,8 +66,14 @@ export function installCanvasV2AuthoredTimeline(exporting: boolean) {
       const mount = document.querySelector('[data-northstar-timeline]');
       if (!mount) throw Error('Add a data-northstar-timeline control container to the scene.');
       registration = { duration: input.duration, render: input.render, loop: input.loop === true };
-      mount.toggleAttribute('hidden', exporting);
-      if (!exporting) {
+      const emptySlot = !mount.childElementCount && !mount.textContent?.trim();
+      if (exporting) {
+        if (emptySlot) mount.setAttribute('hidden', '');
+        for (const controls of mount.querySelectorAll<HTMLElement>('[data-northstar-timeline-controls]')) {
+          controls.style.setProperty('display', 'none', 'important');
+        }
+      }
+      if (!exporting && emptySlot) {
         button = document.createElement('button');
         button.type = 'button';
         button.addEventListener('click', () => { if (playing) pause(); else play(); });

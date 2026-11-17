@@ -172,6 +172,19 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     if (!verdict.streams?.some((stream: {codec_type:string}) => stream.codec_type === 'audio') ||
         !verdict.streams?.some((stream: {codec_type:string}) => stream.codec_type === 'video') ||
         Math.abs(Number(verdict.format?.duration) - duration) > .15 || !first || !last) throw Error('The encoded video or narration did not verify.');
+    // Reject empty renders even when the browser registered a working clock.
+    // Sample actual decoded pixels at the beat midpoints, not the DOM.
+    let visible = false;
+    for (const frame of reviewFrames) {
+      const path = join(cwd, 'review.jpg');
+      await writeFile(path, Buffer.from(frame.image.split(',')[1], 'base64'));
+      const signalStats = await command(ffmpeg, ['-nostdin','-nostats','-i',path,'-vf','scale=96:54,signalstats,metadata=print',
+        '-frames:v','1','-f','null','-'], signal, cwd);
+      const lo = Number(signalStats.stderr.match(/lavfi.signalstats.YMIN=(\d+)/)?.[1]);
+      const hi = Number(signalStats.stderr.match(/lavfi.signalstats.YMAX=(\d+)/)?.[1]);
+      if (hi - lo > 10) { visible = true; break; }
+    }
+    if (!visible) throw Error('The rendered film is blank. Check that the artwork stays visible when the timeline controls are hidden.');
     const bytes = await readFile(film);
     const sourceRevision = createHash('sha256').update(bytes).digest('hex');
     const playback = parseExplainerPlayback({ duration, poster: data(first), chapters,
