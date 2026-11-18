@@ -11,7 +11,7 @@ import { buildCanvasV2ScreenRuntime } from '../lib/canvas-v2/interactive-screen-
 import { isCanvasV2ScreenModelBytes } from '../lib/canvas-v2/screen-asset-pixels';
 import { validateAccessibilityNativeRequest } from '../lib/canvas-v2/accessibility-native';
 import { parseFilmInteraction } from '../lib/canvas-v2/interactive-film';
-import { canvasExplainerDimensions, explainerSceneTime, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerChapter } from '../lib/canvas-v2/explainer';
+import { CANVAS_EXPLAINER_RENDER_TIMEOUT_MS, canvasExplainerDimensions, explainerSceneTime, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerChapter } from '../lib/canvas-v2/explainer';
 
 const exec = promisify(execFile);
 const framesPerSecond = 24;
@@ -54,7 +54,10 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
   rendering = true;
   let browser: Browser | undefined;
   let cwd: string | undefined;
-  const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(175_000)]);
+  const deadline = AbortSignal.timeout(CANVAS_EXPLAINER_RENDER_TIMEOUT_MS);
+  const signal = AbortSignal.any([requestSignal, deadline]);
+  let captured = 0;
+  let totalFrames = 0;
   const close = () => { void browser?.close().catch(() => {}); };
   signal.addEventListener('abort', close, { once: true });
   try {
@@ -153,11 +156,13 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     let first: Buffer | undefined;
     let last: Buffer | undefined;
     try {
-      for (let index = 0; index < Math.round(duration * framesPerSecond); index++) {
+      totalFrames = Math.round(duration * framesPerSecond);
+      for (let index = 0; index < totalFrames; index++) {
         signal.throwIfAborted();
         await seek(explainerSceneTime(chapters, index / framesPerSecond));
         if (pageErrors.length) throw Error('The scene raised a runtime error during film playback.');
         const pixels = await shot();
+        captured++;
         const beat = checkAt.get(index);
         if (beat) reviewFrames.push({ beat, seconds: index / framesPerSecond, image: data(pixels) });
         first ??= pixels;
@@ -196,6 +201,12 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     return { kind: 'northstar-narrated-explainer' as const, sourceSha256, ...playback, ...dimension,
       video: 'data:video/mp4;base64,' + bytes.toString('base64'),
       voice, endFrame: data(last), reviewFrames };
+  } catch (error) {
+    if (deadline.aborted && !requestSignal.aborted) {
+      const progress = totalFrames ? ` Captured ${captured} of ${totalFrames} frames.` : '';
+      throw Error(`The film exceeded the hosted render time limit.${progress}`, { cause: error });
+    }
+    throw error;
   } finally {
     signal.removeEventListener('abort', close);
     await browser?.close().catch(() => {});

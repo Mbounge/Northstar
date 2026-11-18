@@ -1,5 +1,8 @@
 import { FILM_INTERACTION_SCHEMA, parseInteractiveFilm, type InteractiveFilm } from './interactive-film';
 
+export const CANVAS_EXPLAINER_RENDER_TIMEOUT_MS = 295_000;
+export const CANVAS_EXPLAINER_REQUEST_TIMEOUT_MS = CANVAS_EXPLAINER_RENDER_TIMEOUT_MS + 10_000;
+
 export interface CanvasExplainerBeat {
   title: string;
   narration: string;

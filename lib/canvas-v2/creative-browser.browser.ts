@@ -6,14 +6,14 @@ import { readCanvasV2ScreenAssetPixels, readCanvasV2ScreenModelBytes } from './s
 import { readCanvasV2ScreenFontCss } from './screen-fonts';
 import { accessibilityDigest } from './screen-accessibility.browser';
 import { parseFilmInteraction } from './interactive-film';
-import { canvasExplainerDimensions, isCanvasExplainerFrame, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerRender } from './explainer';
+import { CANVAS_EXPLAINER_REQUEST_TIMEOUT_MS, canvasExplainerDimensions, isCanvasExplainerFrame, parseExplainerBeats, parseExplainerPlayback, type CanvasExplainerRender } from './explainer';
 import type { CanvasV2EvidenceAsset } from './types';
 
 const transport = codexWorkerFetch(fetch, Date.now, 'accessibility');
-async function request(body: object, signal: AbortSignal) {
+async function request(body: object, signal: AbortSignal, timeoutMs = 180_000) {
   const response = await transport('/api/canvas-v2/codex', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    signal: AbortSignal.any([signal, AbortSignal.timeout(180_000)]),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
   });
   const result = await response.json();
   if (!response.ok) throw Error(typeof result.error === 'string' ? result.error : 'The authoring worker could not finish.');
@@ -31,7 +31,7 @@ export async function renderCanvasExplainerFromScreen(nodeId: string, screen: Ca
     assets[id] = await (asset.mediaType === 'model' ? readCanvasV2ScreenModelBytes : readCanvasV2ScreenAssetPixels)(asset.url, signal);
   }
   const fontCss = await readCanvasV2ScreenFontCss(screen, signal);
-  const result = await request({ mode: 'explainer-render', nodeId, sourceVersion: sourceSha256, sourceSha256, screen, assets, fontCss, beats, interaction }, signal);
+  const result = await request({ mode: 'explainer-render', nodeId, sourceVersion: sourceSha256, sourceSha256, screen, assets, fontCss, beats, interaction }, signal, CANVAS_EXPLAINER_REQUEST_TIMEOUT_MS);
   const dimensions = canvasExplainerDimensions(screen.width, screen.height);
   const matchesFrame = result.width === dimensions.width && result.height === dimensions.height ||
     result.width === screen.width - screen.width % 2 && result.height === screen.height - screen.height % 2;
