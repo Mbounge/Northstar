@@ -70,6 +70,67 @@ test('readiness retries actual positive layout that becomes available after revi
   assert.equal((await api.whenReady(20)).ready, true); assert.equal(sizes.length, 1); assert.equal(canvas.width, 600); finish();
 });
 
+test('Canvas2D review requires a visible, painted projection of the current loaded model', async () => {
+  const blank = new Uint8ClampedArray(8 * 8 * 4);
+  const paint = blank.slice();
+  paint.set([20, 90, 130, 255], 20);
+  let sampled = blank;
+  let settleModel: () => void = () => {};
+  class Canvas {
+    hidden = false;
+    width = 400;
+    height = 300;
+    clientWidth = 400;
+    clientHeight = 300;
+    ownerDocument = { createElement: () => new Canvas() };
+    getContext() { return new Context(this); }
+  }
+  class Context {
+    constructor(public canvas: Canvas) {}
+    clearRect() {}
+    drawImage() {}
+    getImageData() { return {data:sampled}; }
+  }
+  class Loader {
+    parse(_data: ArrayBuffer, _path: string, onLoad: (model: unknown) => void) {
+      settleModel = () => onLoad({scene:{}});
+    }
+  }
+  const sandbox: Record<string, unknown> = {
+    HTMLCanvasElement: Canvas, CanvasRenderingContext2D: Context, northstarThreeCore: {},
+    northstarGLTFLoader: Loader, setTimeout, clearTimeout, performance, addEventListener: () => {},
+  };
+  sandbox.window = sandbox;
+  vm.runInNewContext(NORTHSTAR_THREE_HELPER_SOURCE, sandbox);
+  const api = sandbox.northstarThree as {
+    createLoader(): Loader;
+    registerCanvasProjection(context: Context): () => void;
+    whenReady(timeout: number): Promise<{ready:boolean}>;
+  };
+  const canvas = new Canvas();
+  const context = canvas.getContext();
+  const loadModel = () => api.createLoader().parse(new ArrayBuffer(0), '/', () => {});
+  loadModel();
+  assert.throws(() => api.registerCanvasProjection(context), /After loading the retained model/);
+  settleModel();
+  const unregister = api.registerCanvasProjection(context);
+  assert.equal((await api.whenReady(0)).ready, false, 'Reject transparent placeholders');
+  sampled = paint;
+  assert.equal((await api.whenReady(0)).ready, true);
+  canvas.hidden = true;
+  assert.equal((await api.whenReady(0)).ready, false, 'Reject hidden projections');
+  canvas.hidden = false;
+  loadModel();
+  assert.equal((await api.whenReady(0)).ready, false, 'Wait on the pending model');
+  settleModel();
+  assert.equal((await api.whenReady(0)).ready, false, 'Reject a prior model draw');
+  const unregisterCurrent = api.registerCanvasProjection(context);
+  unregister();
+  assert.equal((await api.whenReady(0)).ready, true);
+  unregisterCurrent();
+  assert.equal((await api.whenReady(0)).ready, false);
+});
+
 function replacementFixture(pixels: string, width = 0, contributesPaint = true, authoredStyle = 'position:absolute;width:160px;height:90px;inset:0') {
   const style = new Map<string, string>(); const original = { width, height: 90, clientWidth: 160, clientHeight: 90, id: 'world', getAttribute: () => 'Authored scene', toDataURL: () => pixels };
   const createElement = (tag: string) => ({ tagName: tag.toUpperCase(), id: '', attributes: new Map<string, string>(), style: { setProperty: (key: string, value: string) => style.set(key, value) }, textContent: '', setAttribute(key: string, value: string) { this.attributes.set(key, value); } });

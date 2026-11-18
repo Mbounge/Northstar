@@ -58,6 +58,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
   const signal = AbortSignal.any([requestSignal, deadline]);
   let captured = 0;
   let totalFrames = 0;
+  let stage = "synthesizing narration";
   const close = () => { void browser?.close().catch(() => {}); };
   signal.addEventListener('abort', close, { once: true });
   try {
@@ -94,6 +95,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     }
     await writeFile(join(cwd,'audio.txt'), audioFiles.map(path => `file '${path.split('/').at(-1)}'`).join('\n'));
     await command(ffmpeg, ['-nostdin','-v','error','-y','-f','concat','-safe','1','-i','audio.txt','-c','copy','narration.wav'], signal, cwd);
+    stage = "preparing the scene";
     const width = input.screen.width, height = input.screen.height;
     const { pixelRatio, ...dimension } = canvasExplainerDimensions(width, height);
     const env = Object.fromEntries(['PATH','HOME','TMPDIR','TEMP','TMP','LANG','FONTCONFIG_PATH','PLAYWRIGHT_BROWSERS_PATH']
@@ -132,7 +134,31 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
       const timeline = (window as unknown as { northstarTimeline: { seek(seconds: number): void } }).northstarTimeline;
       timeline.seek(seconds);
     }, time);
-    const shot = async () => page.screenshot({ type: 'jpeg', quality: 94, timeout: 6_000, clip: { x: 0, y: 0, width: dimension.width / pixelRatio, height: dimension.height / pixelRatio } });
+    // This page is private, has a fixed viewport and already awaited its fonts.
+    // Avoid Playwright's all-frame caret/style setup and teardown for each JPEG.
+    const clip = { x: 0, y: 0, width: dimension.width / pixelRatio, height: dimension.height / pixelRatio };
+    const cdp = chromiumEnabled ? await context.newCDPSession(page) : undefined;
+    const shot = async () => {
+      if (!cdp) return page.screenshot({ type:'jpeg', quality:94, timeout:6_000, clip });
+      const result = await cdp.send('Page.captureScreenshot', { format:'jpeg', quality:94, clip:{...clip, scale:pixelRatio},
+        fromSurface:true, captureBeyondViewport:false, optimizeForSpeed:true });
+      return Buffer.from(result.data, 'base64');
+    };
+    const captureFrame = async (time: number) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const draw = async () => {
+        stage = 'seeking the authored timeline';
+        await seek(time);
+        if (pageErrors.length) throw Error('The scene raised a runtime error during film playback.');
+        stage = 'capturing the browser frame';
+        return shot();
+      };
+      const limit = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error(`Timed out while ${stage} after ${captured} frames.`)), 12_000);
+      });
+      try { return await Promise.race([draw(), limit]); }
+      finally { clearTimeout(timer); }
+    };
     // Match the UKIO quality preset while keeping long/high-motion cuts inside
     // the portable Canvas object's existing five-megabyte video budget.
     const videoKbps = Math.min(1950, Math.floor(4_600_000 * 8 / duration / 1000) - 96);
@@ -155,20 +181,24 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     const reviewFrames: { beat: string; seconds: number; image: string }[] = [];
     let first: Buffer | undefined;
     let last: Buffer | undefined;
+    let previousTime: number | undefined;
     try {
       totalFrames = Math.round(duration * framesPerSecond);
       for (let index = 0; index < totalFrames; index++) {
         signal.throwIfAborted();
-        await seek(explainerSceneTime(chapters, index / framesPerSecond));
-        if (pageErrors.length) throw Error('The scene raised a runtime error during film playback.');
-        const pixels = await shot();
-        captured++;
+        const time = explainerSceneTime(chapters, index / framesPerSecond);
+        // Holds re-use the same decoded pose without changing output cadence.
+        const pixels = last && time === previousTime ? last : await captureFrame(time);
+        previousTime = time;
         const beat = checkAt.get(index);
         if (beat) reviewFrames.push({ beat, seconds: index / framesPerSecond, image: data(pixels) });
         first ??= pixels;
         last = pixels;
+        stage = 'feeding frames to the video encoder';
         await Promise.race([complete.then(() => { throw Error('The encoder stopped receiving frames.'); }), new Promise<void>((resolve, reject) => child.stdin.write(pixels, error => error ? reject(error) : resolve()))]);
+        captured++;
       }
+      stage = 'finishing the video encode';
       child.stdin.end();
       await complete;
     } catch (error) {
@@ -178,9 +208,9 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     }
     const film = join(cwd, 'film.mp4');
     if ((await stat(film)).size > 5_000_000) throw Error('The video is too large for the canvas. Shorten the scene.');
-    const verdict = JSON.parse((await command(ffprobe, ['-v','error','-show_entries','stream=codec_type:format=duration','-of','json',film], signal, cwd)).stdout);
+    const verdict = JSON.parse((await command(ffprobe, ['-v','error','-show_entries','stream=codec_type,width,height:format=duration','-of','json',film], signal, cwd)).stdout);
     if (!verdict.streams?.some((stream: {codec_type:string}) => stream.codec_type === 'audio') ||
-        !verdict.streams?.some((stream: {codec_type:string}) => stream.codec_type === 'video') ||
+        !verdict.streams?.some((stream: {codec_type:string;width?:number;height?:number}) => stream.codec_type === 'video' && stream.width === dimension.width && stream.height === dimension.height) ||
         Math.abs(Number(verdict.format?.duration) - duration) > .15 || !first || !last) throw Error('The encoded video or narration did not verify.');
     // Reject empty renders even when the browser registered a working clock.
     // Sample actual decoded pixels at the beat midpoints, not the DOM.
@@ -204,7 +234,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
   } catch (error) {
     if (deadline.aborted && !requestSignal.aborted) {
       const progress = totalFrames ? ` Captured ${captured} of ${totalFrames} frames.` : '';
-      throw Error(`The film exceeded the hosted render time limit.${progress}`, { cause: error });
+      throw Error(`The film exceeded the hosted render time limit while ${stage}.${progress}`, { cause: error });
     }
     throw error;
   } finally {

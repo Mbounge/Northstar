@@ -26,18 +26,41 @@ export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
   const GLTFLoader = window.northstarGLTFLoader;
   if (!THREE || !GLTFLoader) throw new Error('The pinned Three runtime is unavailable.');
   const renderers = new Set();
+  const projections = new Map();
   const loops = new Set();
   const pendingLoads = new Set();
   const readinessErrors = [];
-  let viewportActive = true, reviewDraws = 0;
+  let viewportActive = true, reviewDraws = 0, completedLoads = 0;
+  let projectionSample;
   const shortError = error => String(error?.message || error || 'Unknown trusted Three error').slice(0, 500);
   const recordError = error => { const message = shortError(error); if (!readinessErrors.includes(message)) readinessErrors.push(message); return message; };
+  const paintedProjection = canvas => {
+    if (!canvas.width || !canvas.height || !contributesPaint(canvas)) return false;
+    try {
+      if (!projectionSample) {
+        const sample = canvas.ownerDocument.createElement('canvas');
+        sample.width = sample.height = 8;
+        projectionSample = sample.getContext('2d', {willReadFrequently:true});
+      }
+      if (!projectionSample) return false;
+      projectionSample.clearRect(0, 0, 8, 8);
+      projectionSample.drawImage(canvas, 0, 0, 8, 8);
+      const {data} = projectionSample.getImageData(0, 0, 8, 8);
+      // A transparent or uniform placeholder cannot establish a model draw.
+      const painted = data.some((value, index) => index % 4 === 3 && value > 0);
+      return painted && data.some((value, index) => Math.abs(value - data[index % 4]) > 4);
+    } catch { return false; }
+  };
   const readiness = () => {
     const rendererStates = [...renderers].map(entry => ({ renders: entry.renders, skippedDraws: entry.skippedDraws, requiredDraw: entry.requiredDraw, backend: entry.renderer.backend?.isWebGPUBackend ? 'webgpu' : 'webgl2', error: entry.error, paintAvailable: Number.isFinite(entry.canvas.width)&&Number.isFinite(entry.canvas.height)?entry.canvas.width>0&&entry.canvas.height>0:undefined, drawingBuffer: {width:entry.canvas.width??null,height:entry.canvas.height??null,clientWidth:entry.canvas.clientWidth??null,clientHeight:entry.canvas.clientHeight??null} }));
-    const hasRenderer = rendererStates.length > 0;
-    const firstDraw = hasRenderer && rendererStates.every(entry => entry.renders > entry.requiredDraw && entry.paintAvailable !== false);
+    const projectionStates = [...projections].map(([canvas, entry]) => ({
+      currentModel: entry.load === completedLoads, paintAvailable: entry.load === completedLoads && paintedProjection(canvas),
+    }));
+    const firstDraw = rendererStates.length
+      ? rendererStates.every(entry => entry.renders > entry.requiredDraw && entry.paintAvailable !== false)
+      : projectionStates.some(entry => entry.paintAvailable);
     const ready = pendingLoads.size === 0 && firstDraw && !readinessErrors.length;
-    return { library: 'three', ready, viewportActive, reviewDraws, status: ready ? 'ready' : readinessErrors.length ? 'error' : 'pending', pendingLoads: pendingLoads.size, renderers: rendererStates, errors: readinessErrors.slice(-8) };
+    return { library: 'three', ready, viewportActive, reviewDraws, status: ready ? 'ready' : readinessErrors.length ? 'error' : 'pending', pendingLoads: pendingLoads.size, renderers: rendererStates, projections: projectionStates, errors: readinessErrors.slice(-8) };
   };
   const waitForReadiness = (timeoutMs = 4000) => new Promise(resolve => {
     const started = performance.now();
@@ -124,6 +147,15 @@ export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
       } catch (error) { renderer?.dispose(); recordError(error); throw error; }
       finally { pendingLoads.delete(token); }
     },
+    registerCanvasProjection(context) {
+      if (!(context instanceof CanvasRenderingContext2D) || !completedLoads || pendingLoads.size) {
+        throw new Error('After loading the retained model and drawing it, register its Canvas2D context.');
+      }
+      const canvas = context.canvas;
+      const entry = {load:completedLoads};
+      projections.set(canvas, entry);
+      return () => { if (projections.get(canvas) === entry) projections.delete(canvas); };
+    },
     createLoadingManager(onError) { const manager = new THREE.LoadingManager(); manager.onError = url => { const error = new Error('A retained model texture could not be loaded: ' + String(url).slice(0, 240)); recordError(error); if (typeof onError === 'function') onError(error); }; return manager; },
     createLoader(manager) {
       const loader = new GLTFLoader(manager), parse = loader.parse.bind(loader);
@@ -133,7 +165,10 @@ export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
         pendingLoads.add(token);
         let settled = false;
         const settle = () => { if (!settled) { settled = true; pendingLoads.delete(token); } };
-        const markLoaded = () => { for (const entry of renderers) entry.requiredDraw = Math.max(entry.requiredDraw, renderBaselines.get(entry) ?? 0); };
+        const markLoaded = () => {
+          completedLoads += 1;
+          for (const entry of renderers) entry.requiredDraw = Math.max(entry.requiredDraw, renderBaselines.get(entry) ?? 0);
+        };
         const success = value => {
           try {
             const result = onLoad?.(value);
@@ -200,7 +235,7 @@ export const NORTHSTAR_THREE_HELPER_SOURCE = String.raw`(() => {
       loops.add(loop);
       return loop;
     },
-    disposeAll() { for (const loop of [...loops]) loop.dispose(); for (const entry of [...renderers]) entry.renderer.dispose(); pendingLoads.clear(); }
+    disposeAll() { for (const loop of [...loops]) loop.dispose(); for (const entry of [...renderers]) entry.renderer.dispose(); projections.clear(); pendingLoads.clear(); }
   };
   Object.defineProperty(window, 'northstarThree', { value: Object.freeze(api), configurable: false, enumerable: false });
   // A native scene can be detached without running the authored script's own
