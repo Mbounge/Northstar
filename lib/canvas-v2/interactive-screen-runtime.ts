@@ -129,7 +129,7 @@ export function fixedScreenMediaQuery(query: string, appearance: 'light' | 'dark
 
 /** Opaque origin, no host APIs or cookies, no remote dependencies. Only registered
  * image bytes are substituted by the host; model code never receives their URLs. */
-export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '', retainedState?: {data?:Record<string,unknown>;fields?:Array<{id:string;name:string;type:string;value:string;checked:boolean}>;scroll?:{x:number;y:number};scrollers?:Array<{selector:string;x:number;y:number}>;focused?:{id:string;type:string;start?:number;end?:number}}, appearanceOverride?: 'light' | 'dark', exportTimeline = false) {
+export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, imageBytes: ReadonlyMap<string, string>, token: string, motionPreference?: 'reduce' | 'no-preference', fontCss = '', retainedState?: {data?:Record<string,unknown>;fields?:Array<{id:string;name:string;type:string;value:string;checked:boolean}>;scroll?:{x:number;y:number};scrollers?:Array<{selector:string;x:number;y:number}>;focused?:{id:string;type:string;start?:number;end?:number}}, appearanceOverride?: 'light' | 'dark', exportTimeline = false, exportPixelRatio = 1) {
   const screen = validateCanvasV2Screen(input);
   const bind = (source: string) => bindCanvasV2ScreenAssetSource(source, screen.referenceAssetIds, imageBytes);
   const trustedModelAssets = Object.fromEntries(screen.referenceAssetIds.flatMap(id => { const bytes = imageBytes.get(id); return bytes && isCanvasV2ScreenModelBytes(bytes) ? [[canvasV2ScreenAssetToken(id), bytes]] : []; }));
@@ -184,7 +184,7 @@ export function buildCanvasV2ScreenRuntime(input: CanvasV2InteractiveScreen, ima
     const rewriteRules=rules=>{for(const rule of rules){if(rule instanceof CSSMediaRule){const next=rewriteMedia(rule.media.mediaText);if(next!==rule.media.mediaText)rule.media.mediaText=next}if(rule.cssRules)rewriteRules(rule.cssRules)}};
     const keepProductMedia=()=>{if(productAppearance||testMotionPreference)for(const sheet of document.styleSheets)rewriteRules(sheet.cssRules)};
     keepProductMedia();
-    ${/\bnorthstarTimeline\b/.test(screen.javascript) ? `(${installCanvasV2AuthoredTimeline.toString()})(${exportTimeline});` : ''}
+    ${/\bnorthstarTimeline\b/.test(screen.javascript) ? `(${installCanvasV2AuthoredTimeline.toString()})(${exportTimeline},${exportPixelRatio});` : ''}
     // Newly authored styles and local stylesheet patches obey the same product
     // appearance, without remounting or resetting inputs, scroll or mock state.
     if(productAppearance||testMotionPreference)new MutationObserver(records=>{

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import vm from 'node:vm';
+import { installCanvasV2AuthoredTimeline } from '../lib/canvas-v2/authored-timeline';
 import { filmPlaybackBranches, parseInteractiveFilm } from '../lib/canvas-v2/interactive-film';
 import type { CanvasExplainerChapter } from '../lib/canvas-v2/explainer';
 
@@ -31,4 +33,40 @@ test('rejects edits that would leave an unbound cut, spill a crop, or replay a d
   duplicate.branches[0].choices[1].beat=2;
   assert.throws(() => parseInteractiveFilm(duplicate,4), /consecutive beat/);
   assert.throws(() => parseInteractiveFilm(source(),3), /shared ending/);
+});
+
+test('direct film capture uses the painted backing surface at the requested synchronous time', () => {
+  let timelineTime = -1;
+  class Surface {
+    width = 1536;
+    height = 864;
+    toDataURL(type: string, quality: number) {
+      assert.equal(type, 'image/jpeg');
+      assert.equal(quality, .94);
+      assert.equal(timelineTime, 2.25);
+      return 'data:image/jpeg;base64,fixture';
+    }
+  }
+  const sandbox: Record<string, unknown> = {
+    HTMLCanvasElement: Surface, __name: (fn: Function) => fn,
+    matchMedia: () => ({ addEventListener() {} }),
+    addEventListener() {},
+    document: { addEventListener() {}, querySelector: () => ({
+      childElementCount: 0, textContent: '', setAttribute() {}, querySelectorAll: () => [],
+    }) },
+  };
+  sandbox.window = sandbox;
+  vm.runInNewContext(`(${installCanvasV2AuthoredTimeline.toString()})(true,2)`, sandbox);
+  const timeline = sandbox.northstarTimeline as {
+    exportPixelRatio: number;
+    register(config: {duration: number; render(seconds: number): void; exportCanvas: Surface}): void;
+    getState(): {directCanvasExport?: boolean};
+    captureFrame(seconds: number, width: number, height: number): string;
+  };
+  assert.equal(timeline.exportPixelRatio, 2);
+  assert.throws(() => timeline.captureFrame(0, 1536, 864), /explicitly registered/);
+  timeline.register({duration: 8, render(seconds) { timelineTime = seconds; }, exportCanvas: new Surface()});
+  assert.equal(timeline.getState().directCanvasExport, true);
+  assert.equal(timeline.captureFrame(2.25, 1536, 864), 'data:image/jpeg;base64,fixture');
+  assert.throws(() => timeline.captureFrame(3, 768, 432), /backing size/);
 });

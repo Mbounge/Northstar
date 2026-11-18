@@ -3,8 +3,8 @@
  * The preview and the offline renderer share the same synchronous draw callback.
  * This function is serialized into the opaque preview iframe.
  */
-export function installCanvasV2AuthoredTimeline(exporting: boolean) {
-  let registration: { duration: number; render: (seconds: number) => void; loop: boolean } | undefined;
+export function installCanvasV2AuthoredTimeline(exporting: boolean, exportPixelRatio = 1) {
+  let registration: { duration: number; render: (seconds: number) => void; loop: boolean; exportCanvas?: HTMLCanvasElement } | undefined;
   let time = 0, frame = 0, last: number | undefined, playing = false, visible = true;
   let button: HTMLButtonElement | undefined, slider: HTMLInputElement | undefined, status: HTMLOutputElement | undefined;
   let error = '';
@@ -59,13 +59,17 @@ export function installCanvasV2AuthoredTimeline(exporting: boolean) {
   motion.addEventListener('change', event => { if (event.matches) pause(); });
   window.addEventListener('pagehide', pause, { once: true });
   const api = Object.freeze({
-    register(input: { duration: number; render: (seconds: number) => void; loop?: boolean; autoplay?: boolean }) {
+    ...(exporting ? {exportPixelRatio} : {}),
+    register(input: { duration: number; render: (seconds: number) => void; loop?: boolean; autoplay?: boolean; exportCanvas?: HTMLCanvasElement }) {
       if (registration || typeof input?.render !== 'function' || !Number.isFinite(input.duration) || input.duration < .5 || input.duration > 90) {
         throw Error('Register one synchronous scene timeline lasting 0.5–90 seconds.');
       }
       const mount = document.querySelector('[data-northstar-timeline]');
       if (!mount) throw Error('Add a data-northstar-timeline control container to the scene.');
-      registration = { duration: input.duration, render: input.render, loop: input.loop === true };
+      if (input.exportCanvas !== undefined && !(input.exportCanvas instanceof HTMLCanvasElement)) {
+        throw Error('Film export needs a Canvas2D element with the full painted scene.');
+      }
+      registration = { duration: input.duration, render: input.render, loop: input.loop === true, exportCanvas: input.exportCanvas };
       const emptySlot = !mount.childElementCount && !mount.textContent?.trim();
       if (exporting) {
         if (emptySlot) mount.setAttribute('hidden', '');
@@ -88,7 +92,17 @@ export function installCanvasV2AuthoredTimeline(exporting: boolean) {
       draw(0);
       if (input.autoplay && !motion.matches) play();
     },
-    getState: () => ({ duration: registration?.duration, time, playing, error }),
+    getState: () => ({ duration: registration?.duration, time, playing, error,
+      ...(registration?.exportCanvas ? { directCanvasExport:true } : {}) }),
+    captureFrame(seconds: number, width: number, height: number) {
+      const canvas = registration?.exportCanvas;
+      if (!exporting || !canvas) throw Error('Direct frame capture needs an explicitly registered export canvas.');
+      draw(seconds);
+      if (canvas.width !== width || canvas.height !== height) {
+        throw Error(`The export canvas backing size is ${canvas.width} × ${canvas.height}. Set its backing size to ${width} × ${height}, including devicePixelRatio.`);
+      }
+      return canvas.toDataURL('image/jpeg', .94);
+    },
     seek: draw,
     play,
     pause,

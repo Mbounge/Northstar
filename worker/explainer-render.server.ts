@@ -114,7 +114,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     context.on('page', popup => { if (popup !== page) void popup.close(); });
     const pageErrors: Error[] = [];
     page.on('pageerror', error => pageErrors.push(error));
-    const source = buildCanvasV2ScreenRuntime(input.screen, new Map(ids.map(id => [id, assets![id]])), randomUUID(), undefined, input.fontCss, undefined, undefined, true);
+    const source = buildCanvasV2ScreenRuntime(input.screen, new Map(ids.map(id => [id, assets![id]])), randomUUID(), undefined, input.fontCss, undefined, undefined, true, pixelRatio);
     await page.setContent('<body style="margin:0;overflow:hidden"><iframe title="Film scene" sandbox="allow-scripts" style="display:block;width:100vw;height:100vh;border:0"></iframe></body>');
     const iframe = page.locator('iframe');
     await iframe.evaluate((element, html) => { (element as HTMLIFrameElement).srcdoc = html; }, source);
@@ -126,7 +126,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     const state = await frame.evaluate(async () => {
       await document.fonts.ready;
       await Promise.all([...document.images].map(image => image.decode()));
-      const timeline = (window as unknown as { northstarTimeline?: { getState: () => { duration?: number; error: string } } }).northstarTimeline;
+      const timeline = (window as unknown as { northstarTimeline?: { getState: () => { duration?: number; error: string; directCanvasExport?: boolean } } }).northstarTimeline;
       return timeline?.getState();
     });
     if (!state?.duration || state.error || pageErrors.length || beats.some(beat => beat.to > state.duration!)) throw Error('Register a working Northstar timeline and keep the beat ranges inside it.');
@@ -137,7 +137,7 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     // This page is private, has a fixed viewport and already awaited its fonts.
     // Avoid Playwright's all-frame caret/style setup and teardown for each JPEG.
     const clip = { x: 0, y: 0, width: dimension.width / pixelRatio, height: dimension.height / pixelRatio };
-    const cdp = chromiumEnabled ? await context.newCDPSession(page) : undefined;
+    const cdp = chromiumEnabled && !state.directCanvasExport ? await context.newCDPSession(page) : undefined;
     const shot = async () => {
       if (!cdp) return page.screenshot({ type:'jpeg', quality:94, timeout:6_000, clip });
       const result = await cdp.send('Page.captureScreenshot', { format:'jpeg', quality:94, clip:{...clip, scale:pixelRatio},
@@ -147,6 +147,15 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     const captureFrame = async (time: number) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const draw = async () => {
+        if (state.directCanvasExport) {
+          stage = 'reading the painted Canvas2D frame';
+          const frameData = await frame.evaluate(({time,width,height}) => {
+            const timeline = (window as unknown as {northstarTimeline: {captureFrame(seconds: number, width: number, height: number): string}}).northstarTimeline;
+            return timeline.captureFrame(time, width, height);
+          }, {time, ...dimension});
+          if (!frameData.startsWith('data:image/jpeg;base64,') || pageErrors.length) throw Error('The export canvas did not return a valid painted JPEG.');
+          return Buffer.from(frameData.slice('data:image/jpeg;base64,'.length), 'base64');
+        }
         stage = 'seeking the authored timeline';
         await seek(time);
         if (pageErrors.length) throw Error('The scene raised a runtime error during film playback.');
