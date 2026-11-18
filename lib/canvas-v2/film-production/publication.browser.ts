@@ -17,14 +17,14 @@ export async function publishCanvasFilm(raw: unknown, id: string, signal: AbortS
   if (!/^[\da-f-]{36}$/.test(id) || publication.id !== id || !title || title.length > 62 ||
       publication.width !== 1280 || publication.height !== 720 || !Array.isArray(publication.artifacts)) throw Error('The film receipt did not match.');
   const playback = parseExplainerPlayback(publication.playback);
-  if (!playback.captions) throw Error('The film is missing its reviewed captions.');
+  if (!playback.silent && !playback.captions) throw Error('The film is missing its reviewed captions.');
   const nodeId = 'creation-'+id;
   const createdAt = new Date().toISOString();
   const artifact = (name:string,mimeType:string,dataUrl:string): NorthstarArtifact => ({
     id:`${nodeId}:${name}`,name,label:name,mimeType,dataUrl,createdAt,origin:'generated',inputAssetIds:[],
     bytes: Math.floor(dataUrl.slice(dataUrl.indexOf(',')+1).replace(/=+$/,'').length * 3/4),
   });
-  const files = formats.map(({name,mimeType,limit})=>{
+  const files = formats.filter(file=>!playback.silent || file.name!=='captions.vtt').map(({name,mimeType,limit})=>{
     const file = object((publication.artifacts as unknown[]).find(candidate=>object(candidate).name===name));
     const data = string(file.dataUrl), prefix = `data:${mimeType};base64,`;
     if (file.mimeType!==mimeType || !data.startsWith(prefix) || data.length > prefix.length+4*Math.ceil(limit/3) ||
@@ -34,13 +34,13 @@ export async function publishCanvasFilm(raw: unknown, id: string, signal: AbortS
     return result;
   });
   files.push(
-    artifact('transcript.txt','text/plain',textData(playback.chapters.map(beat=>`${beat.title}\n${beat.narration}\nVisual description: ${beat.description}`).join('\n\n'),'text/plain')),
+    artifact('transcript.txt','text/plain',textData(playback.chapters.map(beat=>`${beat.title}${beat.narration ? "\n"+beat.narration : ""}\nVisual description: ${beat.description}`).join('\n\n'),'text/plain')),
     artifact('film-review.json','application/json',textData(JSON.stringify({sourceSha256:publication.sourceSha256,narration:publication.narration,review:publication.review},null,2),'application/json')),
   );
   const video = files[0];
   const asset: CanvasV2EvidenceAsset = {
     id:video.id,label:title,url:video.dataUrl,originalUrl:video.dataUrl,authority:'inferred',mediaType:'video',mimeType:video.mimeType,
-    description:'Reviewed film rendered from editable scenes with measured narration and captions.',
+    description:playback.silent ? 'Reviewed silent film with a descriptive transcript.' : 'Reviewed film rendered from editable scenes with measured narration and captions.',
   };
   return { nodeId, title, playback, files, asset };
 }

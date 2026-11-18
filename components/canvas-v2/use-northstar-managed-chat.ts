@@ -702,22 +702,33 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         if (!scene || scene.revisionId !== revision.id || engine.readCommittedRevision().id !== revision.id) {
           return { committed:false, note:'The canvas changed while the film loaded. Read the latest canvas before placing it.' };
         }
-        if (canvasV2NativeSceneAbsoluteBounds(scene, publication.nodeId)) return { committed:true, nodeId:publication.nodeId };
-        const size = publication.playback.interaction ? { width:640,height:475 } : {width:640,height:360};
-        const visible = current.current.getWorkingContext?.('reference')?.visibleBounds;
-        const position = findCanvasV2OpenPlacement({
-          preferred:{x:(visible?.x??CANVAS_V2_WORKSPACE.aiAuthoringOriginX)+80,y:(visible?.y??CANVAS_V2_WORKSPACE.aiAuthoringOriginY)+80},
-          bounds:{x:0,y:0,width:CANVAS_V2_WORKSPACE.width,height:CANVAS_V2_WORKSPACE.height},
-          footprint:size,obstacles:readCanvasV2NativeWorkspaceContext(scene,revision.id)?.placementBounds??[],gap:48,
-        });
-        if (!position) return { committed:false,note:'No open space was found. Read the current layout before retrying placement.' };
-        const { nodeId, title, asset, files, playback } = publication;
+        const { title, asset, files, playback } = publication;
+        const replaceNodeId = string(args.replaceNodeId);
+        const nodeId = replaceNodeId || publication.nodeId;
+        const existing = scene.nodes.find(node=>node.sourceNodeId===nodeId);
+        const previous = existing?.attributes[MEDIA_ATTRIBUTE] ? parseCanvasV2PlayableMedia(existing.attributes[MEDIA_ATTRIBUTE]) : undefined;
+        if (previous?.evidenceId === asset.id) return { committed:true, nodeId };
+        if (replaceNodeId && (!previous?.explainer || previous.type!=='video')) throw Error('Select an existing film to replace.');
         const value = parseCanvasV2PlayableMedia(JSON.stringify({version:1,type:'video',src:asset.url,evidenceId:asset.id,description:title,explainer:playback}));
-        const next = applyCanvasV2NativeSceneMutation(scene,{kind:'batch',label:`Added ${title}`,mutations:[
-          {kind:'create',primitive:'shape',nodeId,...position,...size},
-          {kind:'attribute',nodeId,name:MEDIA_ATTRIBUTE,value:JSON.stringify(value)},
-        ]});
-        const committed = engine.applyManualDocument(serializeCanvasV2NativeSceneChanges(revision.document,scene,next),`Added ${title}`,
+        const change = {kind:'attribute',nodeId,name:MEDIA_ATTRIBUTE,value:JSON.stringify(value)} as const;
+        let next;
+        if (replaceNodeId) {
+          next = applyCanvasV2NativeSceneMutation(scene, change);
+        } else {
+          const size = playback.interaction ? { width:640,height:475 } : {width:640,height:360};
+          const visible = current.current.getWorkingContext?.('reference')?.visibleBounds;
+          const position = findCanvasV2OpenPlacement({
+            preferred:{x:(visible?.x??CANVAS_V2_WORKSPACE.aiAuthoringOriginX)+80,y:(visible?.y??CANVAS_V2_WORKSPACE.aiAuthoringOriginY)+80},
+            bounds:{x:0,y:0,width:CANVAS_V2_WORKSPACE.width,height:CANVAS_V2_WORKSPACE.height},
+            footprint:size,obstacles:readCanvasV2NativeWorkspaceContext(scene,revision.id)?.placementBounds??[],gap:48,
+          });
+          if (!position) return { committed:false,note:'No open space was found. Read the current layout before retrying placement.' };
+          next = applyCanvasV2NativeSceneMutation(scene,{kind:'batch',label:`Added ${title}`,mutations:[
+            {kind:'create',primitive:'shape',nodeId,...position,...size}, change,
+          ]});
+        }
+        const label = replaceNodeId ? `Updated ${title}` : `Added ${title}`;
+        const committed = engine.applyManualDocument(serializeCanvasV2NativeSceneChanges(revision.document,scene,next),label,
           [...revision.evidence,asset],next,{origin:'northstar',expectedParentId:revision.id,selectionNodeIds:[nodeId]});
         if (!committed) return {committed,note:engine.readManualFailure() || 'Read the latest canvas and retry placement.'};
         files.forEach(file=>artifacts.current.set(file.id,file));

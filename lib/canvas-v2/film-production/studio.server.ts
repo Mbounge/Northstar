@@ -3,7 +3,7 @@ import { FILM_SHOT_PLAN, FILM_SHOT_TEST, FILM_SHOT_CRITIC_TASK, FILM_PROTOTYPE_C
   filmShotPlan, sceneIdentity, shotTestInput } from './film-production.mjs';
 import { EDIT_FILM_SCENE, FILM_WORKBENCH_GUIDE, assembleFilmWorkbench, filmWorkbenchGuide, updateFilmWorkbench } from './film-workbench.mjs';
 import { filmRenderInput } from './animated-film-renderer.mjs';
-import { validateAnimatedExplainerInput } from './film-narration.mjs';
+import { silentFilmLessonInput, validateAnimatedExplainerInput, validateSilentFilmLesson } from './film-narration.mjs';
 import { CANVAS_BLENDER_TOOL } from '../blender-tool';
 import { FILM_INTERACTION_SCHEMA, parseFilmInteraction } from '../interactive-film';
 import { parseExplainerPlayback } from '../explainer';
@@ -28,17 +28,17 @@ const TOOLS = [
   FILM_SHOT_PLAN, FILM_SHOT_TEST,
   { type: 'function', name: BUILD_MODEL, description: 'Build original Blender geometry privately for this film. Pass the returned model receipt unchanged to edit_film_scene.',
     inputSchema: { ...CANVAS_BLENDER_TOOL.parameters, properties: { scene: CANVAS_BLENDER_TOOL.parameters.properties.scene } } },
-  { type: 'function', name: RENDER, description: 'Synthesize narration and render the exact approved workbench. Reviews the encoded MP4, retains captions, transcript and editable source. Use scene:{workbench:true}. Branches are optional and belong only in intentionally interactive films.',
-    inputSchema: { ...filmRenderInput, properties: { lesson: filmRenderInput.properties.lesson, scene: { type:'object',additionalProperties:false,required:['workbench'],properties:{workbench:{type:'boolean',const:true}} },
+  { type: 'function', name: RENDER, description: 'Render the exact approved workbench as a narrated or silent film. Silent films use lesson.audio="silent" and seconds for each beat. Reviews the encoded MP4 and retains the transcript, editable source, and captions when narrated. Use scene:{workbench:true}. Branches are optional and belong only in intentionally interactive films.',
+    inputSchema: { ...filmRenderInput, properties: { lesson: { anyOf:[filmRenderInput.properties.lesson,silentFilmLessonInput] }, scene: { type:'object',additionalProperties:false,required:['workbench'],properties:{workbench:{type:'boolean',const:true}} },
       interaction: FILM_INTERACTION_SCHEMA } } },
-  { type:'function', name:PUBLISH_FILM, description:'Place one final, approved native player on Canvas. First call canvas_read. Pass the exact publicationId from render_animated_film. A receipt places a single player.',
-    inputSchema:{type:'object',additionalProperties:false,required:['publicationId'],properties:{publicationId:{type:'string'}}} },
+  { type:'function', name:PUBLISH_FILM, description:'Place one final, approved native player on Canvas. First call canvas_read. Pass the exact publicationId from render_animated_film. A receipt places a single player. Supply replaceNodeId from canvas_read to update an existing native film in place when the user requests a revision.',
+    inputSchema:{type:'object',additionalProperties:false,required:['publicationId'],properties:{publicationId:{type:'string'},replaceNodeId:{type:'string',maxLength:180}}} },
 ] as DynamicToolSpec[];
 
 export const filmTools = TOOLS;
 export const privateFilmTools = new Set(TOOLS.flatMap(tool => tool.type === 'function' && tool.name !== PUBLISH_FILM ? [tool.name] : []));
 export const filmDirections = `
-For a new original video, animation or motion piece requested as a finished video, use the UKIO film workbench. Start with read_film_workbench, plan_film_sequence, and build original modular assets and choreography using edit_film_scene. Target 1280×720 and direct the visuals, sound and pacing around the request. Start with the hardest shot as a prototype where appropriate. Use build_film_model for Blender geometry required by the film; it stays private. Use brief panoramic or close views only where they reveal something and keep the lower 15% clear for captions. Rehearse the whole private scene using preview_film_shots with scene:{workbench:true}. Address specific findings from the independent frame review before rendering. Render with the same approved workbench and review the actual encoded frames and measured timeline, then canvas_read and canvas_publish_film exactly once. Keep regular videos linear with no viewer questions, forced pauses, or branch controls. Include interaction only when the user asks for it. A still or illustration can earn a hold when it gives the viewer time to inspect something. Narration and motion serve the subject. Keep site/video source, rough takes, model props and rehearsal frames off the board; the published cut is native. Use the legacy scene export only when the user specifically asks to export an existing live Canvas timeline. Do not simulate those tools with generic Canvas objects. Do not claim you heard or watched samples continuously.
+For a new original video, animation or motion piece requested as a finished video, use the UKIO film workbench. Start with read_film_workbench, plan_film_sequence, and build original modular assets and choreography using edit_film_scene. Target 1280×720 and direct the visuals, sound and pacing around the request. Start with the hardest shot as a prototype where appropriate. Use build_film_model for Blender geometry required by the film; it stays private. Use brief panoramic or close views only where they reveal something and keep the lower 15% clear for captions. Rehearse the whole private scene using preview_film_shots with scene:{workbench:true}. Address specific findings from the independent frame review before rendering. Render with the same approved workbench and review the actual encoded frames and measured timeline, then canvas_read and canvas_publish_film exactly once. Keep regular videos linear with no viewer questions, forced pauses, or branch controls. Include interaction only when the user asks for it. A still or illustration can earn a hold when it gives the viewer time to inspect something. Choose sound together with the film’s purpose. For explicit silent motion or when the visual sequence is self-explanatory, use lesson.audio="silent" and seconds per shot, include the essential on-screen content in every visual description, and give viewers time to read. Keep critical text clear of the native player controls, including the top-right transcript button. Keep site/video source, rough takes, model props and rehearsal frames off the board; the published cut is native. Use the legacy scene export only when the user specifically asks to export an existing live Canvas timeline. Do not simulate those tools with generic Canvas objects. Do not claim you heard or watched samples continuously.
 `;
 
 type RenderWorker = typeof filmRenderWorker;
@@ -178,27 +178,30 @@ export class CanvasFilmStudio {
     }
     if (this.reviewed !== identity) throw Error('Rehearse and pass the whole-sequence review for the exact current scene before rendering.');
     this.publication = undefined;
-    const lesson = validateAnimatedExplainerInput(args.lesson);
-    if (lesson.beats.length !== inspection.beatCount) throw Error('Narration and rehearsal must have the same beat count.');
+    const silent = object(args.lesson).audio === 'silent';
+    const lesson = silent ? validateSilentFilmLesson(args.lesson) : validateAnimatedExplainerInput(args.lesson);
+    if (lesson.beats.length !== inspection.beatCount) throw Error('The approved rehearsal and final cut must have the same beat count.');
     const interaction = args.interaction === undefined ? undefined : parseFilmInteraction(args.interaction, lesson.beats.length);
-    progress('Rendering the approved shots with measured narration and captions.');
+    progress(silent ? 'Rendering the approved silent film.' : 'Rendering the approved shots with measured narration and captions.');
     const workbench = JSON.stringify({ plan:this.plan, engine:this.workbench.engine, modules:[...this.workbench.modules], model:this.workbench.model }, null, 2);
     const encoded = await this.worker.render(lesson, { ...scene, workbench }, inspection.samples, signal);
     const { output, images, seconds, peak } = encoded;
-    const captions = output.artifacts[1][2].toString('utf8');
+    const captions = output.artifacts.find(([name])=>name==='captions.vtt')?.[2].toString('utf8');
+    if (silent !== (output.silent === true) || Boolean(captions) === silent) throw Error('The exported tracks do not match the approved sound treatment.');
     progress('Checking the encoded video and its teaching sequence.');
     const verdict = await review({ task: FILM_SHOT_CRITIC_TASK +
-      ' These are decoded frames from the final MP4. Review the actual reveal timing and reading holds. Verify text and important action stay clear of the bottom caption area. Read the caption cues and timing table for pacing and phrase breaks. Audio presence measured by the host is separate from listening.',
+      ' These are decoded frames from the final MP4. Review the actual reveal timing and reading holds. Keep the upper-right transcript control and lower playback controls clear of important content.' +
+      (silent ? ' This film is intentionally silent. All essential context and changes must be legible without sound.' : ' Read the caption cues and timing table for pacing and phrase breaks. Keep important action clear of the captions. Audio presence measured by the host is separate from listening.'),
       context: { shotPlan: inspection.shotPlan, direction: lesson.visualApproach, samples: inspection.samples.map((sample, index) => ({...sample, seconds:seconds[index]})),
-        chapters: output.beats, captions, audioPeakDb: peak }, images }, signal);
+        chapters: output.beats, captions, silent, audioPeakDb: peak }, images }, signal);
     signal.throwIfAborted();
     this.latestReview = verdict;
     if (!verdict.passed) return [text({visualReview:verdict, encoded:true, publishable:false}), ...frames(images)];
     const toData = ([,type,bytes]: [string,string,Buffer]) => `data:${type};base64,${bytes.toString('base64')}`;
     const chapters = output.beats.map(({start,speechEnd,end}, index) => ({
-      start,speechEnd,end,from:start,to:speechEnd,title:lesson.beats[index].heading,narration:lesson.beats[index].narration,description:lesson.beats[index].visual,
+      start,speechEnd,end,from:start,to:speechEnd,title:lesson.beats[index].heading,narration:silent?"":lesson.beats[index].narration,description:lesson.beats[index].visual,
     }));
-    const playback = parseExplainerPlayback({ duration:output.duration, chapters, poster:'data:image/jpeg;base64,'+images[0].toString('base64'), captions,
+    const playback = parseExplainerPlayback({ duration:output.duration, chapters, poster:'data:image/jpeg;base64,'+images[0].toString('base64'), ...(silent ? { silent:true } : { captions }),
       ...(interaction ? { interaction:{...interaction,sourceRevision:identity,frame:[1280,720],fps:24} } : {}) });
     const id = randomUUID();
     const artifacts = output.artifacts.filter(([name])=>name!=='poster.png').map(file=>({name:file[0],mimeType:file[1],dataUrl:toData(file)}));

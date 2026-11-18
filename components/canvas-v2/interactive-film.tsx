@@ -45,6 +45,7 @@ export function CanvasV2InteractiveFilm({ media, playback, film, nodeId }: {
 
   useEffect(() => {
     if (!activated) return;
+    if (playback.silent) return;
     const url = URL.createObjectURL(new Blob([playback.captions ?? explainerWebVtt(playback.chapters)], { type: 'text/vtt' }));
     setCaptionSource(url);
     return () => URL.revokeObjectURL(url);
@@ -206,11 +207,11 @@ export function CanvasV2InteractiveFilm({ media, playback, film, nodeId }: {
               setPlaying(true);
             }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
             onError={() => { if (verifiedSource) setError('The film could not load.'); }}>
-            {captionSource && <track ref={track} kind="captions" label="English" srcLang="en" src={captionSource} />}
+            {captionSource && !playback.silent && <track ref={track} kind="captions" label="English" srcLang="en" src={captionSource} />}
           </video>
         </div>
       </div>
-      {captions && <div className="flex min-h-7 shrink-0 items-center justify-center bg-black/35 px-2 py-1 text-center text-[13px] leading-4">
+      {captions && !playback.silent && <div className="flex min-h-7 shrink-0 items-center justify-center bg-black/35 px-2 py-1 text-center text-[13px] leading-4">
         {caption}
       </div>}
       {error && <p role="alert" className="m-0 bg-[#281c2c] px-3 py-2 text-sm">{error}</p>}
@@ -235,7 +236,7 @@ export function CanvasV2InteractiveFilm({ media, playback, film, nodeId }: {
               disabled={!ready || Boolean(error)} onClick={() => { scrub(chapter.start); closeTranscript(); }}>
               {timeLabel(chapter.start)} · {chapter.title}
             </button>
-            <p className="mt-1">{chapter.narration}</p><p className="mt-1 text-violet-100/90">{chapter.description}</p>
+            {chapter.narration && <p className="mt-1">{chapter.narration}</p>}<p className="mt-1 text-violet-100/90">{chapter.description}</p>
             {branches.find(branch => branch.afterBeat === index + 1)?.choices.map(choice =>
               <span key={choice.beat} className="mr-3 text-xs text-violet-100">{choice.label}</span>)}
           </li>)}
@@ -258,8 +259,8 @@ export function CanvasV2InteractiveFilm({ media, playback, film, nodeId }: {
         <option value={-1}>All views</option>
         {film.views.map((view, index) => <option key={view.id} value={index}>{view.label}</option>)}
       </select>}
-      <button type="button" className={button + (captions ? pressed : '')} aria-pressed={captions} aria-label="Captions" title="Captions"
-        onClick={() => setCaptions(!captions)}><Captions size={17} aria-hidden="true"/></button>
+      {!playback.silent && <button type="button" className={button + (captions ? pressed : '')} aria-pressed={captions} aria-label="Captions" title="Captions"
+        onClick={() => setCaptions(!captions)}><Captions size={17} aria-hidden="true"/></button>}
       <button type="button" className={button} aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'}
         onClick={() => setMuted(!muted)}>{muted ? <VolumeX size={16} aria-hidden="true"/> : <Volume2 size={16} aria-hidden="true"/>}</button>
       <button ref={transcriptButton} type="button" className={button + (transcript ? pressed : '')} aria-expanded={transcript}

@@ -48,3 +48,21 @@ test('film publication requires matching reviews, retains the caption timing, an
   studio.recordPlacement(approved.publicationId);
   assert.throws(()=>studio.requirePublication(approved.publicationId),/once/);
 });
+
+test('silent publication keeps a visual transcript and requires no caption track', async () => {
+  const { publishCanvasFilm } = await import('../lib/canvas-v2/film-production/publication.browser');
+  const id = 'bfe4cf22-d682-4656-913b-8b3aed9a67e2';
+  const asset = (name:string,mimeType:string) => ({name,mimeType,dataUrl:`data:${mimeType};base64,QQ==`});
+  const bundle = {
+    id,title:'What changed',width:1280,height:720,
+    artifacts:[asset('lesson.mp4','video/mp4'),asset('source.zip','application/zip')],
+    playback:{silent:true,poster:'data:image/jpeg;base64,QQ==',duration:3,
+      chapters:[{title:'Changes',from:0,to:3,start:0,speechEnd:3,end:3,narration:'',description:'The deadline moves from Friday to Sunday.'}]},
+  };
+  const result=await publishCanvasFilm(bundle,id,new AbortController().signal);
+  assert.equal(result.playback.silent,true);
+  assert.equal(result.playback.captions,undefined);
+  assert(!result.files.some(file=>file.name==='captions.vtt'));
+  const transcript = result.files.find(file=>file.name==='transcript.txt');
+  assert.match(Buffer.from(transcript!.dataUrl.split(',')[1],'base64').toString(),/Friday to Sunday/);
+});

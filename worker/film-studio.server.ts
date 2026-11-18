@@ -10,6 +10,7 @@ import { configureBlender } from './blender-render.server.mjs';
 
 interface BeatTiming { start: number; speechEnd: number; end: number }
 export interface FilmLesson {
+  audio?: 'silent';
   title: string;
   question: string;
   audience: string;
@@ -17,7 +18,7 @@ export interface FilmLesson {
   sourceNotes: string;
   visualApproach: string;
   narration?: { voice?: string; speed?: number };
-  beats: { heading: string; narration: string; visual: string; voice?: string; speaker?: string }[];
+  beats: { heading: string; narration: string; visual: string; voice?: string; speaker?: string; seconds?: number }[];
 }
 export interface FilmFrameSample { beat: number; progress: number }
 export interface FilmScene {
@@ -34,7 +35,7 @@ export interface FilmScene {
   artworkFiles?: Record<string, Buffer>;
 }
 type FilmArtifact = [string, string, Buffer];
-export interface StudioRender { duration: number; beats: BeatTiming[]; narration: string; artifacts: FilmArtifact[]; renderer: string }
+export interface StudioRender { duration: number; beats: BeatTiming[]; narration: string | null; silent?: true; artifacts: FilmArtifact[]; renderer: string }
 interface FrameOptions {
   samples?: FilmFrameSample[];
   beats: number | BeatTiming[];
@@ -192,10 +193,11 @@ async function inspectEncodedFilm(output: StudioRender, samples: FilmFrameSample
       streams: {codec_type: string; width?: number; height?: number; avg_frame_rate?: string}[]; format: {duration: string};
     };
     const picture = probe.streams.find(stream => stream.codec_type === 'video');
+    const hasAudio = probe.streams.some(stream => stream.codec_type === 'audio');
     if (picture?.width !== width || picture.height !== height || picture.avg_frame_rate !== '24/1' ||
-      Math.abs(Number(probe.format.duration) - output.duration) > .1 || !probe.streams.some(stream => stream.codec_type === 'audio')) throw Error('The encoded film does not match its timeline and media tracks.');
-    const { peak } = await audioPeak(video, command);
-    if (peak <= -60) throw Error('The encoded narration is silent.');
+      Math.abs(Number(probe.format.duration) - output.duration) > .1 || hasAudio === Boolean(output.silent)) throw Error('The encoded film does not match its timeline and media tracks.');
+    const peak = hasAudio ? (await audioPeak(video, command)).peak : null;
+    if (peak !== null && peak <= -60) throw Error('The encoded narration is silent.');
     const images: Buffer[] = [], seconds: number[] = [];
     for (const [index, {beat, progress}] of samples.entries()) {
       const chapter = output.beats[beat];

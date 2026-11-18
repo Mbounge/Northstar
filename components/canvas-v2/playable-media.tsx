@@ -24,7 +24,7 @@ function StandardMediaObject({ media, nodeId, retainedPlayback }: { media: Canva
   const [captionSource, setCaptionSource] = useState<string>();
   const explainer = media.explainer;
   useEffect(() => {
-    if (!explainer) return;
+    if (!explainer || explainer.silent) return;
     const url = URL.createObjectURL(new Blob([explainer.captions ?? explainerWebVtt(explainer.chapters)], { type: 'text/vtt' }));
     setCaptionSource(url);
     return () => { URL.revokeObjectURL(url); };
@@ -225,7 +225,7 @@ function StandardMediaObject({ media, nodeId, retainedPlayback }: { media: Canva
         setPlaying(false);
       }}
       onEnded={() => { setPlaying(false); setInteracting(false); }} onError={() => setError(true)}
-    >{captionSource && explainer && <track default kind="captions" label="English" srcLang="en" src={captionSource}/>}</video> : <>
+    >{captionSource && explainer && !explainer.silent && <track default kind="captions" label="English" srcLang="en" src={captionSource}/>}</video> : <>
       <canvas ref={poster} aria-label={`Paused GIF: ${media.description}`} className="h-full w-full object-contain" style={{ display: playing ? "none" : "block" }}/>
       {(loadedMediaSource === media.src || playing && nearby && pageVisible) && <img ref={attachGif} src={media.src} alt={media.description} draggable={false} className="pointer-events-none absolute inset-0 h-full w-full object-contain" style={{visibility:playing && nearby && pageVisible?'visible':'hidden'}} onError={() => setError(true)}/>}
     </>}
@@ -254,7 +254,7 @@ function StandardMediaObject({ media, nodeId, retainedPlayback }: { media: Canva
               else pendingSeek.current = chapter.start;
               transcriptDialog.current?.close();
             }}>{Math.floor(chapter.start / 60)}:{String(Math.floor(chapter.start % 60)).padStart(2, '0')} · {chapter.title}</button>
-            <p className="mt-1 text-sm leading-relaxed">{chapter.narration}</p>
+            {chapter.narration && <p className="mt-1 text-sm leading-relaxed">{chapter.narration}</p>}
             <p className="mt-1 text-sm leading-relaxed"><strong>Visual description</strong> {chapter.description}</p>
           </li>)}
         </ol>
