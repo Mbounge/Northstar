@@ -4,7 +4,7 @@
  * This function is serialized into the opaque preview iframe.
  */
 export function installCanvasV2AuthoredTimeline(exporting: boolean, exportPixelRatio = 1) {
-  let registration: { duration: number; render: (seconds: number) => void; loop: boolean; exportCanvas?: HTMLCanvasElement } | undefined;
+  let registration: { duration: number; render: (seconds: number) => void; loop: boolean; exportCanvas?: HTMLCanvasElement; frameKey?: (seconds:number) => string } | undefined;
   let time = 0, frame = 0, last: number | undefined, playing = false, visible = true;
   let button: HTMLButtonElement | undefined, slider: HTMLInputElement | undefined, status: HTMLOutputElement | undefined;
   let error = '';
@@ -60,7 +60,7 @@ export function installCanvasV2AuthoredTimeline(exporting: boolean, exportPixelR
   window.addEventListener('pagehide', pause, { once: true });
   const api = Object.freeze({
     ...(exporting ? {exportPixelRatio} : {}),
-    register(input: { duration: number; render: (seconds: number) => void; loop?: boolean; autoplay?: boolean; exportCanvas?: HTMLCanvasElement }) {
+    register(input: { duration: number; render: (seconds: number) => void; loop?: boolean; autoplay?: boolean; exportCanvas?: HTMLCanvasElement; frameKey?: (seconds:number) => string }) {
       if (registration || typeof input?.render !== 'function' || !Number.isFinite(input.duration) || input.duration < .5 || input.duration > 90) {
         throw Error('Register one synchronous scene timeline lasting 0.5–90 seconds.');
       }
@@ -69,7 +69,8 @@ export function installCanvasV2AuthoredTimeline(exporting: boolean, exportPixelR
       if (input.exportCanvas !== undefined && !(input.exportCanvas instanceof HTMLCanvasElement)) {
         throw Error('Film export needs a Canvas2D element with the full painted scene.');
       }
-      registration = { duration: input.duration, render: input.render, loop: input.loop === true, exportCanvas: input.exportCanvas };
+      if (input.frameKey !== undefined && typeof input.frameKey !== 'function') throw Error('A film frame key must describe the exact visual state at a scene time.');
+      registration = { duration: input.duration, render: input.render, loop: input.loop === true, exportCanvas: input.exportCanvas, frameKey:input.frameKey };
       const emptySlot = !mount.childElementCount && !mount.textContent?.trim();
       if (exporting) {
         if (emptySlot) mount.setAttribute('hidden', '');
@@ -94,6 +95,14 @@ export function installCanvasV2AuthoredTimeline(exporting: boolean, exportPixelR
     },
     getState: () => ({ duration: registration?.duration, time, playing, error,
       ...(registration?.exportCanvas ? { directCanvasExport:true } : {}) }),
+    exportFrameKeys(times: number[]) {
+      if (!exporting || !registration?.exportCanvas) throw Error('Frame keys are only available for direct film export.');
+      return times.map(seconds => {
+        const key = registration?.frameKey?.(seconds) ?? String(seconds);
+        if (typeof key !== 'string' || key.length > 240) throw Error('Keep each film frame key under 240 characters.');
+        return key;
+      });
+    },
     captureFrame(seconds: number, width: number, height: number) {
       const canvas = registration?.exportCanvas;
       if (!exporting || !canvas) throw Error('Direct frame capture needs an explicitly registered export canvas.');

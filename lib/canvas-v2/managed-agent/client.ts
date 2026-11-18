@@ -225,7 +225,7 @@ export class ManagedAgentClient {
       this.closeSettledStream();
     } finally { if (this.buffered === buffered) this.buffered = undefined; }
   }
-  private toolActivity(action: JsonObject, status: 'started' | 'completed' | 'failed', output?: unknown) {
+  private toolActivity(action: JsonObject, status: 'started' | 'completed' | 'failed', output?: unknown, error?: string) {
     const id = `tool:${action.turn_id}:${action.call_id}`;
     const names: Record<string, string> = { canvas_render_explainer: 'Render the narrated film', canvas_build_blender: 'Build in Blender', canvas_accessibility_native: 'Verify native accessibility tasks', canvas_accessibility_probe: 'Inspect accessibility behavior', canvas_accessibility_review: 'Review WCAG criteria', canvas_accessibility: 'Check rendered accessibility', canvas_plan_screen: 'Plan screen components', canvas_compare_reference: 'Compare reference details', canvas_product_identity: 'Remember product design', canvas_screen_component: 'Refine a screen component', canvas_screen_element: 'Refine selected details', canvas_screen_motion_review: 'Review screen motion', adjust_image_region: 'Adjust image colour', prepare_asset: 'Prepare a reference asset', workspace_run: 'Run code', workspace_export: 'Keep output files', generate_image: 'Create an image', account_read: 'Read account apps', inspect_asset: 'Inspect asset', canvas_insert_flow: 'Place an app flow', canvas_insert_simulation: 'Place an app simulation', canvas_arrange_screens: 'Arrange product screens', canvas_screen: 'Create or revise a screen', canvas_screen_interact: 'Test screen interactions', read_source: 'Read a source', inspect_image: 'Inspect an image', canvas_read: 'Read the canvas', canvas_plan: 'Plan the composition', canvas_review: 'Review the rendered composition', canvas_edit: 'Edit the canvas' };
     const previous = this.view.activity.find(a => a.id === id);
@@ -247,7 +247,9 @@ export class ManagedAgentClient {
     const appName = appBadges.length === 1 ? appBadges[0].name : '';
     const accountLabel = action.name === 'account_read' ? ({ 'list-apps': 'Explore account apps', 'list-flows': `Explore ${appName || 'app'} flows`, 'flow-screens': `Read ${appName || 'app'} screenshots`, search: `Search ${appName || 'app'} captures`, marketing: `Read ${appName || 'app'} marketing`, business: `Read ${appName || 'app'} business records` }[string(args.operation)])
       : action.name === 'inspect_asset' && appName ? `Inspect ${appName} screenshot` : undefined;
-    const activity = { id, requestId: string(action.turn_id), sequence: (previous?.sequence ?? 0) + 1, at: new Date().toISOString(), kind: 'activity' as const, status, apps: appBadges.length ? appBadges : previous?.apps, label: accountLabel || names[string(action.name)] || 'Run a tool', detail: string(args.summary) || string(args.url) || undefined };
+    const filmError = status === 'failed' && action.name === 'canvas_render_explainer'
+      ? error?.split('\n', 1)[0].slice(0, 360) : undefined;
+    const activity = { id, requestId: string(action.turn_id), sequence: (previous?.sequence ?? 0) + 1, at: new Date().toISOString(), kind: 'activity' as const, status, apps: appBadges.length ? appBadges : previous?.apps, label: accountLabel || names[string(action.name)] || 'Run a tool', detail: filmError || string(args.summary) || string(args.url) || undefined };
     this.publish({ ...this.view, activity: previous ? this.view.activity.map(a => a.id === id ? activity : a) : [...this.view.activity, activity] });
   }
   private executeOnce(action: JsonObject, signal: AbortSignal) {
@@ -269,7 +271,7 @@ export class ManagedAgentClient {
         catch (error) { result = { success: false, error: error instanceof Error ? error.message : 'Tool failed.' }; }
         if (generation !== this.sessionGeneration || signal.aborted) return;
         this.results.set(key, result);
-        if (!signal.aborted) this.toolActivity(action, result.success ? 'completed' : 'failed', result.output);
+        if (!signal.aborted) this.toolActivity(action, result.success ? 'completed' : 'failed', result.output, result.error);
       }
       if (generation !== this.sessionGeneration || signal.aborted || this.cancelling || this.disposed) return;
       const receipt = { op: 'result', requestId: `result:${key}`, callId: action.call_id, turnId: action.turn_id, ...result };

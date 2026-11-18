@@ -144,30 +144,45 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
         fromSurface:true, captureBeyondViewport:false, optimizeForSpeed:true });
       return Buffer.from(result.data, 'base64');
     };
-    const captureFrame = async (time: number) => {
+    const capture = async <T>(draw: () => Promise<T>, timeoutMs: number) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const draw = async () => {
-        if (state.directCanvasExport) {
-          stage = 'reading the painted Canvas2D frame';
-          const frameData = await frame.evaluate(({time,width,height}) => {
-            const timeline = (window as unknown as {northstarTimeline: {captureFrame(seconds: number, width: number, height: number): string}}).northstarTimeline;
-            return timeline.captureFrame(time, width, height);
-          }, {time, ...dimension});
-          if (!frameData.startsWith('data:image/jpeg;base64,') || pageErrors.length) throw Error('The export canvas did not return a valid painted JPEG.');
-          return Buffer.from(frameData.slice('data:image/jpeg;base64,'.length), 'base64');
-        }
-        stage = 'seeking the authored timeline';
-        await seek(time);
-        if (pageErrors.length) throw Error('The scene raised a runtime error during film playback.');
-        stage = 'capturing the browser frame';
-        return shot();
-      };
       const limit = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(Error(`Timed out while ${stage} after ${captured} frames.`)), 12_000);
+        timer = setTimeout(() => reject(Error(`Timed out while ${stage} after ${captured} frames.`)), timeoutMs);
       });
-      try { return await Promise.race([draw(), limit]); }
-      finally { clearTimeout(timer); }
+      try {
+        const result = await Promise.race([draw(), limit]);
+        if (pageErrors.length) throw Error('The scene raised a runtime error during film playback.');
+        return result;
+      } finally { clearTimeout(timer); }
     };
+    const captureFrame = (time: number) => capture(async () => {
+      stage = 'seeking the authored timeline';
+      await seek(time);
+      stage = 'capturing the browser frame';
+      return shot();
+    }, 12_000);
+    const directFrames = (times: number[]) => capture(async () => {
+      stage = 'reading the painted Canvas2D frames';
+      const pictures = await frame.evaluate(({times,width,height}) => {
+        const timeline = (window as unknown as {northstarTimeline: {captureFrame(seconds: number, width: number, height: number): string}}).northstarTimeline;
+        return times.map(time => timeline.captureFrame(time, width, height));
+      }, {times, ...dimension});
+      const prefix = 'data:image/jpeg;base64,';
+      return pictures.map(picture => {
+        if (!picture.startsWith(prefix)) throw Error('The export canvas did not return a valid painted JPEG.');
+        return Buffer.from(picture.slice(prefix.length), 'base64');
+      });
+    }, 25_000);
+    totalFrames = Math.round(duration * framesPerSecond);
+    const times = Array.from({length:totalFrames}, (_, index) => explainerSceneTime(chapters, index / framesPerSecond));
+    let frameKeys: readonly (string|number)[] = times;
+    if (state.directCanvasExport) {
+      stage = 'determining complete film frame states';
+      frameKeys = await capture(() => frame.evaluate(seconds => {
+        const timeline = (window as unknown as {northstarTimeline: {exportFrameKeys(times: number[]): string[]}}).northstarTimeline;
+        return timeline.exportFrameKeys(seconds);
+      }, times), 12_000);
+    }
     // Match the UKIO quality preset while keeping long/high-motion cuts inside
     // the portable Canvas object's existing five-megabyte video budget.
     const videoKbps = Math.min(1950, Math.floor(4_600_000 * 8 / duration / 1000) - 96);
@@ -190,15 +205,20 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     const reviewFrames: { beat: string; seconds: number; image: string }[] = [];
     let first: Buffer | undefined;
     let last: Buffer | undefined;
-    let previousTime: number | undefined;
+    let queuedFrames: Buffer[] = [];
     try {
-      totalFrames = Math.round(duration * framesPerSecond);
       for (let index = 0; index < totalFrames; index++) {
         signal.throwIfAborted();
-        const time = explainerSceneTime(chapters, index / framesPerSecond);
-        // Holds re-use the same decoded pose without changing output cadence.
-        const pixels = last && time === previousTime ? last : await captureFrame(time);
-        previousTime = time;
+        let pixels: Buffer;
+        if (last && frameKeys[index] === frameKeys[index - 1]) pixels = last;
+        else if (state.directCanvasExport) {
+          if (!queuedFrames.length) {
+            const batch = times.slice(index, index + 8).filter((_, position) =>
+              position === 0 || frameKeys[index + position] !== frameKeys[index + position - 1]);
+            queuedFrames = await directFrames(batch);
+          }
+          pixels = queuedFrames.shift()!;
+        } else pixels = await captureFrame(times[index]);
         const beat = checkAt.get(index);
         if (beat) reviewFrames.push({ beat, seconds: index / framesPerSecond, image: data(pixels) });
         first ??= pixels;

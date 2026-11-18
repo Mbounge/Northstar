@@ -134,6 +134,9 @@ function ActivityFeed({ items, active }: { items: NonNullable<CanvasV2ChatTurn["
         <ol className="ml-1.5 mt-2 space-y-2 border-l border-current/15 pl-4">
           {compactActions.map(action => <li key={action.id}>
             <p>{canvasV2ReadableActivity(action, identities)}</p>
+            {action.status === 'failed' && action.label === 'Render the narrated film' && action.detail && (
+              <p className="mt-1 break-words text-[#9d3c3c] dark:text-[#f4b1b1]">{action.detail}</p>
+            )}
             {action.sources?.length ? action.tool === "web-search" ? <details className="mt-1">
               <summary className="cursor-pointer text-[#a39baa]">{action.sources.length} search results · leads, not verified findings</summary>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{action.sources.map(source => <ActivitySource key={source.href} source={source} />)}</div>
