@@ -16,8 +16,8 @@ import { CANVAS_EXPLAINER_RENDER_TIMEOUT_MS, canvasExplainerDimensions, explaine
 const exec = promisify(execFile);
 const framesPerSecond = 24;
 let rendering = false;
-async function command(file: string, args: string[], signal: AbortSignal, cwd: string) {
-  return exec(file, args, { cwd, signal, timeout: 30_000, maxBuffer: 128_000, encoding: 'utf8' });
+async function command(file: string, args: string[], signal: AbortSignal, cwd: string, timeout = 30_000) {
+  return exec(file, args, { cwd, signal, timeout, maxBuffer: 128_000, encoding: 'utf8' });
 }
 
 export async function renderCanvasExplainer(value: unknown, requestSignal: AbortSignal) {
@@ -187,17 +187,19 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     // the portable Canvas object's existing five-megabyte video budget.
     const videoKbps = Math.min(1950, Math.floor(4_600_000 * 8 / duration / 1000) - 96);
     const spatial = input.screen.trustedRuntimeLibraries?.some(library => library.startsWith('three'));
-    const child = spawn(ffmpeg, ['-nostdin','-v','error','-y','-threads','1','-f','image2pipe','-framerate',String(framesPerSecond),
-      '-vcodec','mjpeg','-i','pipe:0','-i','narration.wav','-t',String(duration),'-c:v','libx264','-threads','2','-preset','fast',
+    const encodeOptions = ['-t',String(duration),'-c:v','libx264','-threads','2','-preset','fast',
       '-crf',spatial?'18':'19','-maxrate',`${videoKbps}k`,'-bufsize',`${Math.round(videoKbps * 1.25)}k`,'-pix_fmt','yuv420p',
-      '-c:a','aac','-b:a','96k','-af','loudnorm=I=-16:TP=-1.8:LRA=10','-ar','48000','-movflags','+faststart','film.mp4'],
-      { cwd, signal, stdio: ['pipe', 'ignore', 'ignore'] });
-    const complete = new Promise<void>((resolve, reject) => {
+      '-c:a','aac','-b:a','96k','-af','loudnorm=I=-16:TP=-1.8:LRA=10','-ar','48000','-movflags','+faststart','film.mp4'];
+    const direct = state.directCanvasExport === true;
+    const child = direct ? undefined : spawn(ffmpeg,
+      ['-nostdin','-v','error','-y','-threads','1','-f','image2pipe','-framerate',String(framesPerSecond),
+        '-vcodec','mjpeg','-i','pipe:0','-i','narration.wav',...encodeOptions], { cwd, signal, stdio: ['pipe', 'ignore', 'ignore'] });
+    const complete = child ? new Promise<void>((resolve, reject) => {
       child.once('error', reject);
       child.once('close', code => code === 0 ? resolve() : reject(Error('The video encoder did not finish.')));
-    });
-    child.stdin.on('error', () => {});
-    void complete.catch(() => {});
+    }) : undefined;
+    child?.stdin.on('error', () => {});
+    void complete?.catch(() => {});
     const data = (bytes: Buffer) => 'data:image/jpeg;base64,' + bytes.toString('base64');
     const checkAt = new Map(chapters.map(chapter => [
       Math.round((chapter.start + chapter.speechEnd) / 2 * framesPerSecond), chapter.title,
@@ -206,12 +208,14 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
     let first: Buffer | undefined;
     let last: Buffer | undefined;
     let queuedFrames: Buffer[] = [];
+    const directSequence: {name:string;frames:number}[] = [];
     try {
       for (let index = 0; index < totalFrames; index++) {
         signal.throwIfAborted();
         let pixels: Buffer;
-        if (last && frameKeys[index] === frameKeys[index - 1]) pixels = last;
-        else if (state.directCanvasExport) {
+        const held = last && frameKeys[index] === frameKeys[index - 1];
+        if (held) pixels = last!;
+        else if (direct) {
           if (!queuedFrames.length) {
             const batch = times.slice(index, index + 8).filter((_, position) =>
               position === 0 || frameKeys[index + position] !== frameKeys[index + position - 1]);
@@ -223,23 +227,44 @@ export async function renderCanvasExplainer(value: unknown, requestSignal: Abort
         if (beat) reviewFrames.push({ beat, seconds: index / framesPerSecond, image: data(pixels) });
         first ??= pixels;
         last = pixels;
-        stage = 'feeding frames to the video encoder';
-        await Promise.race([complete.then(() => { throw Error('The encoder stopped receiving frames.'); }), new Promise<void>((resolve, reject) => child.stdin.write(pixels, error => error ? reject(error) : resolve()))]);
+        if (child && complete) {
+          stage = 'feeding frames to the video encoder';
+          await Promise.race([complete.then(() => { throw Error('The encoder stopped receiving frames.'); }), new Promise<void>((resolve, reject) => child.stdin.write(pixels, error => error ? reject(error) : resolve()))]);
+        } else if (held) directSequence.at(-1)!.frames += 1;
+        else {
+          const name = `frame-${index}.jpg`;
+          await writeFile(join(cwd, name), pixels);
+          directSequence.push({name,frames:1});
+        }
         captured++;
       }
       stage = 'finishing the video encode';
-      child.stdin.end();
-      await complete;
+      if (child) {
+        child.stdin.end();
+        await complete;
+      } else {
+        // Separate expensive browser draws and encoding on small shared CPUs.
+        // Decode each held pose once, preserving its full duration at 24fps.
+        await browser.close();
+        browser = undefined;
+        const descriptor = (name: string) => `file '${name}'\noption framerate ${framesPerSecond}`;
+        const schedule = ['ffconcat version 1.0',
+          ...directSequence.map(item => descriptor(item.name) + `\nduration ${item.frames / framesPerSecond}`),
+          descriptor(directSequence.at(-1)!.name)].join('\n');
+        await writeFile(join(cwd,'frames.ffconcat'), schedule + '\n');
+        await command(ffmpeg, ['-nostdin','-v','error','-y','-threads','1','-f','concat','-safe','0','-i','frames.ffconcat',
+          '-i','narration.wav','-vf',`fps=${framesPerSecond}`,...encodeOptions], signal, cwd, 180_000);
+      }
     } catch (error) {
-      child.kill();
-      await complete.catch(() => {});
+      child?.kill();
+      await complete?.catch(() => {});
       throw error;
     }
     const film = join(cwd, 'film.mp4');
     if ((await stat(film)).size > 5_000_000) throw Error('The video is too large for the canvas. Shorten the scene.');
-    const verdict = JSON.parse((await command(ffprobe, ['-v','error','-show_entries','stream=codec_type,width,height:format=duration','-of','json',film], signal, cwd)).stdout);
+    const verdict = JSON.parse((await command(ffprobe, ['-v','error','-show_entries','stream=codec_type,width,height,nb_frames:format=duration','-of','json',film], signal, cwd)).stdout);
     if (!verdict.streams?.some((stream: {codec_type:string}) => stream.codec_type === 'audio') ||
-        !verdict.streams?.some((stream: {codec_type:string;width?:number;height?:number}) => stream.codec_type === 'video' && stream.width === dimension.width && stream.height === dimension.height) ||
+        !verdict.streams?.some((stream: {codec_type:string;width?:number;height?:number;nb_frames?:string}) => stream.codec_type === 'video' && stream.width === dimension.width && stream.height === dimension.height && Number(stream.nb_frames) === totalFrames) ||
         Math.abs(Number(verdict.format?.duration) - duration) > .15 || !first || !last) throw Error('The encoded video or narration did not verify.');
     // Reject empty renders even when the browser registered a working clock.
     // Sample actual decoded pixels at the beat midpoints, not the DOM.
