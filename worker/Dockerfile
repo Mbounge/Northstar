@@ -6,7 +6,7 @@ WORKDIR /app
 COPY lib/canvas-v2 ./lib/canvas-v2
 COPY lib/preview/graet-navigation.ts lib/preview/simulator-registry.ts ./lib/preview/
 COPY lib/app-data/canvas-v2-catalog.ts lib/app-data/review-media.ts ./lib/app-data/
-COPY worker/*.ts worker/*.mjs worker/*.py worker/film-r179.js worker/film-three.LICENSE.txt ./worker/
+COPY worker/accessibility-native.server.ts worker/blender-glb.mjs worker/blender-render.server.mjs worker/blender-scene.py worker/browser-job.server.ts worker/build.mjs worker/explainer-render.server.ts worker/film-r179.js worker/film-studio.server.ts worker/film-three.LICENSE.txt worker/kokoro-narration.py worker/main.ts worker/native-local.ts ./worker/
 COPY tsconfig.json ./
 RUN npm --prefix worker run build && npm --prefix worker prune --omit=dev
 
