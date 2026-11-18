@@ -184,7 +184,9 @@ export class CanvasFilmStudio {
     const interaction = args.interaction === undefined ? undefined : parseFilmInteraction(args.interaction, lesson.beats.length);
     progress(silent ? 'Rendering the approved silent film.' : 'Rendering the approved shots with measured narration and captions.');
     const workbench = JSON.stringify({ plan:this.plan, engine:this.workbench.engine, modules:[...this.workbench.modules], model:this.workbench.model }, null, 2);
-    const encoded = await this.worker.render(lesson, { ...scene, workbench }, inspection.samples, signal);
+    const encoded = await this.worker.render(lesson, { ...scene, workbench }, inspection.samples, signal, (stage, completed, total) => {
+      progress(stage === 'capture' ? `Capturing film frames · ${completed} of ${total}.` : `Encoding the captured frames · ${completed} of ${total} captured.`);
+    });
     const { output, images, seconds, peak } = encoded;
     const captions = output.artifacts.find(([name])=>name==='captions.vtt')?.[2].toString('utf8');
     if (silent !== (output.silent === true) || Boolean(captions) === silent) throw Error('The exported tracks do not match the approved sound treatment.');

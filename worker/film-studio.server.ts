@@ -54,6 +54,7 @@ const ffprobe = process.env.NORTHSTAR_FFPROBE ?? 'ffprobe';
 const mediaEnv = { PATH: process.env.PATH, LANG: process.env.LANG };
 const filmThreeSource = () => readFile(new URL('./film-r179.js', import.meta.url), 'utf8');
 const filmThreeLicense = () => readFile(new URL('./film-three.LICENSE.txt', import.meta.url), 'utf8');
+type FrameProgress = (stage: 'capture' | 'encode', completed: number, total: number) => void;
 
 /** UKIO's deterministic frame clock and screenshot contract on Northstar's
  * private worker browser. The authored program runs inside an opaque iframe. */
@@ -65,7 +66,8 @@ async function renderFilm(scene: FilmScene, options: FrameOptions) {
   const executablePath = process.env.NORTHSTAR_FILM_CHROMIUM;
   if (executablePath && !isAbsolute(executablePath)) throw Error('Configure an absolute film browser path.');
   const browser: Browser = await chromium.launch({ executablePath, headless: true, env, timeout: 20_000,
-    ...(process.platform === 'linux' ? { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] } : {}) });
+    ...(process.platform === 'linux' && scene.engine === 'three'
+      ? { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] } : {}) });
   const close = () => { void browser.close().catch(() => {}); };
   signal.addEventListener('abort', close, { once: true });
   try {
@@ -96,15 +98,38 @@ async function renderFilm(scene: FilmScene, options: FrameOptions) {
       await Promise.all(Array.from(document.images, image => image.decode()));
     });
     const cdp = await context.newCDPSession(page);
+    let previous: Buffer | undefined;
+    let previousKey: string | number | undefined;
+    const jpegPrefix = 'data:image/jpeg;base64,';
     const capture = async (state: { time: number; beatIndex: number; progress: number; beat: BeatTiming; duration: number }) => {
       signal.throwIfAborted();
-      await frame.evaluate(async value => {
-        const stage = window as unknown as {render: (data: typeof value) => void | Promise<void>};
+      const painted = await frame.evaluate(async ({ value, previousKey, width, height }) => {
+        const stage = window as unknown as {
+          render: (data: typeof value) => void | Promise<void>;
+          exportFilmCanvas?: HTMLCanvasElement;
+          filmFrameKey?: (data: typeof value) => string | number;
+        };
+        const key = stage.exportFilmCanvas ? stage.filmFrameKey?.(value) : undefined;
+        if (key !== undefined && key === previousKey) return { held: true };
         await stage.render(value);
-      }, state);
+        const canvas = stage.exportFilmCanvas;
+        if (!canvas) return;
+        if (!(canvas instanceof HTMLCanvasElement) || canvas.width !== width || canvas.height !== height) {
+          throw Error('The complete film export canvas must be 1280 by 720 pixels.');
+        }
+        return { jpeg: canvas.toDataURL('image/jpeg', .94), key };
+      }, { value: state, previousKey, width, height });
       if (runtimeError) throw Error('Film scene error: ' + runtimeError);
+      if (painted?.held && previous) return previous;
+      if (painted?.jpeg?.startsWith(jpegPrefix)) {
+        previous = Buffer.from(painted.jpeg.slice(jpegPrefix.length), 'base64');
+        previousKey = painted.key;
+        return previous;
+      }
+      if (painted) throw Error('The complete export canvas did not return a painted frame.');
       const shot = async () => Buffer.from((await cdp.send('Page.captureScreenshot', {
-        format: 'jpeg', quality: 92, fromSurface: true, captureBeyondViewport: true, clip: { x: 0, y: 0, width, height, scale: 1 },
+        format: 'jpeg', quality: 92, fromSurface: true, captureBeyondViewport: false, optimizeForSpeed: true,
+        clip: { x: 0, y: 0, width, height, scale: 1 },
       })).data, 'base64');
       try { return await shot(); }
       catch (error) {
@@ -181,7 +206,7 @@ async function audioPeak(path: string, command: {cwd: string; env: Record<string
 
 const render = createAnimatedFilmRenderer({ browser: { renderFilm, filmThreeSource, filmThreeLicense },
   prepareNarration, ffmpeg, maxDuration: 90, maxVideoBytes: 5_000_000 }) as
-  (input: { lesson: FilmLesson; scene: FilmScene }, options: {signal: AbortSignal}) => Promise<StudioRender>;
+  (input: { lesson: FilmLesson; scene: FilmScene }, options: {signal: AbortSignal; onFrameProgress?: FrameProgress}) => Promise<StudioRender>;
 
 async function inspectEncodedFilm(output: StudioRender, samples: FilmFrameSample[], signal: AbortSignal) {
   const cwd = await mkdtemp(join(tmpdir(), 'northstar-film-review-'));
@@ -224,9 +249,9 @@ export const filmRenderWorker = {
   sample(scene: FilmScene, samples: FilmFrameSample[], beatCount: number, allowStill: boolean, signal: AbortSignal) {
     return exclusive(async () => (await renderFilm(scene, { samples, beats: beatCount, allowStill, signal }))!);
   },
-  render(lesson: FilmLesson, scene: FilmScene, samples: FilmFrameSample[], signal: AbortSignal) {
+  render(lesson: FilmLesson, scene: FilmScene, samples: FilmFrameSample[], signal: AbortSignal, onFrameProgress?: FrameProgress) {
     return exclusive(async () => {
-      const output = await render({ lesson, scene }, { signal });
+      const output = await render({ lesson, scene }, { signal, onFrameProgress });
       return { output, ...await inspectEncodedFilm(output, samples, signal) };
     });
   },
