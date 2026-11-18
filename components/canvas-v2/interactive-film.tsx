@@ -45,7 +45,7 @@ export function CanvasV2InteractiveFilm({ media, playback, film, nodeId }: {
 
   useEffect(() => {
     if (!activated) return;
-    const url = URL.createObjectURL(new Blob([explainerWebVtt(playback.chapters)], { type: 'text/vtt' }));
+    const url = URL.createObjectURL(new Blob([playback.captions ?? explainerWebVtt(playback.chapters)], { type: 'text/vtt' }));
     setCaptionSource(url);
     return () => URL.revokeObjectURL(url);
   }, [activated, playback.chapters]);

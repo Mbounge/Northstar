@@ -25,7 +25,7 @@ function StandardMediaObject({ media, nodeId, retainedPlayback }: { media: Canva
   const explainer = media.explainer;
   useEffect(() => {
     if (!explainer) return;
-    const url = URL.createObjectURL(new Blob([explainerWebVtt(explainer.chapters)], { type: 'text/vtt' }));
+    const url = URL.createObjectURL(new Blob([explainer.captions ?? explainerWebVtt(explainer.chapters)], { type: 'text/vtt' }));
     setCaptionSource(url);
     return () => { URL.revokeObjectURL(url); };
   }, [explainer]);

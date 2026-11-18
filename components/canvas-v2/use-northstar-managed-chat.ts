@@ -1,4 +1,6 @@
 'use client';
+
+import { publishCanvasFilm } from '@/lib/canvas-v2/film-production/publication.browser';
 import { buildCanvasBlenderScene, renderCanvasExplainerFromScreen } from '@/lib/canvas-v2/creative-browser.browser';
 import { explainerWebVtt } from '@/lib/canvas-v2/explainer';
 import { canvasV2MediaDisplaySize, MEDIA_ATTRIBUTE, parseCanvasV2PlayableMedia } from '@/lib/canvas-v2/canvas-media';
@@ -286,7 +288,7 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
   };
   const getClient = () => {
     if (client.current) return client.current;
-    const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region','canvas_accessibility_review','canvas_accessibility_probe','canvas_accessibility_native','canvas_render_explainer','canvas_build_blender'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
+    const runtime = new ManagedAgentClient({ supportedClientTools: ['adjust_image_region','canvas_accessibility_review','canvas_accessibility_probe','canvas_accessibility_native','canvas_render_explainer','canvas_build_blender','canvas_publish_film'], resultTimeoutMs: input.endpoint?.startsWith('/canvas-v2-e2e/codex-subagent/agent') ? 330_000 : undefined, fetcher: input.endpoint === '/api/canvas-v2/codex' ? codexWorkerFetch() : undefined, endpoint: input.endpoint ?? '/api/canvas-v2/agent', closeOnDispose: input.endpoint?.includes('/codex'), onView: publish, execute: async (action, signal) => {
       const engine = current.current.engine;
       const contentPreservationFor=(nodeId:string,html:string)=>{
         const baseline=contentProtections.current.get(nodeId);
@@ -690,6 +692,39 @@ export function useNorthstarManagedChat(input: { theme?: CanvasV2ArtifactTheme; 
         const afterInteraction = engine.readCommittedRevision();
         requireScreenJourneySourceCurrent(item.nodeId, item.encoded, interactionAssets, afterInteraction.document.html, [...afterInteraction.evidence, ...assets.current.values()], 'live action');
         return { nodeId: item.nodeId, revisionId: revision.id, sourceVersion: canvasV2FeedbackFingerprint(item.encoded), ...result };
+      }
+      if (action.name === 'canvas_publish_film') {
+        const revision = engine.readCommittedRevision();
+        requireCodexCanvasReadRevision(readRevision.current, revision.id);
+        const response = await runtime.request({ op:'film-publication', callId:action.call_id, turnId:action.turn_id }, signal);
+        const publication = await publishCanvasFilm(await response.json(), string(args.publicationId), signal);
+        const scene = engine.readNativeScene();
+        if (!scene || scene.revisionId !== revision.id || engine.readCommittedRevision().id !== revision.id) {
+          return { committed:false, note:'The canvas changed while the film loaded. Read the latest canvas before placing it.' };
+        }
+        if (canvasV2NativeSceneAbsoluteBounds(scene, publication.nodeId)) return { committed:true, nodeId:publication.nodeId };
+        const size = publication.playback.interaction ? { width:640,height:475 } : {width:640,height:360};
+        const visible = current.current.getWorkingContext?.('reference')?.visibleBounds;
+        const position = findCanvasV2OpenPlacement({
+          preferred:{x:(visible?.x??CANVAS_V2_WORKSPACE.aiAuthoringOriginX)+80,y:(visible?.y??CANVAS_V2_WORKSPACE.aiAuthoringOriginY)+80},
+          bounds:{x:0,y:0,width:CANVAS_V2_WORKSPACE.width,height:CANVAS_V2_WORKSPACE.height},
+          footprint:size,obstacles:readCanvasV2NativeWorkspaceContext(scene,revision.id)?.placementBounds??[],gap:48,
+        });
+        if (!position) return { committed:false,note:'No open space was found. Read the current layout before retrying placement.' };
+        const { nodeId, title, asset, files, playback } = publication;
+        const value = parseCanvasV2PlayableMedia(JSON.stringify({version:1,type:'video',src:asset.url,evidenceId:asset.id,description:title,explainer:playback}));
+        const next = applyCanvasV2NativeSceneMutation(scene,{kind:'batch',label:`Added ${title}`,mutations:[
+          {kind:'create',primitive:'shape',nodeId,...position,...size},
+          {kind:'attribute',nodeId,name:MEDIA_ATTRIBUTE,value:JSON.stringify(value)},
+        ]});
+        const committed = engine.applyManualDocument(serializeCanvasV2NativeSceneChanges(revision.document,scene,next),`Added ${title}`,
+          [...revision.evidence,asset],next,{origin:'northstar',expectedParentId:revision.id,selectionNodeIds:[nodeId]});
+        if (!committed) return {committed,note:engine.readManualFailure() || 'Read the latest canvas and retry placement.'};
+        files.forEach(file=>artifacts.current.set(file.id,file));
+        assets.current.set(asset.id,asset);
+        const turnId = rootId.current;
+        setTurns(all=>all.map(turn=>turn.id===turnId?{...turn,artifacts:[...(turn.artifacts??[]),...files]}:turn));
+        return {committed,nodeId,title,duration:playback.duration,artifacts:files.map(artifactMetadata)};
       }
       if (action.name === 'canvas_render_explainer' || action.name === 'canvas_build_blender') {
         const revision = engine.readCommittedRevision();

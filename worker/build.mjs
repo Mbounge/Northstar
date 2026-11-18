@@ -11,6 +11,6 @@ await build({
   sourcemap: false, legalComments: 'eof',
 });
 
-for (const script of ['blender-scene.py', 'kokoro-narration.py']) {
+for (const script of ['blender-scene.py', 'kokoro-narration.py', 'film-r179.js', 'film-three.LICENSE.txt']) {
   await copyFile(new URL(script, import.meta.url), new URL(`./dist/${script}`, import.meta.url));
 }

@@ -10,7 +10,8 @@ from kokoro_onnx import Kokoro
 
 
 def main():
-    model_directory, source, output = sys.argv[1:]
+    model_directory, source, output, *profile = sys.argv[1:]
+    voice, speed = profile or ("af_heart", "0.95")
     model_directory = Path(model_directory)
     options = ort.SessionOptions()
     options.intra_op_num_threads = 1
@@ -21,7 +22,7 @@ def main():
     )
     kokoro = Kokoro.from_session(inference, str(model_directory / "voices-v1.0.bin"))
     samples, sample_rate = kokoro.create(
-        Path(source).read_text(encoding="utf-8"), voice="af_heart", speed=0.95, lang="en-us",
+        Path(source).read_text(encoding="utf-8"), voice=voice, speed=float(speed), lang="en-us",
     )
     if not len(samples) or not np.isfinite(samples).all():
         raise ValueError("The voice returned no usable audio.")

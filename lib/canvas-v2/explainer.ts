@@ -18,6 +18,7 @@ export interface CanvasExplainerChapter extends CanvasExplainerBeat {
 export interface CanvasExplainerPlayback {
   duration: number;
   poster: string;
+  captions?: string;
   chapters: CanvasExplainerChapter[];
   interaction?: InteractiveFilm;
 }
@@ -34,10 +35,10 @@ export interface CanvasExplainerRender extends CanvasExplainerPlayback {
 const boundedText = (value: unknown, max: number): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 
-export function parseExplainerBeats(raw: unknown): CanvasExplainerBeat[] {
-  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 6) throw Error('Provide one to six teaching beats.');
+export function parseExplainerBeats(raw: unknown, production = false): CanvasExplainerBeat[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > (production ? 8 : 6)) throw Error(production ? 'Provide up to eight teaching beats.' : 'Provide one to six teaching beats.');
   return raw.map(beat => {
-    if (!beat || !boundedText(beat.title, 90) || !boundedText(beat.narration, 320) || !boundedText(beat.description, 440)
+    if (!beat || !boundedText(beat.title, 90) || !boundedText(beat.narration, production ? 420 : 320) || !boundedText(beat.description, production ? 700 : 440)
       || !Number.isFinite(beat.from) || !Number.isFinite(beat.to) || beat.from < 0 || beat.to > 90 || beat.to < beat.from) {
       throw Error('Each beat needs a title, narration, visual description and a valid scene time range in seconds.');
     }
@@ -55,7 +56,9 @@ export function parseExplainerPlayback(raw: unknown): CanvasExplainerPlayback {
   const input = raw as CanvasExplainerPlayback;
   if (!input || !Number.isFinite(input.duration) || input.duration <= 0 || input.duration > 90 ||
     !isCanvasExplainerFrame(input.poster)) throw Error('Invalid narrated video preview.');
-  const beats = parseExplainerBeats(input.chapters);
+  const captions = input.captions;
+  if (captions !== undefined && (typeof captions !== 'string' || captions.length > 24_000 || !captions.startsWith('WEBVTT\n\n'))) throw Error('Invalid film captions.');
+  const beats = parseExplainerBeats(input.chapters, captions !== undefined);
   let previous = 0;
   const chapters = beats.map((beat, index) => {
     const { start, speechEnd, end } = input.chapters[index];
@@ -66,7 +69,7 @@ export function parseExplainerPlayback(raw: unknown): CanvasExplainerPlayback {
   });
   if (Math.abs(previous - input.duration) > .1) throw Error('Narrated video timings do not cover the full film.');
   const interaction = input.interaction === undefined ? undefined : parseInteractiveFilm(input.interaction, chapters.length);
-  return { duration: input.duration, poster: input.poster, chapters, ...(interaction ? { interaction } : {}) };
+  return { duration: input.duration, poster: input.poster, chapters, ...(captions ? { captions } : {}), ...(interaction ? { interaction } : {}) };
 }
 
 /** Caption windows follow measured speech per beat. Word-level timing inside

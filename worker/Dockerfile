@@ -6,7 +6,7 @@ WORKDIR /app
 COPY lib/canvas-v2 ./lib/canvas-v2
 COPY lib/preview/graet-navigation.ts lib/preview/simulator-registry.ts ./lib/preview/
 COPY lib/app-data/canvas-v2-catalog.ts lib/app-data/review-media.ts ./lib/app-data/
-COPY worker/*.ts worker/*.mjs worker/*.py ./worker/
+COPY worker/*.ts worker/*.mjs worker/*.py worker/film-r179.js worker/film-three.LICENSE.txt ./worker/
 COPY tsconfig.json ./
 RUN npm --prefix worker run build && npm --prefix worker prune --omit=dev
 
@@ -35,7 +35,7 @@ RUN python3 -m venv /opt/northstar-kokoro/venv \
       kokoro-onnx==0.4.9 onnxruntime==1.22.1 numpy==2.2.6 espeakng-loader==0.2.4 phonemizer-fork==3.3.2
 
 FROM node:22-bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini ffmpeg python3 libsm6 libxi6 libxfixes3 libxrender1 libxxf86vm1 libgl1 libegl1 libglu1-mesa libgomp1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini ffmpeg zip python3 libsm6 libxi6 libxfixes3 libxrender1 libxxf86vm1 libgl1 libegl1 libglu1-mesa libgomp1 && rm -rf /var/lib/apt/lists/*
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/northstar-browsers
 ENV NODE_ENV=production PORT=10000 NORTHSTAR_CODEX_BINARY=/app/worker/node_modules/.bin/codex
 ENV NORTHSTAR_BLENDER_BINARY=/opt/northstar-blender/blender \

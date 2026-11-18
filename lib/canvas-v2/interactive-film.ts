@@ -90,7 +90,7 @@ export function filmPlaybackBranches(interaction: InteractiveFilm, chapters: Can
 }
 
 const shortText = (maxLength: number) => ({ type: 'string', maxLength });
-const beat = { type: 'integer', minimum: 1, maximum: 6 };
+const beat = { type: 'integer', minimum: 1, maximum: 8 };
 export const FILM_INTERACTION_SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
