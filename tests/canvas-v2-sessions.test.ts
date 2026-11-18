@@ -129,11 +129,13 @@ test('snapshot round trip retains validated GLB bytes as evidence', async()=>{
 });
 test('model capabilities expose only advertised image-capable models and supported thinking modes',()=>{
  const models=northstarModelCapabilities([
+ {model:'gpt-6.2-sol',inputModalities:['text','image'],supportedReasoningEfforts:[{reasoningEffort:'high'}]},
  {model:'gpt-5.6-luna',inputModalities:['text','image'],supportedReasoningEfforts:[{reasoningEffort:'high'},{reasoningEffort:'low'}]},
  {model:'gpt-6-astra',inputModalities:['text','image'],supportedReasoningEfforts:[{reasoningEffort:'ultra'}]},
  {model:'gpt-5.6-sol',inputModalities:['text'],supportedReasoningEfforts:[{reasoningEffort:'high'}]},
  ]);
- assert.deepEqual(models.map(m=>[m.id,m.efforts]),[['gpt-6-astra',['ultra']],['gpt-5.6-luna',['low','high']]]);
+ assert.deepEqual(models.map(m=>[m.id,m.efforts]),[['gpt-6.2-sol',['high']],['gpt-6-astra',['ultra']],['gpt-5.6-luna',['low','high']]]);
+ assert.deepEqual(northstarRunConfig('gpt-6.2-sol'),{model:'gpt-6.2-sol',effort:'high'});
  assert.deepEqual(northstarRunConfig('gpt-5.6-luna'),{model:'gpt-5.6-luna',effort:'high'});
  assert.throws(()=>northstarRunConfig('unknown','high'),/No substitution/);
  assert.throws(()=>northstarRunConfig('gpt-6-astra','invented'),/thinking/);

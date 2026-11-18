@@ -4,7 +4,7 @@ This implementation runs the open-source Codex App Server as a private child pro
 
 ## Run
 
-Use a persistent Node server (one worker, or sticky routing to the conversation-owning worker). Install the pinned `codex-cli 0.153.4` binary on that server. The adapter checks its exact version before starting a process. Next.js serverless functions are not a supported deployment for this implementation.
+Use a persistent Node server (one worker, or sticky routing to the conversation-owning worker). Install the pinned `codex-cli 0.169.1` binary on that server. The adapter checks its exact version before starting a process. Next.js serverless functions are not a supported deployment for this implementation.
 
 Set server-side environment variables and restart:
 
@@ -53,7 +53,7 @@ The protocol adapter rejects unimplemented server requests rather than granting 
 
 ## Validation and rollback
 
-Generated protocol types come from the installed 0.153.4 binary. Local tests exercise real Northstar client/server behavior against a deterministic App Server peer. Separate checks initialized the actual binary and created a thread with Northstar's developer instructions and dynamic tools, using a fake key and a local-only backend override; no model turn was submitted in those checks.
+Generated protocol types document the App Server fields Northstar consumes. Local tests exercise real Northstar client/server behavior against a deterministic App Server peer. Separate checks initialized the actual binary and created a thread with Northstar's developer instructions and dynamic tools, using a fake key and a local-only backend override; no model turn was submitted in those checks.
 
 The browser fixture is `/canvas-v2-e2e/codex` and exists only in a non-production process with `NORTHSTAR_E2E=1`. It uses the real bridge and native canvas engine, with synthetic Codex messages. It establishes interface behavior, not research quality or live latency.
 

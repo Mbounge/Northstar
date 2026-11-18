@@ -49,7 +49,7 @@ COPY --from=build --chown=node:node /app/worker/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/worker/dist ./dist
 RUN node ./node_modules/playwright-core/cli.js install --with-deps firefox chromium && chmod -R a+rX /opt/northstar-browsers
 USER node
-RUN /app/worker/node_modules/.bin/codex --version | grep -Fx 'codex-cli 0.153.4' \
+RUN /app/worker/node_modules/.bin/codex --version | grep -Fx 'codex-cli 0.169.1' \
     && "$NORTHSTAR_BLENDER_BINARY" --background --disable-autoexec --version | grep -m1 'Blender 4.5.9' \
     && printf 'Northstar film narration is ready.' > /tmp/northstar-voice.txt \
     && "$NORTHSTAR_KOKORO_PYTHON" -I dist/kokoro-narration.py "$NORTHSTAR_KOKORO_MODEL_DIR" /tmp/northstar-voice.txt /tmp/northstar-voice.wav \

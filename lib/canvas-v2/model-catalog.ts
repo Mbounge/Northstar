@@ -1,7 +1,8 @@
 export const CANVAS_V2_DEFAULT_MODEL = "gpt-5.6-luna" as const;
+export const NORTHSTAR_CODEX_DEFAULT_MODEL = "gpt-6.2-sol" as const;
 
 export const CANVAS_V2_SELECTABLE_MODELS = [
-  CANVAS_V2_DEFAULT_MODEL,
+  CANVAS_V2_DEFAULT_MODEL, NORTHSTAR_CODEX_DEFAULT_MODEL, "gpt-6.2-astra",
   "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra",
   "gemini-3.1-flash-lite",
   "gemini-3.5-flash-lite",
@@ -79,10 +80,12 @@ export const CANVAS_V2_MODEL_CATALOG: readonly CanvasV2ModelCatalogEntry[] = [
     selectable: true,
     description: "Frontier OpenAI model",
   },
+  { id: NORTHSTAR_CODEX_DEFAULT_MODEL, label: "GPT-6.2 Sol", provider: "openai", enabled: true, selectable: true, description: "Visual authoring and everyday work" },
+  { id: "gpt-6.2-astra", label: "GPT-6.2 Astra", provider: "openai", enabled: true, selectable: true, description: "Complex discovery and synthesis" },
   { id: "gpt-6-astra", label: "GPT-6 Astra", provider: "openai", enabled: true, selectable: true, description: "Complex discovery and synthesis" },
 ] as const;
 
-const OPENAI_EXECUTION_ALLOWLIST = new Set<string>([CANVAS_V2_DEFAULT_MODEL, "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]);
+const OPENAI_EXECUTION_ALLOWLIST = new Set<string>([CANVAS_V2_DEFAULT_MODEL, NORTHSTAR_CODEX_DEFAULT_MODEL, "gpt-6.2-astra", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]);
 const GOOGLE_EXECUTION_ALLOWLIST = new Set<string>([
   "gemini-3.1-flash-lite",
   "gemini-3.5-flash-lite",
@@ -129,7 +132,7 @@ export function canvasV2ModelLabel(model: string | undefined): string {
     ?? model.replace(/^gemini-/i, "Gemini ").replaceAll("-", " ");
 }
 
-export const NORTHSTAR_MODELS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
+export const NORTHSTAR_MODELS = [NORTHSTAR_CODEX_DEFAULT_MODEL, "gpt-6.2-astra", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
 export const NORTHSTAR_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type NorthstarEffort = typeof NORTHSTAR_EFFORTS[number];
 export interface NorthstarModelCapability { id: string; label: string; efforts: NorthstarEffort[]; }

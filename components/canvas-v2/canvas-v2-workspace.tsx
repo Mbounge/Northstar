@@ -121,6 +121,7 @@ import {
   type CanvasV2GatewayHandoff,
 } from "@/lib/canvas-v2/gateway-handoff";
 import { CanvasV2ResearchPanel } from "@/components/canvas-v2/canvas-v2-research-panel";
+import { NORTHSTAR_CODEX_DEFAULT_MODEL } from "@/lib/canvas-v2/model-catalog";
 import { useNorthstarManagedChat } from "@/components/canvas-v2/use-northstar-managed-chat";
 import { useCanvasV2Chat } from "@/components/canvas-v2/use-canvas-v2-chat";
 import { useCanvasV2DesignLoop } from "@/components/canvas-v2/use-canvas-v2-design-loop";
@@ -1282,6 +1283,7 @@ export const CanvasV2Workspace = memo(function CanvasV2Workspace({
   },[contentInsets,workspaceSize,collaborationEnabled]);
 
   const legacyChat = useCanvasV2Chat({
+    defaultModel: agentEndpoint === "/api/canvas-v2/codex" ? NORTHSTAR_CODEX_DEFAULT_MODEL : undefined,
     initial: initialSnapshot,
     endpoint: routerEndpoint,
     engine,

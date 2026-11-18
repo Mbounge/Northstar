@@ -103,6 +103,7 @@ export function useCanvasV2Chat(input: {
   initial?: import("@/lib/canvas-v2/sessions/types").NorthstarSnapshot;
   endpoint: string;
   engine: DesignEngine;
+  defaultModel?: CanvasV2ModelSelection;
   selection?: CanvasV2InspectableElement;
   selections?: readonly CanvasV2InspectableElement[];
   getWorkingContext?: (selectionPolicy: CanvasV2SelectionPolicy) => CanvasV2WorkingContext | undefined;
@@ -114,7 +115,7 @@ export function useCanvasV2Chat(input: {
   const [attachmentError, setAttachmentError] = useState<string>();
   const [turns, setTurns] = useTimedChatTurns(input.initial?.turns ?? []);
   const [reasoningEffort, setReasoningEffort] = useState<import('@/lib/canvas-v2/model-catalog').NorthstarEffort>(input.initial?.effort ?? 'high');
-  const [modelSelection, setModelSelection] = useState<CanvasV2ModelSelection>(input.initial?.model ?? CANVAS_V2_DEFAULT_MODEL);
+  const [modelSelection, setModelSelection] = useState<CanvasV2ModelSelection>(input.initial?.model ?? input.defaultModel ?? CANVAS_V2_DEFAULT_MODEL);
   const activeRoutingTurnId = useRef<string | undefined>(undefined);
   const activeDesignTurnId = useRef<string | undefined>(undefined);
   const routingSequence = useRef(0);

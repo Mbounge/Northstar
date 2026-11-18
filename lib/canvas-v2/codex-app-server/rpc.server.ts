@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { object, string, type JsonObject } from '../managed-agent/protocol';
 
-export const CODEX_VERSION = '0.153.4';
+export const CODEX_VERSION = '0.169.1';
 export interface CodexTransport {
   cwd: string;
   request(method: string, params: unknown): Promise<JsonObject>;

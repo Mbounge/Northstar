@@ -13,7 +13,7 @@ import { privateCanvasWorkspace } from '@/lib/canvas-v2/sessions/collaboration-l
 import { PrivateWorkspaceSync, type PrivateWorkspaceStatus } from '@/lib/canvas-v2/sessions/private-workspace-sync';
 import { privateCanvasHistory, type PrivateCanvasHistory } from '@/lib/canvas-v2/sessions/private-workspace';
 import { SupabasePrivateWorkspace } from '@/lib/canvas-v2/sessions/private-workspace-supabase';
-import { CANVAS_V2_DEFAULT_MODEL } from '@/lib/canvas-v2/model-catalog';
+import { CANVAS_V2_DEFAULT_MODEL, NORTHSTAR_CODEX_DEFAULT_MODEL } from '@/lib/canvas-v2/model-catalog';
 import { centeredCanvasV2WorkspaceViewport } from '@/lib/canvas-v2/workspace-coordinate-space';
 import { createClient } from '@/lib/supabase/client';
 import type { CanvasV2ArtifactRevision } from '@/lib/canvas-v2/types';
@@ -91,7 +91,7 @@ export function SessionWorkspace({id, temporary, owner, ownerName, agentEndpoint
         channel.current?.close();channel.current=null;setReplica(undefined);
         const history=await openPrivate(previous?privateCanvasHistory(previous):undefined);
         if(disposed)return true;
-        const snapshot:NorthstarSnapshot={schema:1,turns:[],draft:'',model:CANVAS_V2_DEFAULT_MODEL,effort:'high',...history,revision,viewport:previous?.viewport??centeredCanvasV2WorkspaceViewport({width:1440,height:900})};
+        const snapshot:NorthstarSnapshot={schema:1,turns:[],draft:'',model:agentEndpoint==='/api/canvas-v2/codex'?NORTHSTAR_CODEX_DEFAULT_MODEL:CANVAS_V2_DEFAULT_MODEL,effort:'high',...history,revision,viewport:previous?.viewport??centeredCanvasV2WorkspaceViewport({width:1440,height:900})};
         latest.current=snapshot;setLoaded({snapshot});setGeneration(value=>value+1);setError('');report({saveStatus:'saved',multiplayer:true});return true;
       }finally{discovering=false;}
     };
@@ -146,7 +146,7 @@ export function SessionWorkspace({id, temporary, owner, ownerName, agentEndpoint
           });
           if(disposed)return;
           const revision=multiplayer.getRevision()!;
-          const snapshot:NorthstarSnapshot={schema:1,revision,turns:[],draft:'',model:CANVAS_V2_DEFAULT_MODEL,effort:'high',...history,
+          const snapshot:NorthstarSnapshot={schema:1,revision,turns:[],draft:'',model:agentEndpoint==='/api/canvas-v2/codex'?NORTHSTAR_CODEX_DEFAULT_MODEL:CANVAS_V2_DEFAULT_MODEL,effort:'high',...history,
             viewport:viewport??centeredCanvasV2WorkspaceViewport({width:1440,height:900}),
             memory:{...history?.memory,assets:revision.evidence,sourceMedia:history?.memory?.sourceMedia??[],sourcePages:history?.memory?.sourcePages??[],accountPackets:history?.memory?.accountPackets??[],accountFlows:history?.memory?.accountFlows??[],compositionHistory:history?.memory?.compositionHistory??[],compositionSequence:history?.memory?.compositionSequence??0}};
           record.current=session;latest.current=snapshot;titleRef.current=session.title;setTitle(session.title);setLoaded({snapshot});report({saveStatus:'saved',multiplayer:true});return;

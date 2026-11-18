@@ -16,7 +16,7 @@ Without `NORTHSTAR_WORKER_URL`, local development keeps the embedded runtime. Ve
 
 Use a **Render Web Service**, not Render’s background-worker service type: browsers need an HTTPS endpoint. The repository’s `render.yaml` configures a portable Docker build, one `1c-2g` instance (1 CPU, 2 GB), Virginia region, readiness checks and manual deployments. This is a paid preview starting point, not a measured production-capacity claim. Verify the current price in Render before creating the service.
 
-The image installs locked `@openai/codex@0.153.4`, checks the binary version, and runs as an unprivileged user under `tini`. Only worker source and its dependencies enter the build; `.env` files, local profiles, account snapshots and evaluation media are excluded. The Dockerfile never references build arguments containing credentials.
+The image installs locked `@openai/codex@0.169.1`, checks the binary version, and runs as an unprivileged user under `tini`. Only worker source and its dependencies enter the build; `.env` files, local profiles, account snapshots and evaluation media are excluded. The Dockerfile never references build arguments containing credentials.
 
 After the worker changes are committed to a branch available on GitHub:
 
